@@ -162,3 +162,11 @@ proc acquire*(lock: var RawSpinLock) {.inline.} =
 
 proc release*(lock: var RawSpinLock) {.inline.} =
   atomicStore(cast[ptr uint32](addr lock), 0'u32, moRelease)
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Reader-Writer SpinLock and Lock-free Queues
+# Use arsenal library directly for these:
+#   - import arsenal/sync/rwlock for RWSpinLock
+#   - import arsenal/sync/queues/spsc for SPSC queue
+#   - import arsenal/sync/queues/mpmc for MPMC queue
+# ═══════════════════════════════════════════════════════════════════════════

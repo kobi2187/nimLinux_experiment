@@ -11,6 +11,7 @@ bin           = @["kernel/init/main"]
 # Dependencies
 
 requires "nim >= 2.0.0"
+requires "https://github.com/kobi2187/arsenal"
 
 # Tasks
 
