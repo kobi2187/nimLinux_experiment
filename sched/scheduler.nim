@@ -2,10 +2,12 @@
 ## Scheduler Manager - LAYER 4
 ##
 ## Owns scheduling decisions and context switching.
-## Dependencies: types, task_manager, spinlock
+## Supports both traditional Task-based and ExecutionModel-based scheduling.
+## Dependencies: types, task_manager, execution_model, spinlock
 
 import ../core/types
 import ./task_manager
+import ./execution_model
 import ../sync/spinlock
 
 type
@@ -41,7 +43,7 @@ type
   # ═══════════════════════════════════════════════════════════════════════════
 
   SchedulerManager* = ref object
-    ## Scheduler manager state
+    ## Scheduler manager state (supports both traditional and ExecutionModel-based)
     taskMgr*: TaskManager         ## Task manager dependency
 
     # Run queues (one per CPU)
@@ -54,11 +56,16 @@ type
     # Flags
     needResched*: bool            ## Reschedule needed
 
+    # ExecutionModel support (optional)
+    model*: ExecutionModel        ## Execution model (if using model-based scheduling)
+    useExecutionModel*: bool      ## Whether to use ExecutionModel for scheduling
+
     # Synchronization
     lock*: SpinLock
 
     # Statistics
     totalSwitches*: uint64
+    modelSwitches*: uint64        ## Switches made via ExecutionModel
 
 const
   DefaultTimeSlice* = 10'u64      ## Default time slice in ticks
@@ -78,14 +85,18 @@ proc newRunQueue(cpuId: int): RunQueue =
   )
   result.lock.init()
 
-proc newSchedulerManager*(taskMgr: TaskManager, cpuCount: int): SchedulerManager =
+proc newSchedulerManager*(taskMgr: TaskManager, cpuCount: int, model: ExecutionModel = nil): SchedulerManager =
   ## Create a new scheduler manager
+  ## model: Optional ExecutionModel for model-based scheduling
   result = SchedulerManager(
     taskMgr: taskMgr,
     runQueues: @[],
     cpuCount: cpuCount,
     needResched: false,
-    totalSwitches: 0
+    model: model,
+    useExecutionModel: model != nil,
+    totalSwitches: 0,
+    modelSwitches: 0
   )
   result.lock.init()
 
@@ -285,3 +296,71 @@ proc loadBalance*(self: SchedulerManager) =
     let task = self.dequeue(maxCpu)
     if task.isSome:
       self.enqueue(task.get, minCpu)
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ExecutionModel-based Scheduling
+# ═══════════════════════════════════════════════════════════════════════════
+
+proc setExecutionModel*(self: SchedulerManager, model: ExecutionModel) =
+  ## Set execution model for scheduling
+  self.lock.acquire()
+  defer: self.lock.release()
+
+  self.model = model
+  self.useExecutionModel = model != nil
+
+proc scheduleWithModel*(self: SchedulerManager, cpuId: int = 0) =
+  ## Main scheduling function using ExecutionModel
+  if not self.useExecutionModel or self.model == nil:
+    return
+
+  self.lock.acquire()
+  defer: self.lock.release()
+
+  # Select next unit from model
+  let nextOption = self.model.selectNext()
+  if nextOption.isNone:
+    return
+
+  let next = nextOption.get
+  next.state = esRunning
+
+  inc self.modelSwitches
+  self.needResched = false
+
+proc scheduleYieldWithModel*(self: SchedulerManager) =
+  ## Voluntary yield via ExecutionModel
+  if not self.useExecutionModel or self.model == nil:
+    return
+
+  discard self.model.yield()
+  self.needResched = true
+  self.scheduleWithModel()
+
+proc scheduleSleepWithModel*(self: SchedulerManager, unit: ExecutionUnit) =
+  ## Put execution unit to sleep
+  if not self.useExecutionModel or self.model == nil:
+    return
+
+  discard self.model.suspend(unit)
+  self.needResched = true
+
+proc scheduleWakeWithModel*(self: SchedulerManager, unit: ExecutionUnit, cpuId: int = -1) =
+  ## Wake a sleeping execution unit
+  if not self.useExecutionModel or self.model == nil:
+    return
+
+  discard self.model.resume(unit)
+  self.needResched = true
+
+proc getExecutionModelStats*(self: SchedulerManager): string =
+  ## Get execution model statistics
+  if self.model != nil:
+    return self.model.getStats()
+  return "No execution model set\n"
+
+proc getExecutionModelName*(self: SchedulerManager): string =
+  ## Get execution model name
+  if self.model != nil:
+    return $self.model.vtable.name
+  return "None"

@@ -325,3 +325,56 @@ proc totalMemory*(self: PhysicalMemManager): uint64 =
 proc zoneInfo*(self: PhysicalMemManager, zone: Zone): ZoneInfo =
   ## Get zone information
   self.zones[zone]
+
+proc zoneFragmentation*(self: PhysicalMemManager, zone: Zone): float =
+  ## Calculate fragmentation ratio for a zone (0.0 = no fragmentation, 1.0 = highly fragmented)
+  let zoneInfo = self.zones[zone]
+  if zoneInfo.freeFrames == 0:
+    return 0.0
+
+  # Estimate fragmentation by checking free blocks
+  # This is a simplified measure - real implementation would track block sizes
+  let avgBlockSize = if zoneInfo.freeFrames > 0:
+    max(1'u64, zoneInfo.totalFrames div (zoneInfo.freeFrames + 1))
+  else:
+    1'u64
+
+  let fragmentation = 1.0 - (float(avgBlockSize) / float(zoneInfo.totalFrames))
+  max(0.0, min(1.0, fragmentation))
+
+proc isFrameInZone*(self: PhysicalMemManager, frame: PhysAddr, zone: Zone): bool {.inline.} =
+  ## Check if frame is in specified zone
+  let frameNum = uint64(frame) div FrameSize
+  frameNum >= self.zones[zone].startFrame and frameNum < self.zones[zone].endFrame
+
+proc validateFrame*(self: PhysicalMemManager, frame: PhysAddr): Result[void, FrameError] =
+  ## Validate frame address
+  let frameNum = uint64(frame) div FrameSize
+
+  if frameNum >= self.totalFrames:
+    return err(feInvalidFrame)
+
+  if uint64(frame) mod FrameSize != 0:
+    return err(feInvalidFrame)
+
+  ok()
+
+proc stats*(self: PhysicalMemManager): string =
+  ## Get human-readable statistics
+  var result = ""
+  result &= "Physical Memory Manager Stats:\n"
+  result &= "  Total Frames: " & $self.totalFrames & " (" & $(self.totalMemory() div (1024*1024)) & " MB)\n"
+  result &= "  Used Frames: " & $self.usedFrames & " (" & $(self.usedMemory() div (1024*1024)) & " MB)\n"
+  result &= "  Free Frames: " & $self.freeFrames() & " (" & $(self.freeMemory() div (1024*1024)) & " MB)\n"
+  result &= "  Total Allocations: " & $self.allocCount & "\n"
+  result &= "  Total Frees: " & $self.freeCount & "\n"
+
+  for zone in Zone:
+    let zinfo = self.zones[zone]
+    let frag = self.zoneFragmentation(zone)
+    result &= "  Zone " & $zone & ":\n"
+    result &= "    Total: " & $zinfo.totalFrames & " frames\n"
+    result &= "    Free: " & $zinfo.freeFrames & " frames\n"
+    result &= "    Fragmentation: " & $(frag * 100) & "%\n"
+
+  result
