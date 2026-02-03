@@ -140,13 +140,14 @@ proc getCmdline*(info: BootInfo): string =
   for i in 0..<info.cmdlineLen:
     result[i] = info.cmdline[i]
 
-proc findRegion*(info: BootInfo, addr: PhysAddr): Option[MemoryRegion] =
-  ## Find memory region containing address
-  for i in 0..<info.memoryMap.count:
-    let region = info.memoryMap.regions[i]
-    if addr >= region.base and addr < region.base + region.length:
-      return some(region)
-  return none(MemoryRegion)
+# TODO: Re-enable findRegion once Option type is working properly in Nim 1.6.14
+# proc findRegion*(info: BootInfo, address: PhysAddr): Option[MemoryRegion] =
+#   ## Find memory region containing address
+#   for i in 0..<info.memoryMap.count:
+#     let region = info.memoryMap.regions[i]
+#     if address >= region.base and address < region.base + region.length:
+#       return some(region)
+#   return none[MemoryRegion]()
 
 proc isUsable*(region: MemoryRegion): bool {.inline.} =
   region.regionType == memAvailable

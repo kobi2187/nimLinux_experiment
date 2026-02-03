@@ -123,6 +123,13 @@ type
     beParseError
     beUnsupported
 
+# Convenience functions for BootloaderError results
+proc ok*(): Result[void, BootloaderError] {.inline.} =
+  Result[void, BootloaderError](isOk: true)
+
+proc err*(e: BootloaderError): Result[void, BootloaderError] {.inline.} =
+  Result[void, BootloaderError](isOk: false, error: e)
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Detection & Parsing
 # ═══════════════════════════════════════════════════════════════════════════
@@ -150,8 +157,8 @@ proc parseMultiboot2MemoryMap*(tag: pointer, bootInfo: var BootInfo): Result[voi
   ## Parse Multiboot2 memory map tag
   let mmTag = cast[ptr Multiboot2MemoryMapTag](tag)
 
-  if mmTag.entrySize < sizeof(Multiboot2MemoryMapEntry):
-    return err(beInvalidTag)
+  if mmTag.entrySize < uint32(sizeof(Multiboot2MemoryMapEntry)):
+    return err[void, BootloaderError](beInvalidTag)
 
   bootInfo.memoryMap.count = 0
   var offset = sizeof(Multiboot2MemoryMapTag)

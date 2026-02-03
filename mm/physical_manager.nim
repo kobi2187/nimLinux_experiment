@@ -69,6 +69,20 @@ const
   Dma32Limit = 4 * GiB
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Convenience Functions for Result Types
+# ═══════════════════════════════════════════════════════════════════════════
+
+proc ok*[T](val: T): Result[T, FrameError] {.inline.} =
+  Result[T, FrameError](isOk: true, value: val)
+
+# Multiple err overloads for different return types
+proc errPhysAddr*(e: FrameError): Result[PhysAddr, FrameError] {.inline.} =
+  Result[PhysAddr, FrameError](isOk: false, error: e)
+
+proc errVoid*(e: FrameError): Result[void, FrameError] {.inline.} =
+  Result[void, FrameError](isOk: false, error: e)
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Bitmap Operations
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -129,10 +143,10 @@ proc findFirstFreeInWord(word: uint64): int {.inline.} =
 
 proc getZoneForFrame(frame: uint64): Zone =
   ## Determine which zone a frame belongs to
-  let addr = frame * FrameSize
-  if addr < DmaLimit:
+  let physAddr = frame * FrameSize
+  if physAddr < DmaLimit:
     zoneDma
-  elif addr < Dma32Limit:
+  elif physAddr < Dma32Limit:
     zoneDma32
   else:
     zoneNormal
@@ -211,7 +225,7 @@ proc allocFrameInRange(self: PhysicalMemManager,
           dec self.zones[zone].freeFrames
           return ok(PhysAddr(frame * FrameSize))
 
-  err(feOutOfFrames)
+  errVoid(feOutOfFrames)
 
 proc allocFrame*(self: PhysicalMemManager,
                  zone: Zone = zoneNormal): Result[PhysAddr, FrameError] =
@@ -245,10 +259,10 @@ proc freeFrame*(self: PhysicalMemManager, frame: PhysAddr): Result[void, FrameEr
   defer: self.lock.release()
 
   if frameNum >= self.totalFrames:
-    return err(feInvalidFrame)
+    return errPhysAddr(feInvalidFrame)
 
   if not self.isFrameUsed(frameNum):
-    return err(feDoubleFree)
+    return errPhysAddr(feDoubleFree)
 
   self.markFrameFree(frameNum)
   dec self.usedFrames
@@ -262,7 +276,7 @@ proc allocContiguous*(self: PhysicalMemManager, count: int,
                       zone: Zone = zoneNormal): Result[PhysAddr, FrameError] =
   ## Allocate contiguous physical frames
   if count <= 0:
-    return err(feInvalidFrame)
+    return errPhysAddr(feInvalidFrame)
   if count == 1:
     return self.allocFrame(zone)
 
@@ -291,7 +305,7 @@ proc allocContiguous*(self: PhysicalMemManager, count: int,
     else:
       consecutive = 0
 
-  err(feOutOfFrames)
+  errVoid(feOutOfFrames)
 
 proc freeContiguous*(self: PhysicalMemManager, frame: PhysAddr,
                      count: int): Result[void, FrameError] =
@@ -352,10 +366,10 @@ proc validateFrame*(self: PhysicalMemManager, frame: PhysAddr): Result[void, Fra
   let frameNum = uint64(frame) div FrameSize
 
   if frameNum >= self.totalFrames:
-    return err(feInvalidFrame)
+    return errPhysAddr(feInvalidFrame)
 
   if uint64(frame) mod FrameSize != 0:
-    return err(feInvalidFrame)
+    return errPhysAddr(feInvalidFrame)
 
   ok()
 

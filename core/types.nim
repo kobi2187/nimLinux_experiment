@@ -60,9 +60,17 @@ proc ok*[E](): Result[void, E] {.inline.} =
   ## Create a successful void result
   Result[void, E](isOk: true)
 
+proc okVoid*[E](): Result[void, E] {.inline.} =
+  ## Create a successful void result (convenience function)
+  Result[void, E](isOk: true)
+
 proc err*[T, E](e: E): Result[T, E] {.inline.} =
   ## Create an error result
   Result[T, E](isOk: false, error: e)
+
+proc errVoid*[E](e: E): Result[void, E] {.inline.} =
+  ## Create a void error result (convenience function)
+  Result[void, E](isOk: false, error: e)
 
 proc isErr*[T, E](r: Result[T, E]): bool {.inline.} =
   ## Check if result is an error

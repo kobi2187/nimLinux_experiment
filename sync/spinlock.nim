@@ -50,7 +50,7 @@ proc tryAcquire*(lock: var SpinLock): bool {.inline.} =
 
 proc isLocked*(lock: SpinLock): bool {.inline.} =
   ## Check if lock is currently held (for debugging)
-  atomicLoad(addr lock.locked) != 0
+  atomicLoad(unsafeAddr lock.locked) != 0
 
 # ═══════════════════════════════════════════════════════════════════════════
 # SpinLock with Interrupt Disable

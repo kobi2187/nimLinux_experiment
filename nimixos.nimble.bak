@@ -6,7 +6,8 @@ author        = "NimixOS Contributors"
 description   = "NimixOS - A Nim-based operating system kernel"
 license       = "GPL-2.0"
 srcDir        = "."
-bin           = @["kernel/init/main"]
+# NOTE: Kernel is not a standard binary, built via custom build scripts
+# bin           = @["kern/kernel_main"]
 
 # Dependencies
 
