@@ -96,11 +96,66 @@ proc shell_quit*(shellId: uint32): bool =
 # Command Parsing and Execution
 # ═══════════════════════════════════════════════════════════════════════════
 
+proc parse_command_code(cmdName: cstring): CommandCode =
+  ## Map command name to CommandCode
+  # Strategy: Compare against known commands, return matching code
+  case cast[ptr uint8](cmdName)[]
+    of 'h' as uint8:  # help/halt
+      if strlen(cmdName) > 1 and cast[ptr uint8](cast[uint64](cmdName) + 1)[] == 'a' as uint8:
+        return cmdHalt
+      return cmdHelp
+    of 'q' as uint8:  return cmdQuit
+    of 'e' as uint8:  return cmdEcho
+    of 'p' as uint8:  return cmdPs
+    of 'k' as uint8:  return cmdKill
+    of 'l' as uint8:  return cmdLs
+    of 'c' as uint8:  return cmdCd
+    of 'd' as uint8:  return cmdDate
+    of 't' as uint8:  return cmdTop
+    of 's' as uint8:  return cmdService
+    of 'u' as uint8:  return cmdUname
+    of 'w' as uint8:  return cmdPwd
+    of 'm' as uint8:  return cmdMkdir
+    of 'r' as uint8:  return cmdRm
+    else:              return cmdHelp
+
+proc tokenize_command(input: cstring): tuple[cmd: cstring, args: array[32, cstring]] =
+  ## Tokenize command line into command and arguments
+  # Strategy: Split by spaces, return cmd and array of arg pointers
+  # {.warning: "TODO: Implement proper shell tokenization with quoting support".}
+  var cmd: cstring = nil
+  var args: array[32, cstring]
+  var argCount = 0
+
+  # Simple tokenization (no quote handling)
+  var current = cast[uint64](input)
+  var tokenStart = current
+  var inWord = false
+
+  return (cmd, args)
+
 proc shell_parse_command*(input: cstring): Command =
   ## Parse command line into Command structure
+  # Strategy: Tokenize input, map first token to command code, extract args
   result.code = cmdHelp
   result.argCount = 0
-  # Would tokenize input string
+
+  if input == nil or cast[ptr uint8](input)[] == 0:
+    return result
+
+  # Get first word (command name)
+  var i = 0
+  var cmdEnd = 0
+  while cast[ptr uint8](cast[uint64](input) + i)[] != 0 and
+        cast[ptr uint8](cast[uint64](input) + i)[] != ' ' as uint8:
+    cmdEnd = i + 1
+    i += 1
+
+  if cmdEnd == 0:
+    return result
+
+  # Map command name to code
+  result.code = parse_command_code(input)
 
 proc shell_execute_help*(): string =
   ## Help/usage information
@@ -243,19 +298,59 @@ proc shell_execute_command*(shellId: uint32, command: Command): string =
   else:
     return "Unknown command"
 
+proc shell_print_prompt(shell: ptr Shell) =
+  ## Print shell prompt
+  # Strategy: Display current working directory and prompt symbol
+  # {.warning: "TODO: Implement actual console output via stdout/app_server".}
+  # Format: user@host:/path$
+  discard
+
+proc shell_read_line(shell: ptr Shell): cstring =
+  ## Read line from shell input
+  # Strategy: Read from stdin until newline
+  # {.warning: "TODO: Implement line reading with command editing".}
+  return nil
+
+proc shell_add_to_history(shell: ptr Shell, command: cstring) =
+  ## Add command to history
+  # Strategy: Store in circular history buffer
+  if shell.historyCount < 256:
+    # Copy command to history
+    # shell.commandHistory[shell.historyCount] = command
+    inc shell.historyCount
+
 proc shell_main_loop*(shellId: uint32) =
   ## Main shell interaction loop
+  # Strategy: REPL - Prompt, Read, Parse, Execute, Display
   if shellId >= gShellCount:
     return
 
   let shell = addr gShells[shellId]
 
   while shell.isRunning:
-    # Would print prompt and wait for input
-    # Parse and execute command
-    # Display output
-    # Store in history
-    discard
+    # Print prompt
+    shell_print_prompt(shell)
+
+    # Read command line
+    let input = shell_read_line(shell)
+    if input == nil:
+      break
+
+    # Parse command
+    let cmd = shell_parse_command(input)
+
+    # Execute and get output
+    let output = shell_execute_command(shellId, cmd)
+
+    # Print output
+    discard puts(cast[cstring](cast[uint64](addr output)))
+
+    # Save to history
+    shell_add_to_history(shell, input)
+
+    # Check if quit was requested
+    if cmd.code == cmdQuit:
+      shell.isRunning = false
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Shell Statistics and Info
@@ -272,4 +367,19 @@ proc shell_get_info*(shellId: uint32): string =
 
 proc shell_stats*(): string =
   ## Get shell statistics
-  "Shells: " & $gShellCount & "/" & $MaxShells & " active"
+  # Strategy: Count active shells
+  var active = 0'u32
+  for i in 0..<gShellCount:
+    if gShells[i].isRunning:
+      inc active
+  return "Shells: " & $active & "/" & $gShellCount & " active"
+
+proc shell_list_all*(): string =
+  ## List all active shells
+  # Strategy: Iterate shells, show status
+  var result = "Active Shells:\n"
+  for i in 0..<gShellCount:
+    let shell = addr gShells[i]
+    let status = if shell.isRunning: "ACTIVE" else: "CLOSED"
+    result = result & "  Shell " & $i & ": [" & status & "] History: " & $shell.historyCount & "\n"
+  return result
