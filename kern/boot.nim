@@ -67,19 +67,56 @@ var
 # Boot Logging
 # ═══════════════════════════════════════════════════════════════════════════
 
+proc boot_phase_name(phase: BootPhase): cstring =
+  ## Get human-readable phase name
+  # Strategy: Map phase enum to string
+  case phase
+  of bpFirmware: return "Firmware"
+  of bpEarlyInit: return "EarlyInit"
+  of bpHardwareScan: return "HardwareScan"
+  of bpMemoryInit: return "MemoryInit"
+  of bpInterrupts: return "Interrupts"
+  of bpTimers: return "Timers"
+  of bpConsole: return "Console"
+  of bpIpc: return "IPC"
+  of bpProcesses: return "Processes"
+  of bpSyscalls: return "Syscalls"
+  of bpFileSystem: return "FileSystem"
+  of bpDevices: return "Devices"
+  of bpUserSpace: return "UserSpace"
+  of bpRunning: return "Running"
+
+proc boot_status_name(status: BootStatus): cstring =
+  ## Get human-readable status name
+  # Strategy: Map status enum to string
+  case status
+  of bsSuccess: return "OK"
+  of bsFailed: return "FAIL"
+  of bsIncomplete: return "INCOMPLETE"
+
 proc addBootLog*(phase: BootPhase, status: BootStatus, message: cstring) =
   ## Log boot status message
+  # Strategy: Record phase, status, message in circular log buffer
   if gBootLogCount < MaxBootLogEntries:
     gBootLogs[gBootLogCount].phase = phase
     gBootLogs[gBootLogCount].status = status
+    gBootLogs[gBootLogCount].timestamp = 0  # Would be current tick
     gBootLogCount += 1
 
 proc getBootLog*(): string =
   ## Get formatted boot log
+  # Strategy: Iterate log, format each entry with phase name and status
   var result = "Boot Log:\n"
   for i in 0..<gBootLogCount:
-    result &= "[" & $gBootLogs[i].phase & "] " & $gBootLogs[i].status & "\n"
+    let entry = addr gBootLogs[i]
+    result = result & "[" & $boot_phase_name(entry.phase) & "] " &
+             boot_status_name(entry.status) & "\n"
   return result
+
+proc getBootLogCount*(): uint32 =
+  ## Get number of boot log entries
+  # Strategy: Return log count
+  return gBootLogCount
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Phase Transitions
@@ -375,4 +412,33 @@ proc getBootStatus*(): BootStatus =
 
 proc bootStats*(): string =
   ## Return formatted boot statistics
-  "Boot Phase: " & $gCurrentPhase & " | Log entries: " & $gBootLogCount
+  # Strategy: Format current phase and log entry count
+  "Boot Phase: " & $boot_phase_name(gCurrentPhase) & " | Log entries: " & $gBootLogCount
+
+proc getPhaseStatus*(phase: BootPhase): BootStatus =
+  ## Get status of specific boot phase
+  # Strategy: Search log for most recent entry of given phase
+  for i in 0..<gBootLogCount:
+    if gBootLogs[i].phase == phase:
+      # Found phase, return its status
+      return gBootLogs[i].status
+  return bsIncomplete
+
+proc isPhaseComplete*(phase: BootPhase): bool =
+  ## Check if phase has completed
+  # Strategy: Phase complete if status is not incomplete
+  let status = getPhaseStatus(phase)
+  return status != bsIncomplete
+
+proc getLastBootError*(): BootPhase =
+  ## Get phase that failed (if any)
+  # Strategy: Search log backwards for first failure
+  for i in (gBootLogCount - 1)..0:
+    if gBootLogs[i].status == bsFailed:
+      return gBootLogs[i].phase
+  return bpFirmware
+
+proc bootIsSuccessful*(): bool =
+  ## Check if boot completed successfully
+  # Strategy: Check if in running phase and no failures
+  return gCurrentPhase == bpRunning and getBootStatus() == bsSuccess
