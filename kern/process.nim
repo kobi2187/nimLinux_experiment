@@ -307,8 +307,66 @@ proc initProcessManagement*() =
 
 proc cleanupTerminatedProcesses*() =
   ## Reap terminated (zombie) processes and free resources
+  # Strategy: Iterate process table, mark terminated processes as available
   for i in 0..<MaxProcesses:
     if gProcessTable[i].state == psTerminated:
-      # Would free memory and clean up
+      # In real implementation: would free page tables, close file descriptors,
+      # notify parent of exit status
+      gProcessTable[i].pid = 0
       if gProcessCount > 0:
         dec gProcessCount
+
+proc getReadyProcesses*(): seq[uint32] =
+  ## Get list of processes ready to run
+  # Strategy: Find all processes in ready state, sorted by priority
+  var ready: seq[uint32] = @[]
+  for i in 0..<MaxProcesses:
+    if gProcessTable[i].state == psReady and gProcessTable[i].pid > 0:
+      ready.add(gProcessTable[i].pid)
+  return ready
+
+proc getRunningProcess*(): uint32 =
+  ## Get currently running process (should only be one)
+  # Strategy: Search for process in running state
+  for i in 0..<MaxProcesses:
+    if gProcessTable[i].state == psRunning:
+      return gProcessTable[i].pid
+  return 0
+
+proc yieldProcess*(pid: uint32): bool =
+  ## Yield CPU (move to ready queue)
+  # Strategy: Change state from running to ready
+  let proc = getProcess(pid)
+  if proc != nil and proc.state == psRunning:
+    proc.state = psReady
+    return true
+  return false
+
+proc blockProcess*(pid: uint32): bool =
+  ## Block process (waiting for I/O or event)
+  # Strategy: Move to waiting state
+  let proc = getProcess(pid)
+  if proc != nil:
+    proc.state = psWaiting
+    return true
+  return false
+
+proc unblockProcess*(pid: uint32): bool =
+  ## Unblock process (wake from wait)
+  # Strategy: Move from waiting to ready
+  let proc = getProcess(pid)
+  if proc != nil and proc.state == psWaiting:
+    proc.state = psReady
+    return true
+  return false
+
+proc scheduleProcess*(pid: uint32): bool =
+  ## Schedule process to run (move to running state)
+  # Strategy: Transition from ready to running
+  let proc = getProcess(pid)
+  if proc != nil and proc.state == psReady:
+    proc.state = psRunning
+    proc.lastScheduled = 0  # Would be current tick
+    proc.quantumRemaining = 10  # Reset time quantum
+    return true
+  return false

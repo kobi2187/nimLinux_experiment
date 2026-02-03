@@ -184,8 +184,43 @@ proc isPreemptionEnabled*(): bool =
 # Timer Interrupt Handler
 # ═══════════════════════════════════════════════════════════════════════════
 
+proc shouldPreempt*(): bool =
+  ## Check if preemption should occur
+  # Strategy: Return true if preemption enabled and time quantum expired
+  return gPreemptionEnabled and (gTimerTicks mod TimeSlice) == 0
+
+var gSleepingProcesses*: array[256, tuple[pid: uint32, wakeupTick: uint64]]
+var gSleepCount: uint32 = 0
+
+proc addSleepingProcess*(pid: uint32, durationMs: uint64) =
+  ## Add process to sleep queue
+  # Strategy: Calculate wake-up time and store in list
+  if gSleepCount < 256:
+    let wakeupTick = gTimerTicks + (durationMs * HZ div 1000)
+    gSleepingProcesses[gSleepCount].pid = pid
+    gSleepingProcesses[gSleepCount].wakeupTick = wakeupTick
+    inc gSleepCount
+
+proc checkSleepingProcesses*(): seq[uint32] =
+  ## Check which sleeping processes should wake up
+  # Strategy: Compare wake-up times, return PIDs to wake
+  var toWake: seq[uint32] = @[]
+  var writeIdx = 0
+
+  for i in 0..<gSleepCount:
+    if gSleepingProcesses[i].wakeupTick <= gTimerTicks:
+      toWake.add(gSleepingProcesses[i].pid)
+    else:
+      # Keep this entry (not expired yet)
+      gSleepingProcesses[writeIdx] = gSleepingProcesses[i]
+      inc writeIdx
+
+  gSleepCount = writeIdx
+  return toWake
+
 proc handleTimerInterrupt*() {.cdecl.} =
   ## Called on each timer tick (IRQ0)
+  # Strategy: Update time, invoke callbacks, check for preemption, wake sleeping procs
   inc gTimerTicks
 
   # Update absolute time
@@ -197,9 +232,13 @@ proc handleTimerInterrupt*() {.cdecl.} =
   # Invoke registered callbacks
   invokeTimerCallbacks()
 
+  # Check if sleeping processes should wake
+  let readyPids = checkSleepingProcesses()
+  # In real implementation: these PIDs would be moved to ready queue
+
   # Request preemption if enabled and time quantum expired
-  if gPreemptionEnabled and (gTimerTicks mod TimeSlice) == 0:
-    # Request scheduler to perform context switch
+  if shouldPreempt():
+    # In real implementation: kernel would trigger context switch
     discard
 
 # ═══════════════════════════════════════════════════════════════════════════

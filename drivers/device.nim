@@ -267,10 +267,53 @@ proc probeDevice*(device: ptr Device): bool =
       return initializeDriver(uint32(i), device)
   return false
 
+proc getDevicesByBusType*(busType: DeviceBusType): seq[uint32] =
+  ## Get all devices on a specific bus
+  # Strategy: Iterate device table, collect matching bus type
+  var devices: seq[uint32] = @[]
+  for i in 0..<MaxDevices:
+    if gDeviceTable[i].busType == busType and gDeviceTable[i].deviceId > 0:
+      devices.add(gDeviceTable[i].deviceId)
+  return devices
+
+proc getDevicesByType*(deviceType: DeviceType): seq[uint32] =
+  ## Get all devices of specific type
+  # Strategy: Iterate device table, collect matching device type
+  var devices: seq[uint32] = @[]
+  for i in 0..<MaxDevices:
+    if gDeviceTable[i].deviceType == deviceType and gDeviceTable[i].deviceId > 0:
+      devices.add(gDeviceTable[i].deviceId)
+  return devices
+
+var gBusDevicesScanned*: array[5, bool]  # Track which buses have been scanned
+
 proc enumerateDevices*(busType: DeviceBusType) =
   ## Enumerate devices on bus
-  # Would scan bus (PCI, USB, etc) and create device objects
-  discard
+  # Strategy: Scan bus (PCI, USB, etc) and create device objects
+  # This would call bus-specific enumeration (e.g., pciEnumerateAll)
+  case busType
+  of dbtPci:
+    # In real implementation: Would iterate PCI bus using config space
+    # For each device found, call registerDevice()
+    gBusDevicesScanned[ord(dbtPci)] = true
+  of dbtUsb:
+    # In real implementation: Would scan USB bus
+    gBusDevicesScanned[ord(dbtUsb)] = true
+  of dbtAcpi:
+    # In real implementation: Would enumerate ACPI devices
+    gBusDevicesScanned[ord(dbtAcpi)] = true
+  of dbtPlatform:
+    # In real implementation: Would enumerate platform devices
+    gBusDevicesScanned[ord(dbtPlatform)] = true
+  of dbtIsa:
+    # In real implementation: Would scan ISA bus
+    gBusDevicesScanned[ord(dbtIsa)] = true
+
+proc scanAllBuses*() =
+  ## Scan all device buses
+  # Strategy: Enumerate devices from all bus types
+  for bus in [dbtPci, dbtUsb, dbtAcpi, dbtPlatform, dbtIsa]:
+    enumerateDevices(bus)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Device Statistics
@@ -296,6 +339,39 @@ proc initDeviceManager*() =
   gDeviceCount = 0
   gNextDeviceId = 1
 
+proc countDevicesByState*(state: DeviceState): uint32 =
+  ## Count devices in specific state
+  # Strategy: Iterate and count
+  var count = 0'u32
+  for i in 0..<MaxDevices:
+    if gDeviceTable[i].state == state and gDeviceTable[i].deviceId > 0:
+      inc count
+  return count
+
+proc listAllDevices*(): string =
+  ## List all registered devices
+  # Strategy: Format device information
+  var result = "Registered Devices:\n"
+  for i in 0..<gDeviceCount:
+    let dev = addr gDeviceTable[i]
+    if dev.deviceId > 0:
+      result = result & "  Device " & $dev.deviceId & ": Bus=" &
+               $dev.busType & " Type=" & $dev.deviceType &
+               " State=" & $dev.state & "\n"
+  return result
+
 proc deviceStats*(): string =
   ## Return formatted device statistics
-  "Devices: " & $gDeviceCount & "/" & $MaxDevices
+  # Strategy: Count devices by state and type
+  let running = countDevicesByState(dsRunning)
+  let suspended = countDevicesByState(dsSuspended)
+  let errors = countDevicesByState(dsError)
+
+  return "Devices: " & $gDeviceCount & "/" & $MaxDevices &
+         " (Running: " & $running & " Suspended: " & $suspended &
+         " Errors: " & $errors & ")"
+
+proc getDevicesByScan*(busType: DeviceBusType): bool =
+  ## Check if bus has been scanned
+  # Strategy: Check scan status
+  return gBusDevicesScanned[ord(busType)]

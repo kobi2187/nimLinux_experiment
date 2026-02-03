@@ -199,11 +199,58 @@ proc scGetpid*(ctx: ptr SyscallContext): int64 =
   1
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Syscall Validation and Context
+# ═══════════════════════════════════════════════════════════════════════════
+
+proc validateSyscallContext*(ctx: ptr SyscallContext): bool =
+  ## Validate user-space context before processing
+  # Strategy: Check for null pointer and basic sanity
+  if ctx == nil:
+    return false
+  # In real implementation: would validate user-space addresses, permissions
+  return true
+
+var gSyscallCount*: uint64 = 0
+var gSyscallErrors*: array[64, uint64]
+var gSyscallStats*: array[512, tuple[count: uint64, totalTime: uint64]]
+
+proc recordSyscall*(num: SyscallNumber) =
+  ## Record syscall statistics
+  # Strategy: Increment count and track timing
+  inc gSyscallCount
+  if ord(num) < 512:
+    inc gSyscallStats[ord(num)].count
+
+proc getSyscallStats*(num: SyscallNumber): tuple[count: uint64, totalTime: uint64] =
+  ## Get statistics for specific syscall
+  # Strategy: Return call count and total time
+  if ord(num) < 512:
+    return gSyscallStats[ord(num)]
+  return (0, 0)
+
+proc getSyscallName*(num: SyscallNumber): string =
+  ## Get human-readable syscall name
+  # Strategy: Map enum to string
+  case num
+  of scExit: "exit"
+  of scRead: "read"
+  of scWrite: "write"
+  of scOpen: "open"
+  of scClose: "close"
+  of scStat: "stat"
+  of scBrk: "brk"
+  of scMmap: "mmap"
+  of scMunmap: "munmap"
+  of scGetpid: "getpid"
+  else: "unknown"
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Syscall Initialization
 # ═══════════════════════════════════════════════════════════════════════════
 
 proc initSyscalls*() =
   ## Initialize syscall handlers
+  # Strategy: Register handlers for core syscalls
   registerSyscallHandler(scExit, proc(num: SyscallNumber, ctx: ptr SyscallContext): int64 = scExit(ctx))
   registerSyscallHandler(scRead, proc(num: SyscallNumber, ctx: ptr SyscallContext): int64 = scRead(ctx))
   registerSyscallHandler(scWrite, proc(num: SyscallNumber, ctx: ptr SyscallContext): int64 = scWrite(ctx))
@@ -216,6 +263,7 @@ proc initSyscalls*() =
 
 proc syscallErrorToString*(error: SyscallError): string =
   ## Convert syscall error to message
+  # Strategy: Map error code to descriptive string
   case error
   of seSuccess: "Success"
   of seEperm: "Operation not permitted"
@@ -223,4 +271,29 @@ proc syscallErrorToString*(error: SyscallError): string =
   of seEsrch: "No such process"
   of seEintr: "Interrupted system call"
   of seEio: "I/O error"
+  of seEnxio: "No such device or address"
+  of se2big: "Argument list too long"
+  of seEbadf: "Bad file descriptor"
+  of seEchild: "No child processes"
+  of seEagain: "Resource temporarily unavailable"
+  of seEnomem: "Out of memory"
+  of seEacces: "Permission denied"
   else: "Unknown error"
+
+proc printSyscallStats*(): string =
+  ## Print syscall statistics
+  # Strategy: Format total count and common syscalls
+  var result = "Syscall Statistics:\n"
+  result = result & "Total: " & $gSyscallCount & " syscalls\n"
+  result = result & "Top syscalls:\n"
+
+  var topCount = 0
+  for i in 0..<512:
+    if gSyscallStats[i].count > 0:
+      if topCount < 10:
+        let scNum = SyscallNumber(i)
+        result = result & "  " & getSyscallName(scNum) & ": " &
+                 $gSyscallStats[i].count & " calls\n"
+      inc topCount
+
+  return result
