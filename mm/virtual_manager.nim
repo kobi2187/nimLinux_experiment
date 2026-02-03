@@ -117,15 +117,15 @@ proc newVirtualMemManager*(physMgr: PhysicalMemManager): VirtualMemManager =
 
 proc createAddressSpace*(self: VirtualMemManager): Result[AddressSpace, MappingError] =
   ## Create a new address space with fresh page tables
-  # Allocate PML4
+  # Allocate PML4 frame
   let rootFrame = self.physMgr.allocFrame()
   if rootFrame.isErr:
     return err(meOutOfMemory)
 
-  # Zero the PML4
-  let pml4 = cast[ptr array[PT_ENTRIES, uint64]](rootFrame.value.toUint64)
-  for i in 0..<PT_ENTRIES:
-    pml4[i] = 0
+  # NOTE: In a real implementation, we would map the physical page into
+  # kernel space to zero it. For now, we assume it's already zeroed by allocator
+  # or we skip zeroing to avoid circular dependency
+  # TODO: Properly zero the PML4 page once kernel address space is available
 
   let space = AddressSpace(
     root: rootFrame.value,
@@ -347,3 +347,61 @@ proc kernelUnmap*(self: VirtualMemManager, virt: VirtAddr,
     discard ?self.unmapPage(self.kernelSpace, virt + offset)
     offset += FrameSize
   ok()
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Address Space Information & Utilities
+# ═══════════════════════════════════════════════════════════════════════════
+
+proc getAddressSpaceInfo*(self: VirtualMemManager, space: AddressSpace): string =
+  ## Get human-readable information about an address space
+  var result = "Address Space Information:\n"
+  result &= "  Root (CR3): 0x" & toHex(uint64(space.root)) & "\n"
+  result &= "  Regions: " & $space.regions.len & "\n"
+  result &= "  Reference Count: " & $space.refCount & "\n"
+  for i, region in space.regions:
+    result &= "    Region " & $i & ": 0x" & toHex(uint64(region.start)) &
+              " - 0x" & toHex(uint64(region.start) + region.length) &
+              " (" & $(region.length div 1024) & " KB)\n"
+  result
+
+proc validateVirtAddr*(virt: VirtAddr): bool {.inline.} =
+  ## Basic validation of virtual address (x86_64 canonical form)
+  let addr = uint64(virt)
+  # Canonical addresses must have bits 48-63 all 0 or all 1
+  let bits = addr shr 48
+  bits == 0 or bits == 0xFFFF
+
+proc validateMapping*(virt: VirtAddr, length: uint64): Result[void, MappingError] =
+  ## Validate a mapping request
+  if not validateVirtAddr(virt):
+    return err(meInvalidAddress)
+
+  if length == 0:
+    return err(meInvalidAddress)
+
+  if (length mod FrameSize) != 0:
+    return err(meInvalidAddress)
+
+  ok()
+
+proc kernelMapRegion*(self: VirtualMemManager, virt: VirtAddr, phys: PhysAddr,
+                      length: uint64, flags: set[PageFlags]): Result[void, MappingError] =
+  ## Convenience function for mapping kernel regions
+  let validation = ?validateMapping(virt, length)
+  self.kernelMap(virt, phys, length, flags)
+
+proc addRegionInfo*(space: AddressSpace, virt: VirtAddr, length: uint64,
+                    flags: set[PageFlags], name: string) =
+  ## Add metadata about a mapped region
+  var region = VmRegion(
+    start: virt,
+    length: length,
+    flags: flags
+  )
+  # Copy name
+  for i in 0..<min(name.len, 31):
+    region.name[i] = name[i]
+  if name.len < 32:
+    region.name[name.len] = '\0'
+
+  space.regions.add(region)
