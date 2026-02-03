@@ -201,6 +201,14 @@ proc addSleepingProcess*(pid: uint32, durationMs: uint64) =
     gSleepingProcesses[gSleepCount].wakeupTick = wakeupTick
     inc gSleepCount
 
+proc trySleepProcess*(pid: uint32, durationMs: uint64): Result[void, KernelError] =
+  ## Add process to sleep queue with Result-based error handling
+  # Strategy: Return error if sleep queue is full
+  if gSleepCount >= 256:
+    return err[void, KernelError](keOutOfMemory)
+  addSleepingProcess(pid, durationMs)
+  return ok[void, KernelError]()
+
 proc checkSleepingProcesses*(): seq[uint32] =
   ## Check which sleeping processes should wake up
   # Strategy: Compare wake-up times, return PIDs to wake
@@ -234,11 +242,11 @@ proc handleTimerInterrupt*() {.cdecl.} =
 
   # Check if sleeping processes should wake
   let readyPids = checkSleepingProcesses()
-  # In real implementation: these PIDs would be moved to ready queue
+  # TODO: Move readyPids to scheduler ready queue (integrate with process scheduler)
 
   # Request preemption if enabled and time quantum expired
   if shouldPreempt():
-    # In real implementation: kernel would trigger context switch
+    # TODO: Trigger context switch via scheduler (save current context, select next process)
     discard
 
 # ═══════════════════════════════════════════════════════════════════════════

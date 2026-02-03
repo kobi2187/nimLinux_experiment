@@ -132,10 +132,16 @@ proc createProcess*(parentPid: uint32, priority: ProcessPriority = ppNormal): ui
   return pid
 
 proc getProcess*(pid: uint32): ptr Process =
-  ## Get process by PID
+  ## Get process by PID (returns nil if not found)
   if pid < MaxProcesses:
     return addr gProcessTable[pid]
   return nil
+
+proc tryGetProcess*(pid: uint32): Option[ptr Process] =
+  ## Get process by PID using Option type for safer null handling
+  if pid < MaxProcesses and gProcessTable[pid].pid != 0:
+    return some(addr gProcessTable[pid])
+  return none(ptr Process)
 
 proc terminateProcess*(pid: uint32): bool =
   ## Terminate a process
@@ -293,7 +299,8 @@ proc setProcessMemoryLayout*(pid: uint32, heapStart: VirtAddr, stackStart: VirtA
 
 proc getProcessMemoryUsage*(pid: uint32): uint64 =
   ## Get total memory used by process
-  # Would calculate from memory regions
+  # TODO: Calculate from memory regions (heap, stack, code, data segments)
+  # TODO: Return Result[uint64, KernelError] for error handling
   0
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -310,8 +317,8 @@ proc cleanupTerminatedProcesses*() =
   # Strategy: Iterate process table, mark terminated processes as available
   for i in 0..<MaxProcesses:
     if gProcessTable[i].state == psTerminated:
-      # In real implementation: would free page tables, close file descriptors,
-      # notify parent of exit status
+      # TODO: Free page tables, close all file descriptors, notify parent of exit status
+      # TODO: Return Result to indicate success or failure (e.g., Result[void, KernelError])
       gProcessTable[i].pid = 0
       if gProcessCount > 0:
         dec gProcessCount

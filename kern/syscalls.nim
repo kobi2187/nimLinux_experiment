@@ -207,8 +207,17 @@ proc validateSyscallContext*(ctx: ptr SyscallContext): bool =
   # Strategy: Check for null pointer and basic sanity
   if ctx == nil:
     return false
-  # In real implementation: would validate user-space addresses, permissions
+  # TODO: Validate user-space address ranges (rdi, rsi, etc. must be in user space)
+  # TODO: Validate register values don't exceed architectural limits
+  # TODO: Check for canonical addresses on x86-64 (bits 63:48 must be copies of bit 47)
   return true
+
+proc trySyscallContext*(ctx: ptr SyscallContext): Result[void, KernelError] =
+  ## Validate user-space context with Result-based error handling
+  if ctx == nil:
+    return err[void, KernelError](keInvalidArgument)
+  # TODO: Validate register ranges and canonical addresses
+  return ok[void, KernelError]()
 
 var gSyscallCount*: uint64 = 0
 var gSyscallErrors*: array[64, uint64]

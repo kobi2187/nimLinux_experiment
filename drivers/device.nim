@@ -126,16 +126,33 @@ proc registerDevice*(busType: DeviceBusType, deviceType: DeviceType,
   device.busType = busType
   device.deviceType = deviceType
   device.state = dsProbing
-  # Copy names
+  # TODO: Copy vendorName and deviceName into fixed-size arrays with null termination
   inc gDeviceCount
   return device.deviceId
 
+proc tryRegisterDevice*(busType: DeviceBusType, deviceType: DeviceType,
+                        vendorName: cstring, deviceName: cstring): Result[uint32, KernelError] =
+  ## Register a new device with Result-based error handling
+  if gDeviceCount >= MaxDevices:
+    return err[uint32, KernelError](keOutOfMemory)
+  let deviceId = registerDevice(busType, deviceType, vendorName, deviceName)
+  if deviceId == 0:
+    return err[uint32, KernelError](keAlreadyExists)
+  return ok[uint32, KernelError](deviceId)
+
 proc getDevice*(deviceId: uint32): ptr Device =
-  ## Get device by ID
+  ## Get device by ID (returns nil if not found)
   for i in 0..<MaxDevices:
     if gDeviceTable[i].deviceId == deviceId:
       return addr gDeviceTable[i]
   return nil
+
+proc tryGetDevice*(deviceId: uint32): Option[ptr Device] =
+  ## Get device by ID with Option-based safety
+  for i in 0..<MaxDevices:
+    if gDeviceTable[i].deviceId == deviceId:
+      return some(addr gDeviceTable[i])
+  return none(ptr Device)
 
 proc setDeviceState*(deviceId: uint32, state: DeviceState) =
   ## Change device state
@@ -293,20 +310,27 @@ proc enumerateDevices*(busType: DeviceBusType) =
   # This would call bus-specific enumeration (e.g., pciEnumerateAll)
   case busType
   of dbtPci:
-    # In real implementation: Would iterate PCI bus using config space
-    # For each device found, call registerDevice()
+    # TODO: Iterate PCI bus using config space (bus 0-255, device 0-31, function 0-7)
+    # TODO: Check vendor ID for valid devices (0xFFFF means not present)
+    # TODO: For each device, call registerDevice() and then probe drivers
     gBusDevicesScanned[ord(dbtPci)] = true
   of dbtUsb:
-    # In real implementation: Would scan USB bus
+    # TODO: Scan USB controllers (UHCI, OHCI, EHCI, xHCI)
+    # TODO: Enumerate ports and connected devices
+    # TODO: Parse device descriptors and call registerDevice()
     gBusDevicesScanned[ord(dbtUsb)] = true
   of dbtAcpi:
-    # In real implementation: Would enumerate ACPI devices
+    # TODO: Walk ACPI namespace tree from root (_SB_)
+    # TODO: Evaluate _HID and _UID to identify devices
+    # TODO: Call registerDevice() for each device object found
     gBusDevicesScanned[ord(dbtAcpi)] = true
   of dbtPlatform:
-    # In real implementation: Would enumerate platform devices
+    # TODO: Iterate platform device registry (from bootloader or hardcoded)
+    # TODO: Create device entries for each platform device
     gBusDevicesScanned[ord(dbtPlatform)] = true
   of dbtIsa:
-    # In real implementation: Would scan ISA bus
+    # TODO: Scan ISA address ranges for known device signatures
+    # TODO: Probe for legacy devices (COM ports, LPT, floppy)
     gBusDevicesScanned[ord(dbtIsa)] = true
 
 proc scanAllBuses*() =
