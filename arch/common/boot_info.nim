@@ -38,6 +38,7 @@ type
 
   PixelFormat* = enum
     ## Framebuffer pixel format
+    pfIndexed   ## Indexed color palette
     pfRgb       ## RGB (red at lowest address)
     pfBgr       ## BGR (blue at lowest address)
     pfBitmask   ## Custom bitmask
