@@ -1,0 +1,3 @@
+[submodule "vendor/arsenal"]
+	path = vendor/arsenal
+	url = https://github.com/kobi2187/arsenal
