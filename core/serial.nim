@@ -4,6 +4,8 @@
 ## Simple serial port output for debugging.
 ## No dependencies beyond arch primitives.
 
+import ../core/types
+
 when defined(amd64) or defined(x86_64):
   import ../arch/x86_64/cpu_primitives
 

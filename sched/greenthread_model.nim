@@ -151,14 +151,14 @@ proc restoreContextImpl(model: ExecutionModel, unit: ExecutionUnit, ctx: ptr Exe
   ctx[] = unit.context
   ok()
 
-proc switchToImpl(model: ExecutionModel, from: ExecutionUnit, to: ExecutionUnit): Result[void, ExecutionUnitError] =
+proc switchToImpl(model: ExecutionModel, fromUnit: ExecutionUnit, to: ExecutionUnit): Result[void, ExecutionUnitError] =
   ## Switch from one green thread to another (cooperative)
   let gtModel = cast[GreenThreadModel](model.vtable)
   inc gtModel.contextSwitches
 
   # Save state of running thread
-  if from != nil:
-    from.state = esSuspended
+  if fromUnit != nil:
+    fromUnit.state = esSuspended
 
   # Restore state of target thread
   to.state = esRunning
@@ -245,7 +245,7 @@ proc createGreenThreadModelImpl*(): ExecutionModel =
     saveContext: saveContextImpl,
     restoreContext: restoreContextImpl,
     switchTo: switchToImpl,
-    yield: yieldImpl,
+    doYield: yieldImpl,
     suspend: suspendImpl,
     resume: resumeImpl,
     getStats: getStatsImpl

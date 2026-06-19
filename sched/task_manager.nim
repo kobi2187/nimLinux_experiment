@@ -8,6 +8,7 @@ import ../core/types
 import ../mm/heap_manager
 import ../mm/virtual_manager
 import ../sync/spinlock
+import ../core/serial
 
 type
   # ═══════════════════════════════════════════════════════════════════════════
@@ -140,9 +141,12 @@ proc newTaskManager*(heap: HeapManager, virtMgr: VirtualMemManager): TaskManager
 
 proc allocKernelStack(self: TaskManager): Result[VirtAddr, KernelError] =
   ## Allocate a kernel stack
+  kprintln("    [TASK] allocKernelStack: calling heap.alloc...")
   let stackMem = self.heap.alloc(DefaultKernelStackSize)
   if stackMem.isErr:
+    kprintln("    [TASK] ERROR: heap.alloc failed")
     return err(keOutOfMemory)
+  kprintln("    [TASK] allocKernelStack: heap.alloc succeeded")
   ok(VirtAddr(cast[uint64](stackMem.value)))
 
 proc setTaskName(task: Task, name: string) =

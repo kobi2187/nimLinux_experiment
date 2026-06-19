@@ -52,17 +52,23 @@ type
 # Result Type Constructors
 # ═══════════════════════════════════════════════════════════════════════════
 
-proc ok*[T, E](val: T): Result[T, E] {.inline.} =
-  ## Create a successful result with a value
-  Result[T, E](isOk: true, value: val)
+template ok*[T](val: T): untyped =
+  ## Create a successful result with a value.
+  ## Infers the full Result[T, E] type from the enclosing proc's return type.
+  type Res = typeof(result)
+  Res(isOk: true, value: val)
 
-proc ok*[E](): Result[void, E] {.inline.} =
-  ## Create a successful void result
-  Result[void, E](isOk: true)
+template ok*(): untyped =
+  ## Create a successful void result.
+  ## Infers the full Result[T, E] type from the enclosing proc's return type.
+  type Res = typeof(result)
+  Res(isOk: true)
 
-proc err*[T, E](e: E): Result[T, E] {.inline.} =
-  ## Create an error result
-  Result[T, E](isOk: false, error: e)
+template err*[E](e: E): untyped =
+  ## Create an error result.
+  ## Infers the full Result[T, E] type from the enclosing proc's return type.
+  type Res = typeof(result)
+  Res(isOk: false, error: e)
 
 proc isErr*[T, E](r: Result[T, E]): bool {.inline.} =
   ## Check if result is an error
@@ -83,6 +89,11 @@ proc `?`*[T, E](r: Result[T, E]): T =
   if r.isOk:
     r.value
   else:
+    raise newException(Defect, "Result error propagation failed")
+
+proc `?`*[E](r: Result[void, E]): void =
+  ## Propagate error for void results (for use in procs returning Result)
+  if not r.isOk:
     raise newException(Defect, "Result error propagation failed")
 
 proc mapErr*[T, E1, E2](r: Result[T, E1], f: proc(e: E1): E2): Result[T, E2] {.inline.} =
@@ -126,6 +137,10 @@ proc none*[T](): Option[T] {.inline.} =
 proc none*(T: typedesc): Option[T] {.inline.} =
   ## Create an empty Option (alternative syntax)
   Option[T](isSome: false)
+
+proc isNone*[T](o: Option[T]): bool {.inline.} =
+  ## Check if option is empty
+  not o.isSome
 
 proc get*[T](o: Option[T]): T {.inline.} =
   ## Get the value, assumes isSome is true
@@ -280,3 +295,20 @@ const
 proc toKiB*(bytes: uint64): uint64 {.inline.} = bytes div KiB
 proc toMiB*(bytes: uint64): uint64 {.inline.} = bytes div MiB
 proc toGiB*(bytes: uint64): uint64 {.inline.} = bytes div GiB
+
+proc toHexImpl(val: uint64): string =
+  ## Convert uint64 to hex string (no 0x prefix, lowercase)
+  const hexChars = "0123456789abcdef"
+  for i in countdown(15, 0):
+    let nibble = (val shr (i * 4)) and 0xF
+    result.add hexChars[nibble]
+
+proc toHex*(val: SomeUnsignedInt): string =
+  ## Convert unsigned integer to lowercase hex string (no prefix)
+  ## Strips leading zeros for cleaner output
+  let full = toHexImpl(uint64(val))
+  # Strip leading zeros
+  var i = 0
+  while i < full.len - 1 and full[i] == '0':
+    inc i
+  full[i..^1]

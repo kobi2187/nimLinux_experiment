@@ -119,13 +119,11 @@ proc restoreContextImpl(model: ExecutionModel, unit: ExecutionUnit, ctx: ptr Exe
   ctx[] = unit.context
   ok()
 
-proc switchToImpl(model: ExecutionModel, from: ExecutionUnit, to: ExecutionUnit): Result[void, ExecutionUnitError] =
+proc switchToImpl(model: ExecutionModel, fromUnit: ExecutionUnit, to: ExecutionUnit): Result[void, ExecutionUnitError] =
   ## Switch from one fiber to another (cooperative)
   let fiberModel = cast[FiberModel](model.vtable)
   inc fiberModel.contextSwitches
-
-  # Save state of running fiber
-  from.state = esSuspended
+  fromUnit.state = esSuspended
   # Restore state of target fiber
   to.state = esRunning
 
@@ -188,7 +186,7 @@ proc createFiberModelImpl*(): ExecutionModel =
     saveContext: saveContextImpl,
     restoreContext: restoreContextImpl,
     switchTo: switchToImpl,
-    yield: yieldImpl,
+    doYield: yieldImpl,
     suspend: suspendImpl,
     resume: resumeImpl,
     getStats: getStatsImpl

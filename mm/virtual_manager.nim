@@ -7,6 +7,13 @@
 import ../core/types
 import ./physical_manager
 import ../sync/spinlock
+import ../core/serial
+
+when defined(amd64) or defined(x86_64):
+  import ../arch/x86_64/cpu_primitives
+
+# Debug: flag to control verbosity
+const vmDbg = false
 
 type
   # ═══════════════════════════════════════════════════════════════════════════
@@ -110,22 +117,24 @@ const
 
 proc newVirtualMemManager*(physMgr: PhysicalMemManager): VirtualMemManager =
   ## Create a new virtual memory manager
+  when vmDbg: kprintln("  [VM] newVirtualMemManager: creating object")
   result = VirtualMemManager(
     physMgr: physMgr
   )
+  when vmDbg: kprintln("  [VM] newVirtualMemManager: init lock")
   result.lock.init()
+  when vmDbg: kprintln("  [VM] newVirtualMemManager: done")
 
 proc createAddressSpace*(self: VirtualMemManager): Result[AddressSpace, MappingError] =
   ## Create a new address space with fresh page tables
-  # Allocate PML4 frame
   let rootFrame = self.physMgr.allocFrame()
   if rootFrame.isErr:
     return err(meOutOfMemory)
 
-  # NOTE: In a real implementation, we would map the physical page into
-  # kernel space to zero it. For now, we assume it's already zeroed by allocator
-  # or we skip zeroing to avoid circular dependency
-  # TODO: Properly zero the PML4 page once kernel address space is available
+  # Zero the entire PML4 page (inline to avoid cross-module zeroPhysPage issue)
+  let pz = cast[ptr array[512, uint64]](uint64(rootFrame.value))
+  for i in 0..<512:
+    pz[i] = 0
 
   let space = AddressSpace(
     root: rootFrame.value,
@@ -133,7 +142,6 @@ proc createAddressSpace*(self: VirtualMemManager): Result[AddressSpace, MappingE
     refCount: 1
   )
   space.lock.init()
-
   ok(space)
 
 proc destroyAddressSpace*(self: VirtualMemManager, space: AddressSpace) =
@@ -143,15 +151,33 @@ proc destroyAddressSpace*(self: VirtualMemManager, space: AddressSpace) =
 
 proc initKernelSpace*(self: VirtualMemManager): Result[void, MappingError] =
   ## Initialize kernel address space
+  ##
+  ## Creates a fresh PML4, copies the identity mapping (PML4[0]) from the
+  ## boot stub's page tables (currently loaded in CR3), then switches CR3
+  ## to the new PML4 so that both the lower-half identity mapping AND the
+  ## higher-half kernel mappings are visible to the CPU.
   let space = ?self.createAddressSpace()
   self.kernelSpace = space
+
+  let oldCr3 = PhysAddr(readCr3())
+  let oldPml4 = physPtr[array[PT_ENTRIES, uint64]](oldCr3)
+  let newPml4 = physPtr[array[PT_ENTRIES, uint64]](space.root)
+
+  # Copy identity mapping (PML4[0]) from boot stub page tables
+  newPml4[0] = oldPml4[0]
+
+  # Switch CR3 to the new kernel address space (flushes TLB)
+  writeCr3(uint64(space.root))
   ok()
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Page Table Walking
 # ═══════════════════════════════════════════════════════════════════════════
 
-proc getVirtIndex(virt: VirtAddr, level: int): int {.inline.} =
+type VirtIndices* = tuple[pml4, pdpt, pd, pt: int]
+  ## All four page table indices for a virtual address
+
+proc getVirtIndex*(virt: VirtAddr, level: int): int {.inline.} =
   ## Get page table index for address at given level
   let shift = case level
     of 4: PML4_SHIFT
@@ -160,6 +186,14 @@ proc getVirtIndex(virt: VirtAddr, level: int): int {.inline.} =
     of 1: PT_SHIFT
     else: 0
   int((uint64(virt) shr shift) and INDEX_MASK)
+
+proc virtIndices*(virt: VirtAddr): VirtIndices {.inline.} =
+  ## Compute all four page table indices for a virtual address at once.
+  let v = uint64(virt)
+  result.pml4 = int((v shr PML4_SHIFT) and INDEX_MASK)
+  result.pdpt = int((v shr PDPT_SHIFT) and INDEX_MASK)
+  result.pd   = int((v shr PD_SHIFT) and INDEX_MASK)
+  result.pt   = int((v shr PT_SHIFT) and INDEX_MASK)
 
 proc flagsToEntry(flags: set[PageFlags]): uint64 =
   ## Convert page flags to PTE bits
@@ -194,19 +228,20 @@ proc getOrCreateTable(self: VirtualMemManager, parent: ptr uint64,
                       flags: uint64): Result[ptr array[PT_ENTRIES, uint64], MappingError] =
   ## Get or create a page table entry
   if (parent[] and PTE_PRESENT) != 0:
-    # Table exists
-    let addr = parent[] and PTE_ADDR_MASK
-    return ok(cast[ptr array[PT_ENTRIES, uint64]](addr))
+    # Table exists — extract physical address from the PTE
+    let tablePhys = PhysAddr(parent[] and PTE_ADDR_MASK)
+    return ok(physPtr[array[PT_ENTRIES, uint64]](tablePhys))
 
   # Need to allocate new table
   let frame = self.physMgr.allocFrame()
   if frame.isErr:
     return err(meOutOfMemory)
 
-  # Zero the new table
-  let table = cast[ptr array[PT_ENTRIES, uint64]](uint64(frame.value))
+  # Zero the new table before use (inline to avoid zeroPhysPage issue)
+  let zt = cast[ptr array[PT_ENTRIES, uint64]](uint64(frame.value))
   for i in 0..<PT_ENTRIES:
-    table[i] = 0
+    zt[i] = 0
+  let table = physPtr[array[PT_ENTRIES, uint64]](frame.value)
 
   # Set parent entry
   parent[] = uint64(frame.value) or flags or PTE_PRESENT
@@ -216,29 +251,25 @@ proc getOrCreateTable(self: VirtualMemManager, parent: ptr uint64,
 proc mapPage*(self: VirtualMemManager, space: AddressSpace,
               virt: VirtAddr, phys: PhysAddr,
               flags: set[PageFlags]): Result[void, MappingError] =
-  ## Map a single 4KB page
   space.lock.acquire()
   defer: space.lock.release()
 
-  let pml4 = cast[ptr array[PT_ENTRIES, uint64]](uint64(space.root))
-  let pml4Idx = getVirtIndex(virt, 4)
-  let pdptIdx = getVirtIndex(virt, 3)
-  let pdIdx = getVirtIndex(virt, 2)
-  let ptIdx = getVirtIndex(virt, 1)
+  let idx = virtIndices(virt)
+  let pml4 = physPtr[array[PT_ENTRIES, uint64]](space.root)
 
   # Walk/create page tables
   let tableFlags = PTE_WRITABLE or PTE_USER  # Intermediate tables are permissive
 
-  let pdpt = ?self.getOrCreateTable(addr pml4[pml4Idx], tableFlags)
-  let pd = ?self.getOrCreateTable(addr pdpt[pdptIdx], tableFlags)
-  let pt = ?self.getOrCreateTable(addr pd[pdIdx], tableFlags)
+  let pdpt = ?self.getOrCreateTable(addr pml4[idx.pml4], tableFlags)
+  let pd = ?self.getOrCreateTable(addr pdpt[idx.pdpt], tableFlags)
+  let pt = ?self.getOrCreateTable(addr pd[idx.pd], tableFlags)
 
   # Check if already mapped
-  if (pt[ptIdx] and PTE_PRESENT) != 0:
+  if (pt[idx.pt] and PTE_PRESENT) != 0:
     return err(meAlreadyMapped)
 
   # Set the page table entry
-  pt[ptIdx] = uint64(phys) or flagsToEntry(flags)
+  pt[idx.pt] = uint64(phys) or flagsToEntry(flags)
 
   ok()
 
@@ -248,32 +279,29 @@ proc unmapPage*(self: VirtualMemManager, space: AddressSpace,
   space.lock.acquire()
   defer: space.lock.release()
 
-  let pml4 = cast[ptr array[PT_ENTRIES, uint64]](uint64(space.root))
-  let pml4Idx = getVirtIndex(virt, 4)
+  let idx = virtIndices(virt)
+  let pml4 = physPtr[array[PT_ENTRIES, uint64]](space.root)
 
-  if (pml4[pml4Idx] and PTE_PRESENT) == 0:
+  if (pml4[idx.pml4] and PTE_PRESENT) == 0:
     return err(meNotMapped)
 
-  let pdpt = cast[ptr array[PT_ENTRIES, uint64]](pml4[pml4Idx] and PTE_ADDR_MASK)
-  let pdptIdx = getVirtIndex(virt, 3)
+  let pdpt = physPtr[array[PT_ENTRIES, uint64]](PhysAddr(pml4[idx.pml4] and PTE_ADDR_MASK))
 
-  if (pdpt[pdptIdx] and PTE_PRESENT) == 0:
+  if (pdpt[idx.pdpt] and PTE_PRESENT) == 0:
     return err(meNotMapped)
 
-  let pd = cast[ptr array[PT_ENTRIES, uint64]](pdpt[pdptIdx] and PTE_ADDR_MASK)
-  let pdIdx = getVirtIndex(virt, 2)
+  let pd = physPtr[array[PT_ENTRIES, uint64]](PhysAddr(pdpt[idx.pdpt] and PTE_ADDR_MASK))
 
-  if (pd[pdIdx] and PTE_PRESENT) == 0:
+  if (pd[idx.pd] and PTE_PRESENT) == 0:
     return err(meNotMapped)
 
-  let pt = cast[ptr array[PT_ENTRIES, uint64]](pd[pdIdx] and PTE_ADDR_MASK)
-  let ptIdx = getVirtIndex(virt, 1)
+  let pt = physPtr[array[PT_ENTRIES, uint64]](PhysAddr(pd[idx.pd] and PTE_ADDR_MASK))
 
-  if (pt[ptIdx] and PTE_PRESENT) == 0:
+  if (pt[idx.pt] and PTE_PRESENT) == 0:
     return err(meNotMapped)
 
-  let phys = PhysAddr(pt[ptIdx] and PTE_ADDR_MASK)
-  pt[ptIdx] = 0
+  let phys = PhysAddr(pt[idx.pt] and PTE_ADDR_MASK)
+  pt[idx.pt] = 0
 
   ok(phys)
 
@@ -283,50 +311,47 @@ proc mapRegion*(self: VirtualMemManager, space: AddressSpace,
   ## Map a contiguous region
   var offset: uint64 = 0
   while offset < length:
-    discard ?self.mapPage(space, virt + offset, phys + offset, flags)
+    ?self.mapPage(space, virt + offset, phys + offset, flags)
     offset += FrameSize
   ok()
 
 proc translate*(self: VirtualMemManager, space: AddressSpace,
                 virt: VirtAddr): Result[PhysAddr, MappingError] =
   ## Translate virtual to physical address
-  let pml4 = cast[ptr array[PT_ENTRIES, uint64]](uint64(space.root))
-  let pml4Idx = getVirtIndex(virt, 4)
+  let idx = virtIndices(virt)
+  let pml4 = physPtr[array[PT_ENTRIES, uint64]](space.root)
 
-  if (pml4[pml4Idx] and PTE_PRESENT) == 0:
+  if (pml4[idx.pml4] and PTE_PRESENT) == 0:
     return err(meNotMapped)
 
-  let pdpt = cast[ptr array[PT_ENTRIES, uint64]](pml4[pml4Idx] and PTE_ADDR_MASK)
-  let pdptIdx = getVirtIndex(virt, 3)
+  let pdpt = physPtr[array[PT_ENTRIES, uint64]](PhysAddr(pml4[idx.pml4] and PTE_ADDR_MASK))
 
-  if (pdpt[pdptIdx] and PTE_PRESENT) == 0:
+  if (pdpt[idx.pdpt] and PTE_PRESENT) == 0:
     return err(meNotMapped)
 
   # Check for 1GB huge page
-  if (pdpt[pdptIdx] and PTE_HUGE) != 0:
-    let base = pdpt[pdptIdx] and PTE_ADDR_MASK
+  if (pdpt[idx.pdpt] and PTE_HUGE) != 0:
+    let base = pdpt[idx.pdpt] and PTE_ADDR_MASK
     let offset = uint64(virt) and 0x3FFFFFFF'u64  # 30-bit offset
     return ok(PhysAddr(base + offset))
 
-  let pd = cast[ptr array[PT_ENTRIES, uint64]](pdpt[pdptIdx] and PTE_ADDR_MASK)
-  let pdIdx = getVirtIndex(virt, 2)
+  let pd = physPtr[array[PT_ENTRIES, uint64]](PhysAddr(pdpt[idx.pdpt] and PTE_ADDR_MASK))
 
-  if (pd[pdIdx] and PTE_PRESENT) == 0:
+  if (pd[idx.pd] and PTE_PRESENT) == 0:
     return err(meNotMapped)
 
   # Check for 2MB huge page
-  if (pd[pdIdx] and PTE_HUGE) != 0:
-    let base = pd[pdIdx] and PTE_ADDR_MASK
+  if (pd[idx.pd] and PTE_HUGE) != 0:
+    let base = pd[idx.pd] and PTE_ADDR_MASK
     let offset = uint64(virt) and 0x1FFFFF'u64  # 21-bit offset
     return ok(PhysAddr(base + offset))
 
-  let pt = cast[ptr array[PT_ENTRIES, uint64]](pd[pdIdx] and PTE_ADDR_MASK)
-  let ptIdx = getVirtIndex(virt, 1)
+  let pt = physPtr[array[PT_ENTRIES, uint64]](PhysAddr(pd[idx.pd] and PTE_ADDR_MASK))
 
-  if (pt[ptIdx] and PTE_PRESENT) == 0:
+  if (pt[idx.pt] and PTE_PRESENT) == 0:
     return err(meNotMapped)
 
-  let base = pt[ptIdx] and PTE_ADDR_MASK
+  let base = pt[idx.pt] and PTE_ADDR_MASK
   let offset = uint64(virt) and 0xFFF'u64  # 12-bit offset
   ok(PhysAddr(base + offset))
 
@@ -354,21 +379,21 @@ proc kernelUnmap*(self: VirtualMemManager, virt: VirtAddr,
 
 proc getAddressSpaceInfo*(self: VirtualMemManager, space: AddressSpace): string =
   ## Get human-readable information about an address space
-  var result = "Address Space Information:\n"
-  result &= "  Root (CR3): 0x" & toHex(uint64(space.root)) & "\n"
-  result &= "  Regions: " & $space.regions.len & "\n"
-  result &= "  Reference Count: " & $space.refCount & "\n"
+  var info = "Address Space Information:\n"
+  info &= "  Root (CR3): 0x" & toHex(uint64(space.root)) & "\n"
+  info &= "  Regions: " & $space.regions.len & "\n"
+  info &= "  Reference Count: " & $space.refCount & "\n"
   for i, region in space.regions:
-    result &= "    Region " & $i & ": 0x" & toHex(uint64(region.start)) &
+    info &= "    Region " & $i & ": 0x" & toHex(uint64(region.start)) &
               " - 0x" & toHex(uint64(region.start) + region.length) &
               " (" & $(region.length div 1024) & " KB)\n"
-  result
+  info
 
 proc validateVirtAddr*(virt: VirtAddr): bool {.inline.} =
   ## Basic validation of virtual address (x86_64 canonical form)
-  let addr = uint64(virt)
+  let adr = uint64(virt)
   # Canonical addresses must have bits 48-63 all 0 or all 1
-  let bits = addr shr 48
+  let bits = adr shr 48
   bits == 0 or bits == 0xFFFF
 
 proc validateMapping*(virt: VirtAddr, length: uint64): Result[void, MappingError] =
@@ -387,7 +412,7 @@ proc validateMapping*(virt: VirtAddr, length: uint64): Result[void, MappingError
 proc kernelMapRegion*(self: VirtualMemManager, virt: VirtAddr, phys: PhysAddr,
                       length: uint64, flags: set[PageFlags]): Result[void, MappingError] =
   ## Convenience function for mapping kernel regions
-  let validation = ?validateMapping(virt, length)
+  ?validateMapping(virt, length)
   self.kernelMap(virt, phys, length, flags)
 
 proc addRegionInfo*(space: AddressSpace, virt: VirtAddr, length: uint64,

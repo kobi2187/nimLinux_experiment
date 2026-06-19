@@ -6,16 +6,32 @@
 
 import ../../core/types
 import ../../core/serial
+import ../../core/debug
 import ../../arch/common/boot_info
 import ../../mm/physical_manager
 import ../../mm/virtual_manager
 import ../../mm/heap_manager
-import ../../sync/spinlock
+
 import ../../sched/task_manager
 import ../../sched/scheduler
+import ../../boot/bootloader
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Linker Script Symbols
+# ═══════════════════════════════════════════════════════════════════════════
+
+proc getKernelEnd*(): uint64 =
+  ## Get the physical end address of the kernel image (from linker script).
+  ## This is the address right after kernel BSS — all kernel code/data/BSS
+  ## resides below this address.
+  {.emit: """
+    extern char kernel_end[];
+    `result` = (unsigned long long)kernel_end;
+  """.}
 
 when defined(amd64) or defined(x86_64):
   import ../../arch/x86_64/cpu_primitives
+  import ../../arch/x86_64/rtl_stubs
 
 type
   # ═══════════════════════════════════════════════════════════════════════════
@@ -73,12 +89,33 @@ proc initMemory(k: Kernel): bool =
   ## Initialize memory management subsystem
   kprintln("[INIT] Initializing memory management...")
 
-  # Calculate bitmap size needed
-  let highestAddr = getHighestAddress(k.bootInfo[])
+  # ── Debug: dump memory map ──────────────────────────────────────
+  kprintln("  Memory map dump:")
+  for i in 0..<k.bootInfo.memoryMap.count:
+    let r = k.bootInfo.memoryMap.regions[i]
+    kprint("    [")
+    kprintInt(i)
+    kprint("] base=0x")
+    defaultSerial.putHex(uint64(r.base))
+    kprint(" length=0x")
+    defaultSerial.putHex(r.length)
+    kprint(" (")
+    kprintInt(int64(r.length div (1024*1024)))
+    kprint(" MiB) type=")
+    kprintInt(int64(r.regionType.ord))
+    kprintln("")
+
+  # Calculate bitmap size based on USABLE memory only
+  # (excluding reserved MMIO regions at very high addresses)
+  let highestAddr = getHighestUsableAddress(k.bootInfo[])
+  kprint("  Highest usable address: 0x")
+  kprintHex(uint64(highestAddr))
+  kprintln("")
+
   let totalFrames = (uint64(highestAddr) + FrameSize - 1) div FrameSize
   let bitmapSize = (totalFrames + 63) div 64 * 8  # bytes
 
-  kprint("  Total memory: ")
+  kprint("  Total usable memory: ")
   kprintInt(int64(uint64(highestAddr) div MiB))
   kprintln(" MiB")
 
@@ -86,25 +123,30 @@ proc initMemory(k: Kernel): bool =
   kprintInt(int64(totalFrames))
   kprintln("")
 
-  # For early init, we need to find a free region for the bitmap
-  # This is a simplified approach - a real kernel would be more careful
-  var bitmapAddr: pointer = nil
+  kprint("  Bitmap size needed: ")
+  kprintInt(int64(bitmapSize))
+  kprintln(" bytes")
 
-  for i in 0..<k.bootInfo.memoryMap.count:
-    let region = k.bootInfo.memoryMap.regions[i]
-    if region.regionType == memAvailable and region.length >= bitmapSize + FrameSize:
-      # Use start of this region for bitmap (page-aligned)
-      let aligned = alignUp(uint64(region.base), FrameSize)
-      bitmapAddr = cast[pointer](aligned)
-      break
-
-  if bitmapAddr == nil:
-    kprintln("  ERROR: Could not find memory for bitmap")
-    return false
-
-  kprint("  Bitmap at: 0x")
-  kprintHex(cast[uint64](bitmapAddr))
+  # Get kernel end address from linker script, so we know where our
+  # own code/data/BSS lives and can avoid placing the bitmap there.
+  let kernelEndAddr = getKernelEnd()
+  k.bootInfo.kernelPhysEnd = PhysAddr(kernelEndAddr)
+  kprint("  Kernel end: 0x")
+  kprintHex(kernelEndAddr)
   kprintln("")
+
+  # Place the bitmap right after the kernel image (page-aligned).
+  # The kernel BSS (including ARC heap) extends to kernel_end; memory
+  # beyond that is available for bitmap and other allocations.
+  let bitmapPhysAddr = alignUp(kernelEndAddr, FrameSize)
+  let bitmapEndAddr = bitmapPhysAddr + bitmapSize
+  kprint("  Bitmap at: 0x")
+  kprintHex(bitmapPhysAddr)
+  kprint(" - 0x")
+  kprintHex(bitmapEndAddr)
+  kprintln("")
+
+  let bitmapAddr = cast[pointer](bitmapPhysAddr)
 
   # Initialize physical memory manager
   k.physMgr = PhysicalMemManager()
@@ -115,8 +157,11 @@ proc initMemory(k: Kernel): bool =
   kprintln(" MiB")
 
   # Initialize virtual memory manager
+  kprintln("  Creating VirtualMemManager...")
   k.virtMgr = newVirtualMemManager(k.physMgr)
+  kprintln("  VirtualMemManager created")
 
+  kprintln("  Initializing kernel address space...")
   let initResult = k.virtMgr.initKernelSpace()
   if initResult.isErr:
     kprintln("  ERROR: Could not initialize kernel address space")
@@ -125,7 +170,9 @@ proc initMemory(k: Kernel): bool =
   kprintln("  Virtual memory manager initialized")
 
   # Initialize heap manager
+  kprintln("  Creating HeapManager...")
   k.heapMgr = newHeapManager(k.physMgr, k.virtMgr)
+  kprintln("  HeapManager created")
 
   kprintln("  Heap manager initialized")
   kprintln("[INIT] Memory management initialized")
@@ -232,11 +279,11 @@ proc initKernel*(bootInfo: ptr BootInfo): Kernel =
   result.initialized = true
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Kernel Entry Point
+# Kernel Entry Points
 # ═══════════════════════════════════════════════════════════════════════════
 
-proc kernelMain*(bootInfo: ptr BootInfo) {.exportc.} =
-  ## Kernel entry point called by bootloader
+proc runKernel(bootInfo: ptr BootInfo) =
+  ## Initialize and run the kernel (internal, used by both boot paths)
   let k = initKernel(bootInfo)
 
   if not k.initialized:
@@ -244,34 +291,128 @@ proc kernelMain*(bootInfo: ptr BootInfo) {.exportc.} =
 
   kprintln("Starting scheduler...")
 
-  # Start the scheduler (this never returns)
-  k.schedMgr.schedule()
+  # Scheduler loop — calls schedule() in a loop to dispatch tasks.
+  # In a real kernel the idle task or timer interrupts drive this loop;
+  # here we drive it from the boot CPU until context switching lands
+  # on the idle task (which calls hlt in its own loop).
+  while true:
+    k.schedMgr.schedule()
+    when defined(amd64) or defined(x86_64):
+      hlt()
 
-  # Should never reach here
-  panic("Scheduler returned unexpectedly")
+# earlyPutChar / earlyPutString / earlyPutHex are now in core/debug.nim
 
-# For testing without bootloader
-when isMainModule:
-  # Create a fake boot info for testing
+proc kernelMain*(magicReg: uint32, infoPtr: pointer) {.exportc.} =
+  ## Kernel entry point called by the boot stub (assembly)
+  ## - magicReg: Multiboot magic from EAX (0x2BADB002 for Multiboot1)
+  ## - infoPtr:  Pointer to bootloader info structure from EBX
+
+  # ═══════════════════════════════════════════════════════════════════
+  # PHASE 1: EARLY DEBUG — inline asm, no dependencies
+  # ═══════════════════════════════════════════════════════════════════
+  earlyPutString("\n\n\n")
+  earlyPutString("╔════════════════════════════════════════╗\n")
+  earlyPutString("║        NimixOS Kernel — EARLY DEBUG   ║\n")
+  earlyPutString("╚════════════════════════════════════════╝\n")
+  earlyPutString("\n")
+
+  # ── Magic number ──────────────────────────────────────────────────
+  earlyPutString("[BOOT] magicReg = ")
+  earlyPutHex(uint64(magicReg))
+  earlyPutString("\n")
+  earlyPutString("[BOOT] MULTIBOOT2_MAGIC = ")
+  earlyPutHex(uint64(MULTIBOOT2_MAGIC))
+  earlyPutString("\n")
+  earlyPutString("[BOOT] MULTIBOOT1_MAGIC_BOOT = ")
+  earlyPutHex(uint64(MULTIBOOT1_MAGIC_BOOT))
+  earlyPutString("\n")
+
+  # ── Detect protocol ───────────────────────────────────────────────
+  let detectedProto = detectProtocol(magicReg, infoPtr)
+  earlyPutString("[BOOT] Detected protocol: ")
+  case detectedProto
+  of bpMultiboot1: earlyPutString("Multiboot1\n")
+  of bpMultiboot2: earlyPutString("Multiboot2\n")
+  of bpLimine:     earlyPutString("Limine\n")
+  of bpUnknown:    earlyPutString("UNKNOWN\n")
+
+  # ── Info pointer ──────────────────────────────────────────────────
+  earlyPutString("[BOOT] infoPtr = ")
+  earlyPutHex(cast[uint64](infoPtr))
+  earlyPutString("\n")
+  earlyPutString("[BOOT] infoPtr & 0xFFF = ")
+  earlyPutHex(uint64(cast[uint64](infoPtr) and 0xFFF))
+  earlyPutString(" (should be 0 if page-aligned)\n")
+
+  # ═══════════════════════════════════════════════════════════════════
+  # PHASE 2: BOOTLOADER INFO HEADER (compact)
+  # ═══════════════════════════════════════════════════════════════════
+  # For verbose hex dumps, use earlyDumpMultiboot2Info() / earlyDumpHex()
+  # from core/debug.nim
+
+  if detectedProto == bpMultiboot2:
+    let base = cast[uint64](infoPtr)
+    let totalSize = cast[ptr uint32](base)[]
+    earlyPutString("[INFO] Multiboot2: total_size=")
+    earlyPutInt(int64(totalSize))
+    earlyPutString(" end=0x")
+    earlyPutHex(base + uint64(totalSize))
+    earlyPutString("\n")
+
+  # ═══════════════════════════════════════════════════════════════════
+  # PHASE 3: PARSE BOOT INFO
+  # ═══════════════════════════════════════════════════════════════════
+  earlyPutString("\n[PARSE] Calling parseBootInfo...\n")
+
+  var bootInfo: BootInfo
+
+  let parseResult = parseBootInfo(magicReg, infoPtr, bootInfo)
+
+  earlyPutString("[PARSE] parseBootInfo returned\n")
+  if parseResult.isErr:
+    earlyPutString("[PARSE] ERROR: ")
+    let errStr = bootErrorToString(parseResult.error)
+    earlyPutString(cstring(errStr))
+    earlyPutString("\n")
+
+    # Fall back to minimal defaults so we can still boot.
+    for i in 0..<32:
+      bootInfo.bootProtocol[i] = '\0'
+    let proto = "Fallback"
+    for i in 0..<proto.len:
+      bootInfo.bootProtocol[i] = proto[i]
+    bootInfo.cpuCount = 1
+    bootInfo.memoryMap.count = 2
+    bootInfo.memoryMap.regions[0] = MemoryRegion(
+      base: PhysAddr(0), length: 640 * KiB, regionType: memAvailable
+    )
+    bootInfo.memoryMap.regions[1] = MemoryRegion(
+      base: PhysAddr(1 * MiB), length: 127 * MiB, regionType: memAvailable
+    )
+  else:
+    earlyPutString("[PARSE] SUCCESS\n")
+
+  # ═══════════════════════════════════════════════════════════════════
+  # PHASE 4: PROCEED TO FULL INIT
+  # ═══════════════════════════════════════════════════════════════════
+  earlyPutString("\n[BOOT] Calling runKernel...\n")
+  runKernel(addr bootInfo)
+
+# ── Standalone Test Entry Point ──────────────────────────────────
+# NOT compiled during kernel build (no -d:kernelTestMode).
+# Run via: nim c -d:kernelTestMode -r kernel/init/main.nim
+when defined(kernelTestMode):
+  # Create a minimal boot info for testing without bootloader
   var fakeBootInfo: BootInfo
   fakeBootInfo.cpuCount = 1
-
-  # Add some fake memory regions
   fakeBootInfo.memoryMap.regions[0] = MemoryRegion(
-    base: PhysAddr(0),
-    length: 640 * KiB,
-    regionType: memAvailable
+    base: PhysAddr(0), length: 640 * KiB, regionType: memAvailable
   )
   fakeBootInfo.memoryMap.regions[1] = MemoryRegion(
-    base: PhysAddr(1 * MiB),
-    length: 127 * MiB,
-    regionType: memAvailable
+    base: PhysAddr(1 * MiB), length: 127 * MiB, regionType: memAvailable
   )
   fakeBootInfo.memoryMap.count = 2
-
-  # Set boot protocol name
   let proto = "Test"
   for i in 0..<proto.len:
     fakeBootInfo.bootProtocol[i] = proto[i]
-
-  kernelMain(addr fakeBootInfo)
+  runKernel(addr fakeBootInfo)

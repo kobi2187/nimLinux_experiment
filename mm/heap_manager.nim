@@ -8,6 +8,7 @@ import ../core/types
 import ./physical_manager
 import ./virtual_manager
 import ../sync/spinlock
+import ../core/serial
 
 type
   # ═══════════════════════════════════════════════════════════════════════════
@@ -104,15 +105,18 @@ proc grow(self: HeapManager, minSize: uint64): Result[void, HeapError] =
   ## Grow the heap by at least minSize bytes
   let growBy = max(HeapGrowSize, alignUp(minSize, FrameSize))
   let pages = growBy div FrameSize
+  kprintln("    [HEAP] grow: growBy=" & $growBy & " pages=" & $pages)
 
   # Check if we'd exceed max
   if self.heapEnd + growBy > self.heapMax:
+    kprintln("    [HEAP] grow: would exceed max")
     return err(heOutOfMemory)
 
   # Allocate and map pages
   for i in 0..<int(pages):
     let frame = self.physMgr.allocFrame()
     if frame.isErr:
+      kprintln("    [HEAP] grow: allocFrame failed at i=" & $i)
       return err(heOutOfMemory)
 
     let mapResult = self.virtMgr.kernelMap(
@@ -122,6 +126,7 @@ proc grow(self: HeapManager, minSize: uint64): Result[void, HeapError] =
       {pfPresent, pfWritable}
     )
     if mapResult.isErr:
+      kprintln("    [HEAP] grow: kernelMap failed at i=" & $i)
       discard self.physMgr.freeFrame(frame.value)
       return err(heOutOfMemory)
 
@@ -201,9 +206,12 @@ proc alloc*(self: HeapManager, size: uint64): Result[pointer, HeapError] =
   # Calculate actual size needed (header + data, aligned)
   let actualSize = alignUp(size + HeaderSize, MinBlockSize)
 
+  kprintln("    [HEAP] alloc: actualSize=" & $actualSize)
+
   # Try free list first
   let (prev, curr) = self.findFreeBlock(actualSize)
   if curr != nil:
+    kprintln("    [HEAP] alloc: found free block")
     self.removeFromFreeList(prev, curr)
 
     # Split block if significantly larger
@@ -226,26 +234,15 @@ proc alloc*(self: HeapManager, size: uint64): Result[pointer, HeapError] =
 
     return ok(cast[pointer](cast[uint64](allocBlock) + HeaderSize))
 
-  # Need to allocate from heap end
-  let heapCurrent = self.heapEnd
+  kprintln("    [HEAP] alloc: no free block, growing heap...")
+
   let needed = actualSize
-
-  if heapCurrent + needed > self.heapEnd:
-    let growResult = self.grow(needed)
-    if growResult.isErr:
-      return err(heOutOfMemory)
-
-  # Allocate from end of heap
-  # We need to track where we can allocate from
-  # For simplicity, we'll use the space between current allocations and heapEnd
-  let allocAddr = self.heapEnd - needed
-  if allocAddr < self.heapStart:
+  let growResult = self.grow(needed)
+  if growResult.isErr:
+    kprintln("    [HEAP] alloc: grow failed")
     return err(heOutOfMemory)
 
-  # Actually, let's use a simpler bump allocator approach for new allocations
-  # and only use free list for freed memory
-
-  # Check if we need to grow
+  # Determine next allocation address
   let currentTop = if self.freeList == nil:
     self.heapStart
   else:

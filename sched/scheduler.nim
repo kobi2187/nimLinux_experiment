@@ -333,7 +333,7 @@ proc scheduleYieldWithModel*(self: SchedulerManager) =
   if not self.useExecutionModel or self.model == nil:
     return
 
-  discard self.model.yield()
+  discard self.model.doYield()
   self.needResched = true
   self.scheduleWithModel()
 

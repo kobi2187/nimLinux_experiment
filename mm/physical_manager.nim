@@ -129,10 +129,10 @@ proc findFirstFreeInWord(word: uint64): int {.inline.} =
 
 proc getZoneForFrame(frame: uint64): Zone =
   ## Determine which zone a frame belongs to
-  let addr = frame * FrameSize
-  if addr < DmaLimit:
+  let address = frame * FrameSize
+  if address < DmaLimit:
     zoneDma
-  elif addr < Dma32Limit:
+  elif address < Dma32Limit:
     zoneDma32
   else:
     zoneNormal
@@ -142,8 +142,9 @@ proc initFromBootInfo*(self: PhysicalMemManager, bootInfo: ptr BootInfo,
   ## Initialize physical memory manager from boot info
   ## bitmapAddr must point to pre-allocated bitmap memory
 
-  # Calculate total frames from highest address
-  let highestAddr = getHighestAddress(bootInfo[])
+  # Calculate total frames from highest USABLE address only
+  # (excluding reserved MMIO regions at very high addresses like PCI @ 1TB)
+  let highestAddr = getHighestUsableAddress(bootInfo[])
   self.totalFrames = (uint64(highestAddr) + FrameSize - 1) div FrameSize
 
   # Setup bitmap
@@ -170,7 +171,12 @@ proc initFromBootInfo*(self: PhysicalMemManager, bootInfo: ptr BootInfo,
     self.zones[zone].totalFrames = self.zones[zone].endFrame - self.zones[zone].startFrame
     self.zones[zone].freeFrames = 0
 
-  # Free available regions from memory map
+  # Determine the end of kernel image — we must NOT free frames that
+  # overlap with kernel code/data/BSS (including the ARC heap).
+  let kernelEndAddr = alignUp(uint64(bootInfo.kernelPhysEnd), FrameSize)
+  let kernelEndFrame = kernelEndAddr div FrameSize
+
+  # Free available regions from memory map (excluding kernel image)
   for i in 0..<bootInfo.memoryMap.count:
     let region = bootInfo.memoryMap.regions[i]
     if region.regionType == memAvailable:
@@ -178,11 +184,22 @@ proc initFromBootInfo*(self: PhysicalMemManager, bootInfo: ptr BootInfo,
       let endFrame = (uint64(region.base) + region.length) div FrameSize
 
       for frame in startFrame..<endFrame:
-        if frame < self.totalFrames:
+        if frame < self.totalFrames and frame >= kernelEndFrame:
           self.markFrameFree(frame)
           dec self.usedFrames
           let zone = getZoneForFrame(frame)
           inc self.zones[zone].freeFrames
+
+  # Reserve bitmap frames — the bitmap itself is placed right after the
+  # kernel image, and we must not let allocFrame() give them out.
+  let bitmapStartFrame = cast[uint64](bitmapAddr) div FrameSize
+  let bitmapBytes = self.bitmapSize * 8  # bitmapSize is in uint64 words
+  let bitmapEndAddr = cast[uint64](bitmapAddr) + bitmapBytes
+  let bitmapEndFrame = alignUp(bitmapEndAddr, FrameSize) div FrameSize
+  for frame in bitmapStartFrame..<bitmapEndFrame:
+    if frame < self.totalFrames and not self.isFrameUsed(frame):
+      self.markFrameUsed(frame)
+      inc self.usedFrames
 
   # Initialize lock
   self.lock.init()
@@ -213,9 +230,17 @@ proc allocFrameInRange(self: PhysicalMemManager,
 
   err(feOutOfFrames)
 
+# Zone fallback order: when a zone runs out of frames, try these alternatives.
+const FallbackOrder: array[Zone, array[2, Zone]] = [
+  zoneDma:    [zoneDma32, zoneNormal],
+  zoneDma32:  [zoneNormal, zoneDma],
+  zoneNormal: [zoneDma32, zoneDma]
+]
+
 proc allocFrame*(self: PhysicalMemManager,
                  zone: Zone = zoneNormal): Result[PhysAddr, FrameError] =
-  ## Allocate a single physical frame from specified zone
+  ## Allocate a single physical frame from specified zone.
+  ## Falls back to wider zones if the requested zone is exhausted or empty.
   self.lock.acquire()
   defer: self.lock.release()
 
@@ -225,17 +250,12 @@ proc allocFrame*(self: PhysicalMemManager,
   if result.isOk:
     return
 
-  # Fall back to higher zones
-  if zone == zoneDma:
-    result = self.allocFrameInRange(self.zones[zoneDma32].startFrame,
-                                     self.zones[zoneDma32].endFrame)
+  # Fall back through the pre-computed lookup table
+  for fallback in FallbackOrder[zone]:
+    result = self.allocFrameInRange(self.zones[fallback].startFrame,
+                                     self.zones[fallback].endFrame)
     if result.isOk:
       return
-    result = self.allocFrameInRange(self.zones[zoneNormal].startFrame,
-                                     self.zones[zoneNormal].endFrame)
-  elif zone == zoneDma32:
-    result = self.allocFrameInRange(self.zones[zoneNormal].startFrame,
-                                     self.zones[zoneNormal].endFrame)
 
 proc freeFrame*(self: PhysicalMemManager, frame: PhysAddr): Result[void, FrameError] =
   ## Free a physical frame
@@ -342,6 +362,32 @@ proc zoneFragmentation*(self: PhysicalMemManager, zone: Zone): float =
   let fragmentation = 1.0 - (float(avgBlockSize) / float(zoneInfo.totalFrames))
   max(0.0, min(1.0, fragmentation))
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Physical Memory Helpers (identity-mapped access)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# These helpers let us read/write physical memory directly via the boot
+# stub's identity mapping (physical 0-64 MB → virtual 0-64 MB).
+#
+# WARNING: Once we implement proper higher-half physical memory mapping,
+# these must be updated to translate through the physmap region.
+
+proc physPtr*[T](phys: PhysAddr): ptr T {.inline.} =
+  ## Return a typed pointer to a physical address via identity mapping.
+  ##
+  ## Current limitation: phys must be within 0-64 MB (boot stub identity
+  ## map). Future versions will translate through a physmap VMO.
+  cast[ptr T](uint64(phys))
+
+proc zeroPhysPage*(phys: PhysAddr) {.inline.} =
+  ## Zero a 4 KB physical frame by writing through the identity mapping.
+  ##
+  ## This is required because allocFrame() does NOT zero returned frames.
+  let p = physPtr[ptr UncheckedArray[uint64]](phys)
+  let count = int(FrameSize) div sizeof(uint64)  # 512 entries
+  for i in 0..<int(count):
+    p[i] = 0
+
 proc isFrameInZone*(self: PhysicalMemManager, frame: PhysAddr, zone: Zone): bool {.inline.} =
   ## Check if frame is in specified zone
   let frameNum = uint64(frame) div FrameSize
@@ -361,20 +407,20 @@ proc validateFrame*(self: PhysicalMemManager, frame: PhysAddr): Result[void, Fra
 
 proc stats*(self: PhysicalMemManager): string =
   ## Get human-readable statistics
-  var result = ""
-  result &= "Physical Memory Manager Stats:\n"
-  result &= "  Total Frames: " & $self.totalFrames & " (" & $(self.totalMemory() div (1024*1024)) & " MB)\n"
-  result &= "  Used Frames: " & $self.usedFrames & " (" & $(self.usedMemory() div (1024*1024)) & " MB)\n"
-  result &= "  Free Frames: " & $self.freeFrames() & " (" & $(self.freeMemory() div (1024*1024)) & " MB)\n"
-  result &= "  Total Allocations: " & $self.allocCount & "\n"
-  result &= "  Total Frees: " & $self.freeCount & "\n"
+  var stats = ""
+  stats &= "Physical Memory Manager Stats:\n"
+  stats &= "  Total Frames: " & $self.totalFrames & " (" & $(self.totalMemory() div (1024*1024)) & " MB)\n"
+  stats &= "  Used Frames: " & $self.usedFrames & " (" & $(self.usedMemory() div (1024*1024)) & " MB)\n"
+  stats &= "  Free Frames: " & $self.freeFrames() & " (" & $(self.freeMemory() div (1024*1024)) & " MB)\n"
+  stats &= "  Total Allocations: " & $self.allocCount & "\n"
+  stats &= "  Total Frees: " & $self.freeCount & "\n"
 
   for zone in Zone:
     let zinfo = self.zones[zone]
     let frag = self.zoneFragmentation(zone)
-    result &= "  Zone " & $zone & ":\n"
-    result &= "    Total: " & $zinfo.totalFrames & " frames\n"
-    result &= "    Free: " & $zinfo.freeFrames & " frames\n"
-    result &= "    Fragmentation: " & $(frag * 100) & "%\n"
+    stats &= "  Zone " & $zone & ":\n"
+    stats &= "    Total: " & $zinfo.totalFrames & " frames\n"
+    stats &= "    Free: " & $zinfo.freeFrames & " frames\n"
+    stats &= "    Fragmentation: " & $(frag * 100) & "%\n"
 
-  result
+  stats

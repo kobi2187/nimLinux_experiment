@@ -111,14 +111,11 @@ proc restoreContextImpl(model: ExecutionModel, unit: ExecutionUnit, ctx: ptr Exe
   ctx[] = unit.context
   ok()
 
-proc switchToImpl(model: ExecutionModel, from: ExecutionUnit, to: ExecutionUnit): Result[void, ExecutionUnitError] =
+proc switchToImpl(model: ExecutionModel, fromUnit: ExecutionUnit, to: ExecutionUnit): Result[void, ExecutionUnitError] =
   ## Switch from one thread to another
   let threadModel = cast[ThreadModel](model.vtable)
   inc threadModel.contextSwitches
-
-  # In real implementation, would do actual x86_64 context switch here
-  # For now, just update state
-  from.state = esSuspended
+  fromUnit.state = esSuspended
   to.state = esRunning
 
   ok()
@@ -176,7 +173,7 @@ proc createThreadModelImpl*(): ExecutionModel =
     saveContext: saveContextImpl,
     restoreContext: restoreContextImpl,
     switchTo: switchToImpl,
-    yield: yieldImpl,
+    doYield: yieldImpl,
     suspend: suspendImpl,
     resume: resumeImpl,
     getStats: getStatsImpl

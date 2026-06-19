@@ -76,13 +76,13 @@ const
 # Helper Functions
 # ═══════════════════════════════════════════════════════════════════════════
 
-proc alignUp*(addr: uint64, alignment: uint64): uint64 {.inline.} =
+proc alignUp*(adr: uint64, alignment: uint64): uint64 {.inline.} =
   ## Align address up to alignment boundary
-  ((addr + alignment - 1) div alignment) * alignment
+  ((adr + alignment - 1) div alignment) * alignment
 
-proc alignDown*(addr: uint64, alignment: uint64): uint64 {.inline.} =
+proc alignDown*(adr: uint64, alignment: uint64): uint64 {.inline.} =
   ## Align address down to alignment boundary
-  (addr div alignment) * alignment
+  (adr div alignment) * alignment
 
 proc getUserPointer*(header: ptr BlockHeader): pointer {.inline.} =
   ## Get user pointer from block header
@@ -300,7 +300,7 @@ proc reallocate*(self: HeapAllocator, ptr: pointer, newSize: uint64): Result[poi
 
   if newSize == 0:
     # Realloc to 0 = free
-    discard ?self.deallocate(ptr)
+    ?self.deallocate(ptr)
     return err(aeInvalidSize)
 
   if ptr == nil:

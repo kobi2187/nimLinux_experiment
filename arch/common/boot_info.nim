@@ -127,12 +127,23 @@ proc getTotalMemory*(info: BootInfo): uint64 =
       result += info.memoryMap.regions[i].length
 
 proc getHighestAddress*(info: BootInfo): PhysAddr =
-  ## Get highest physical address
+  ## Get highest physical address across ALL regions (including reserved).
   result = PhysAddr(0)
   for i in 0..<info.memoryMap.count:
     let endAddr = info.memoryMap.regions[i].base + info.memoryMap.regions[i].length
     if endAddr > result:
       result = endAddr
+
+proc getHighestUsableAddress*(info: BootInfo): PhysAddr =
+  ## Get highest physical address of USABLE memory only.
+  ## This excludes reserved/MMIO regions that may be at very high
+  ## addresses (e.g., PCI MMIO at ~1 TB on x86_64).
+  result = PhysAddr(0)
+  for i in 0..<info.memoryMap.count:
+    if info.memoryMap.regions[i].regionType == memAvailable:
+      let endAddr = info.memoryMap.regions[i].base + info.memoryMap.regions[i].length
+      if endAddr > result:
+        result = endAddr
 
 proc getCmdline*(info: BootInfo): string =
   ## Get command line as string
@@ -140,11 +151,11 @@ proc getCmdline*(info: BootInfo): string =
   for i in 0..<info.cmdlineLen:
     result[i] = info.cmdline[i]
 
-proc findRegion*(info: BootInfo, addr: PhysAddr): Option[MemoryRegion] =
+proc findRegion*(info: BootInfo, address: PhysAddr): Option[MemoryRegion] =
   ## Find memory region containing address
   for i in 0..<info.memoryMap.count:
     let region = info.memoryMap.regions[i]
-    if addr >= region.base and addr < region.base + region.length:
+    if address >= region.base and address < region.base + region.length:
       return some(region)
   return none(MemoryRegion)
 

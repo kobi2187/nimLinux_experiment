@@ -98,10 +98,10 @@ type
     # Context switching
     saveContext*: proc(model: ExecutionModel, unit: ExecutionUnit, ctx: ptr ExecutionContext): Result[void, ExecutionUnitError] {.nimcall.}
     restoreContext*: proc(model: ExecutionModel, unit: ExecutionUnit, ctx: ptr ExecutionContext): Result[void, ExecutionUnitError] {.nimcall.}
-    switchTo*: proc(model: ExecutionModel, from: ExecutionUnit, to: ExecutionUnit): Result[void, ExecutionUnitError] {.nimcall.}
+    switchTo*: proc(model: ExecutionModel, fromUnit: ExecutionUnit, to: ExecutionUnit): Result[void, ExecutionUnitError] {.nimcall.}
 
     # Model-specific operations
-    yield*: proc(model: ExecutionModel): Result[void, ExecutionUnitError] {.nimcall.}
+    doYield*: proc(model: ExecutionModel): Result[void, ExecutionUnitError] {.nimcall.}
     suspend*: proc(model: ExecutionModel, unit: ExecutionUnit): Result[void, ExecutionUnitError] {.nimcall.}
     resume*: proc(model: ExecutionModel, unit: ExecutionUnit): Result[void, ExecutionUnitError] {.nimcall.}
 
@@ -148,13 +148,13 @@ proc restoreContext*(model: ExecutionModel, unit: ExecutionUnit, ctx: ptr Execut
   ## Restore execution context
   model.vtable.restoreContext(model, unit, ctx)
 
-proc switchTo*(model: ExecutionModel, from: ExecutionUnit, to: ExecutionUnit): Result[void, ExecutionUnitError] =
+proc switchTo*(model: ExecutionModel, fromUnit: ExecutionUnit, to: ExecutionUnit): Result[void, ExecutionUnitError] =
   ## Switch from one unit to another
-  model.vtable.switchTo(model, from, to)
+  model.vtable.switchTo(model, fromUnit, to)
 
-proc yield*(model: ExecutionModel): Result[void, ExecutionUnitError] =
+proc doYield*(model: ExecutionModel): Result[void, ExecutionUnitError] =
   ## Yield current execution (cooperative)
-  model.vtable.yield(model)
+  model.vtable.doYield(model)
 
 proc suspend*(model: ExecutionModel, unit: ExecutionUnit): Result[void, ExecutionUnitError] =
   ## Suspend execution unit
@@ -195,7 +195,7 @@ type
 # ═══════════════════════════════════════════════════════════════════════════
 
 type
-  ContextSwitcher* = proc(from: ExecutionContext, to: ExecutionContext): void {.nimcall.}
+  ContextSwitcher* = proc(fromCtx: ExecutionContext, toCtx: ExecutionContext): void {.nimcall.}
     ## Low-level context switch implementation
 
   UnitAllocator* = proc(priority: ExecutionPriority): Result[ExecutionUnit, ExecutionUnitError] {.nimcall.}

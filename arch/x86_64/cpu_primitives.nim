@@ -83,7 +83,7 @@ proc readMsr*(msr: uint32): uint64 {.inline.} =
 
 proc writeMsr*(msr: uint32, value: uint64) {.inline.} =
   ## Write MSR
-  let lo = uint32(value and 0xFFFFFFFF)
+  let lo = uint32(value and 0xFFFFFFFF'u64)
   let hi = uint32(value shr 32)
   {.emit: ["asm volatile(\"wrmsr\" :: \"a\" (", lo, "), \"d\" (", hi, "), \"c\" (", msr, ") : \"memory\");"].}
 

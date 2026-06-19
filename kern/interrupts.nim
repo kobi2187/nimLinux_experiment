@@ -304,17 +304,17 @@ proc defaultDoubleFaultHandler*(ctx: ptr ExceptionContext) =
 
 proc installDefaultHandlers*(manager: InterruptManager): Result[void, ExceptionError] =
   ## Install default handlers for common exceptions
-  discard ?manager.registerExceptionHandler(EX_DIVIDE_ERROR, defaultDivideErrorHandler)
-  discard ?manager.registerExceptionHandler(EX_PAGE_FAULT, defaultPageFaultHandler)
-  discard ?manager.registerExceptionHandler(EX_GENERAL_PROTECTION, defaultGeneralProtectionHandler)
-  discard ?manager.registerExceptionHandler(EX_DOUBLE_FAULT, defaultDoubleFaultHandler)
+  ?manager.registerExceptionHandler(EX_DIVIDE_ERROR, defaultDivideErrorHandler)
+  ?manager.registerExceptionHandler(EX_PAGE_FAULT, defaultPageFaultHandler)
+  ?manager.registerExceptionHandler(EX_GENERAL_PROTECTION, defaultGeneralProtectionHandler)
+  ?manager.registerExceptionHandler(EX_DOUBLE_FAULT, defaultDoubleFaultHandler)
   ok()
 
 proc initInterruptSystem*(kernelCodeSelector: uint16): Result[void, ExceptionError] =
   ## Initialize the global interrupt system
   globalInterruptManager = newInterruptManager()
-  discard ?globalInterruptManager.initializeIdt(kernelCodeSelector)
-  discard ?globalInterruptManager.installDefaultHandlers()
+  ?globalInterruptManager.initializeIdt(kernelCodeSelector)
+  ?globalInterruptManager.installDefaultHandlers()
   ok()
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -16,10 +16,22 @@ requires "https://github.com/kobi2187/arsenal"
 # Tasks
 
 task kernel, "Build the kernel":
-  exec "nim c --os:any --gc:none -d:release -d:danger --noMain kernel/init/main.nim"
+  exec "nim c --os:any --mm:arc -d:StandaloneHeapSize=16777216 -d:release -d:danger --noMain --outdir:build kernel/init/main.nim"
 
 task debug, "Build kernel with debug info":
-  exec "nim c --os:any --gc:none -d:debug --debuginfo --linedir:on kernel/init/main.nim"
+  exec "nim c --os:any --mm:arc -d:StandaloneHeapSize=16777216 -d:debug --debuginfo --linedir:on kernel/init/main.nim"
+
+task iso, "Create a bootable ISO image":
+  exec "nimble kernel"
+  exec "mkdir -p iso/boot/grub"
+  exec "cp build/main iso/boot/kernel.elf"
+  exec "echo 'menuentry \"NimixOS\" { multiboot2 /boot/kernel.elf }' > iso/boot/grub/grub.cfg"
+  exec "grub-mkrescue -o nimixos.iso iso/"
+  exec "rm -rf iso"
+
+task run, "Boot kernel in QEMU with serial output":
+  exec "nimble iso"
+  exec "qemu-system-x86_64 -cdrom nimixos.iso -serial stdio -no-reboot -m 256M"
 
 task test, "Run unit tests":
   exec "nim c -r tests/all_tests.nim"
