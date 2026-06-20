@@ -18,8 +18,11 @@ import ../../sched/scheduler
 import ../../boot/bootloader
 import ../../shell/shell
 import ../../kernel/models/monolithic
+import ../../kernel/driver_registry
 import ../../drivers/pic
 import ../../drivers/pit
+import ../../drivers/ps2_keyboard
+import ../../drivers/vga_text
 import ../../kernel/event_server
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -312,6 +315,16 @@ proc runKernel(bootInfo: ptr BootInfo) =
   pitRegisterHandler()
   picUnmask(0)
   klog(llInfo, "PIT timer: 100Hz, IRQ0 handler registered")
+
+  # Register all drivers
+  registerDriver(addr ps2KeyboardDriver)
+  registerDriver(addr vgaTextDriver)
+
+  # Probe: calls init() on each, returns counts
+  let (drvOk, drvFail) = probeAllDrivers()
+  klog(llInfo, "Drivers probed")
+  klogInt(llInfo, "  ok:   ", int64(drvOk))
+  klogInt(llInfo, "  fail: ", int64(drvFail))
 
   # Hand off to interactive shell — never returns.
   runShell(k.physMgr)
