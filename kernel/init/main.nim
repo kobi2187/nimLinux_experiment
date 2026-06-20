@@ -16,6 +16,8 @@ import ../../mm/heap_manager
 import ../../sched/task_manager
 import ../../sched/scheduler
 import ../../boot/bootloader
+import ../../shell/shell
+import ../../kernel/models/monolithic
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Linker Script Symbols
@@ -296,10 +298,11 @@ proc runKernel(bootInfo: ptr BootInfo) =
   # In a real kernel the idle task or timer interrupts drive this loop;
   # here we drive it from the boot CPU until context switching lands
   # on the idle task (which calls hlt in its own loop).
-  while true:
-    k.schedMgr.schedule()
-    when defined(amd64) or defined(x86_64):
-      hlt()
+  initMonolithicModel()
+  klog(llInfo, "Kernel model ready")
+
+  # Hand off to interactive shell — never returns.
+  runShell(k.physMgr)
 
 # earlyPutChar / earlyPutString / earlyPutHex are now in core/debug.nim
 
