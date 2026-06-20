@@ -18,6 +18,7 @@ import ../../sched/scheduler
 import ../../boot/bootloader
 import ../../shell/shell
 import ../../kernel/models/monolithic
+import ../../drivers/pic
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Linker Script Symbols
@@ -298,6 +299,8 @@ proc runKernel(bootInfo: ptr BootInfo) =
   # In a real kernel the idle task or timer interrupts drive this loop;
   # here we drive it from the boot CPU until context switching lands
   # on the idle task (which calls hlt in its own loop).
+  picInit()
+  klog(llInfo, "PIC 8259A remapped to vectors 0x20-0x2F")
   initMonolithicModel()
   klog(llInfo, "Kernel model ready")
 
