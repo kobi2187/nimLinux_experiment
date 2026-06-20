@@ -18,6 +18,9 @@ import ../../sched/scheduler
 import ../../boot/bootloader
 import ../../shell/shell
 import ../../kernel/models/monolithic
+import ../../kernel/models/microkernel
+import ../../kernel/models/sasos
+import ../config
 import ../../kernel/driver_registry
 import ../../drivers/pic
 import ../../drivers/pit
@@ -292,6 +295,8 @@ proc initKernel*(bootInfo: ptr BootInfo): Kernel =
 # Kernel Entry Points
 # ═══════════════════════════════════════════════════════════════════════════
 
+
+
 proc runKernel(bootInfo: ptr BootInfo) =
   ## Initialize and run the kernel (internal, used by both boot paths)
   let k = initKernel(bootInfo)
@@ -309,7 +314,22 @@ proc runKernel(bootInfo: ptr BootInfo) =
   klog(llInfo, "Event server ready")
   picInit()
   klog(llInfo, "PIC 8259A remapped to vectors 0x20-0x2F")
-  initMonolithicModel()
+  
+  klog(llInfo, "Selected kernel model: " & KernelModel)
+  
+  when IsMonolithic:
+    initMonolithicModel()
+    klog(llInfo, "Monolithic kernel model initialized")
+  elif IsSasos:
+    initSasosModel()
+    klog(llInfo, "SASOS kernel model initialized")
+  elif IsMicrokernel:
+    initMicrokernelModel()
+    klog(llInfo, "Microkernel model initialized")
+  else:
+    initMonolithicModel()
+    klog(llInfo, "Unknown kernel model, defaulting to monolithic")
+  
   klog(llInfo, "Kernel model ready")
 
   pitInit(100)

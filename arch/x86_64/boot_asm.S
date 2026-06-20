@@ -206,6 +206,12 @@ gdt:
     .quad 0x0000000000000000       /* 0x00: Null descriptor          */
     .quad 0x0020980000000000       /* 0x08: 64-bit code, ring 0      */
     .quad 0x0000920000000000       /* 0x10: 64-bit data, ring 0      */
+    /* Entries below are placeholders; syscallGateInit() reloads GDTR
+     * to point at the Nim-owned gdtTable which has correct values.  */
+    .quad 0x0020F80000000000       /* 0x18: 64-bit code, ring 3      */
+    .quad 0x0000F20000000000       /* 0x20: 64-bit data, ring 3      */
+    .quad 0x0000000000000000       /* 0x28: TSS descriptor low       */
+    .quad 0x0000000000000000       /* 0x30: TSS descriptor high      */
 gdt_end:
 
 .align 4

@@ -23,36 +23,74 @@ NIM_FLAGS = c --os:any --mm:arc -d:StandaloneHeapSize=16777216 \
             -d:release -d:danger -d:kernelFull --noMain --outdir:build \
             --nimblePath:nimcache
 
+# Kernel models to build
+KERNEL_MODELS = microkernel sasos monolithic
+
 # Source
 KERNEL_SRC = kernel/init/main.nim
 KERNEL_OUT = build/main
 ISO_OUT    = nimixos.iso
+ISO_ALL_OUT = nimixos-all-kernels.iso
 
-.PHONY: all build iso qemu qemu-gui run clean test
+.PHONY: all build iso iso-all qemu qemu-gui run clean test
 
 # Default target: full cycle
 all: build iso qemu
 
 # ── Compile kernel ────────────────────────────────────────────────
-build: $(KERNEL_OUT)
+build: $(addprefix build/kernel-,$(KERNEL_MODELS))
 
-$(KERNEL_OUT): $(KERNEL_SRC) $(shell find . -name '*.nim' -not -path './nimcache/*' -not -path './tests/*')
-	$(NIM) $(NIM_FLAGS) $(KERNEL_SRC)
+# Build targets for each kernel model
+build/kernel-%:
+	$(NIM) $(NIM_FLAGS) -d:kernelModel=$* $(KERNEL_SRC)
+	mv build/main $@
 
 # ── Create bootable ISO ───────────────────────────────────────────
 iso: $(ISO_OUT)
 
-$(ISO_OUT): $(KERNEL_OUT)
+$(ISO_OUT): build/kernel-monolithic
 	rm -rf iso
 	mkdir -p iso/boot/grub
-	cp $(KERNEL_OUT) iso/boot/kernel.elf
+	cp build/kernel-monolithic iso/boot/kernel.elf
 	printf 'set timeout=2\nset default=0\nmenuentry "NimixOS" { multiboot2 /boot/kernel.elf }\n' > iso/boot/grub/grub.cfg
 	grub-mkrescue -o $(ISO_OUT) iso/
+	rm -rf iso
+
+# ── Create bootable ISO with all kernel variants ───────────────────────────────────────────
+iso-all: $(ISO_ALL_OUT)
+
+$(ISO_ALL_OUT): $(addprefix build/kernel-,$(KERNEL_MODELS))
+	rm -rf iso
+	mkdir -p iso/boot/kernel-variants
+	cp build/kernel-monolithic iso/boot/kernel-variants/kernel-monolithic.elf
+	cp build/kernel-sasos iso/boot/kernel-variants/kernel-sasos.elf
+	cp build/kernel-microkernel iso/boot/kernel-variants/kernel-microkernel.elf
+	mkdir -p iso/boot/grub
+	echo 'set timeout=2' > iso/boot/grub/grub.cfg
+	echo 'set default=0' >> iso/boot/grub/grub.cfg
+	echo '' >> iso/boot/grub/grub.cfg
+	echo 'menuentry "NimixOS (Monolithic - default)" {' >> iso/boot/grub/grub.cfg
+	echo '    multiboot2 /boot/kernel-variants/kernel-monolithic.elf' >> iso/boot/grub/grub.cfg
+	echo '}' >> iso/boot/grub/grub.cfg
+	echo '' >> iso/boot/grub/grub.cfg
+	echo 'menuentry "NimixOS (SASOS - software isolation)" {' >> iso/boot/grub/grub.cfg
+	echo '    multiboot2 /boot/kernel-variants/kernel-sasos.elf' >> iso/boot/grub/grub.cfg
+	echo '}' >> iso/boot/grub/grub.cfg
+	echo '' >> iso/boot/grub/grub.cfg
+	echo 'menuentry "NimixOS (Microkernel - hardware isolation)" {' >> iso/boot/grub/grub.cfg
+	echo '    multiboot2 /boot/kernel-variants/kernel-microkernel.elf' >> iso/boot/grub/grub.cfg
+	echo '}' >> iso/boot/grub/grub.cfg
+	grub-mkrescue -o $(ISO_ALL_OUT) iso/
 	rm -rf iso
 
 # ── Run in QEMU (headless, serial only) ───────────────────────────
 qemu: $(ISO_OUT)
 	qemu-system-x86_64 -cdrom $(ISO_OUT) -bios $(OVMF) \
+		-no-reboot -m $(QEMU_MEM)M -serial stdio -display none
+
+# ── Run in QEMU with all kernel variants ───────────────────────────────────────────
+qemu-all: $(ISO_ALL_OUT)
+	qemu-system-x86_64 -cdrom $(ISO_ALL_OUT) -bios $(OVMF) \
 		-no-reboot -m $(QEMU_MEM)M -serial stdio -display none
 
 # ── Run in QEMU (with VGA) ────────────────────────────────────────
@@ -78,8 +116,9 @@ test:
 	$(NIM) c -r $(TEST_FLAGS) tests/test_event_server.nim
 	$(NIM) c -r $(TEST_FLAGS) tests/test_driver_registry.nim
 	$(NIM) c -r $(TEST_FLAGS) tests/test_tss.nim
+	$(NIM) c -r $(TEST_FLAGS) tests/test_server_chan.nim
 	@echo "=== All tests passed ==="
 
 # ── Clean ─────────────────────────────────────────────────────────
 clean:
-	rm -rf $(KERNEL_OUT) $(ISO_OUT) nimcache/ build/ iso/
+	rm -rf build/main build/kernel-* $(ISO_OUT) $(ISO_ALL_OUT) nimcache/ build/ iso/
