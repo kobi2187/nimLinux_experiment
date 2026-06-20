@@ -19,6 +19,7 @@ import ../../boot/bootloader
 import ../../shell/shell
 import ../../kernel/models/monolithic
 import ../../drivers/pic
+import ../../drivers/pit
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Linker Script Symbols
@@ -303,6 +304,10 @@ proc runKernel(bootInfo: ptr BootInfo) =
   klog(llInfo, "PIC 8259A remapped to vectors 0x20-0x2F")
   initMonolithicModel()
   klog(llInfo, "Kernel model ready")
+
+  pitInit(100)
+  # TODO: uncomment after Task A1 merges — picUnmask(0)
+  klog(llInfo, "PIT timer: 100Hz")
 
   # Hand off to interactive shell — never returns.
   runShell(k.physMgr)

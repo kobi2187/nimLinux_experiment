@@ -74,6 +74,7 @@ test:
 	$(NIM) c -r $(TEST_FLAGS) tests/test_traits.nim
 	$(NIM) c -r $(TEST_FLAGS) tests/test_ps2_keyboard.nim
 	$(NIM) c -r $(TEST_FLAGS) tests/test_pic.nim
+	$(NIM) c -r $(TEST_FLAGS) tests/test_pit.nim
 	@echo "=== All tests passed ==="
 
 # ── Clean ─────────────────────────────────────────────────────────
