@@ -7,6 +7,7 @@
 import ../../core/types
 import ../../core/serial
 import ../../core/debug
+import ../../core/log
 import ../../arch/common/boot_info
 import ../../mm/physical_manager
 import ../../mm/virtual_manager
@@ -87,7 +88,7 @@ proc panic*(msg: string) {.noReturn.} =
 
 proc initMemory(k: Kernel): bool =
   ## Initialize memory management subsystem
-  kprintln("[INIT] Initializing memory management...")
+  klog(llInfo, "[INIT] Initializing memory management...")
 
   # ── Debug: dump memory map ──────────────────────────────────────
   kprintln("  Memory map dump:")
@@ -193,7 +194,7 @@ proc idleLoop() {.noReturn.} =
 
 proc initScheduler(k: Kernel): bool =
   ## Initialize scheduler subsystem
-  kprintln("[INIT] Initializing scheduler...")
+  klog(llInfo, "[INIT] Initializing scheduler...")
 
   # Get CPU count from boot info
   let cpuCount = max(1, k.bootInfo.cpuCount)
