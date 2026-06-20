@@ -13,7 +13,9 @@ import ../core/log
 import ../mm/physical_manager   # for PhysicalMemManager type
 import ../kernel/config          # for KernelModel, IsSasos, IsMicrokernel
 import ../runtime/wasm_runner
+import ../runtime/wasm_host   # CapIpc, CapEvents
 import ../apps/ping/ping_embedded
+import ../apps/pingpong/pingpong_embedded
 
 const
   ShellPrompt = "nimixos> "
@@ -28,7 +30,8 @@ type
     scMeminfo
     scClear
     scModel
-    scLoad    ## load <app> — run a built-in WASM app
+    scLoadPing      ## load ping — simple hello WASM
+    scLoadPingpong  ## load pingpong — actor mailbox demo
 
 # ── String helpers ─────────────────────────────────────────────────────────
 
@@ -64,7 +67,8 @@ proc parseCommand*(buf: openArray[char], len: int): ShellCommand =
   if bufEq(buf, first, last, "meminfo"):   return scMeminfo
   if bufEq(buf, first, last, "clear"):     return scClear
   if bufEq(buf, first, last, "model"):     return scModel
-  if bufEq(buf, first, last, "load ping"): return scLoad
+  if bufEq(buf, first, last, "load ping"):      return scLoadPing
+  if bufEq(buf, first, last, "load pingpong"):  return scLoadPingpong
   scUnknown
 
 # ── Command implementations ────────────────────────────────────────────────
@@ -76,7 +80,8 @@ proc cmdHelp() =
   kprint("  meminfo    - physical memory usage\n")
   kprint("  clear      - scroll past old output\n")
   kprint("  model      - current kernel architecture model\n")
-  kprint("  load ping  - run the embedded ping WASM app\n")
+  kprint("  load ping      - run the simple ping WASM app\n")
+  kprint("  load pingpong  - run the actor mailbox demo (talks to ping_server)\n")
 
 proc cmdVersion() =
   kprint("NimixOS v0.1.0\n")
@@ -142,13 +147,18 @@ proc runShell*(physMgr: PhysicalMemManager) =
       of scMeminfo: cmdMeminfo(physMgr)
       of scClear:   cmdClear()
       of scModel:   cmdModel()
-      of scLoad:
+      of scLoadPing:
         kprint("[wasm] loading ping...\n")
         let r = wasmRun(cast[ptr byte](unsafeAddr pingWasm[0]), pingWasm.len)
         if r != wasmOk:
-          kprint("[wasm] error: ")
-          kprint($r)
-          kprint("\n")
+          kprint("[wasm] error running ping\n")
+      of scLoadPingpong:
+        kprint("[wasm] loading pingpong...\n")
+        let caps = [CapIpc, CapEvents]
+        let r = wasmRun(cast[ptr byte](unsafeAddr pingpongWasm[0]),
+                        pingpongWasm.len, caps)
+        if r != wasmOk:
+          kprint("[wasm] error running pingpong\n")
       of scEmpty:   discard
       of scUnknown: cmdUnknown(inputBuf, first, last)
       # Reset buffer

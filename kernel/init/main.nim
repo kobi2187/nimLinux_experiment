@@ -28,6 +28,8 @@ import ../../drivers/ps2_keyboard
 import ../../drivers/vga_text
 import ../../kernel/event_server
 import ../../arch/x86_64/syscall_gate
+import ../../servers/ping_server
+import ../../ipc/server_chan
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Linker Script Symbols
@@ -349,6 +351,10 @@ proc runKernel(bootInfo: ptr BootInfo) =
 
   syscallGateInit()
   klog(llInfo, "Syscall gate ready (ring 0<->3)")
+
+  # Start system servers
+  serverChanRegistryInit()
+  pingServerInit()
 
   # Hand off to interactive shell — never returns.
   runShell(k.physMgr)

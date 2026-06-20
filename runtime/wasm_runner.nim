@@ -8,11 +8,15 @@
 ##   proc(rt, ctx, sp: ptr uint64[], mem: pointer) -> pointer  (nil = ok)
 ##   Args are on the WASM stack (sp[0], sp[1], ...) as uint64.
 
-import ./wasm_build   # {.compile.} directives for wasm3 C sources
-import ./wasm_host    # CapSerial, CapIpc, etc.
+import ./wasm_build        # {.compile.} directives for wasm3 C sources
+import ./wasm_host         # CapSerial, CapIpc, etc.
 import ../core/log
 import ../core/serial
 import ../ipc/sip_chan
+import ../kernel/event_server
+import ../kernel/traits/event
+import ../drivers/pit      # pitTicks() for timeout
+import ../servers/ping_server  # pingServerTick() called in event_wait
 
 # ── wasm3 opaque types ────────────────────────────────────────────────────────
 
@@ -119,6 +123,52 @@ proc hostSipExit(rt: M3Runtime, ctx: pointer,
   klog(llInfo, "WASM sip_exit")
   nil
 
+proc hostEventSubscribe(rt: M3Runtime, ctx: pointer,
+                        sp: M3Stack, mem: pointer): pointer {.cdecl, exportc.} =
+  ## env.event_subscribe(topic_ptr: i32) -> i32 (token, 0 = error)
+  ## Stack layout for (i32)->i32: sp[0]=return slot, sp[1]=arg0
+  let topicPtr = uint32(sp[1])  # arg after return slot
+  var size: uint32
+  let wasmMem = m3_GetMemory(rt, addr size, 0)
+  if wasmMem == nil or topicPtr >= size:
+    sp[0] = 0
+    return nil
+  let topic = cast[cstring](cast[uint64](wasmMem) + uint64(topicPtr))
+  let token = eventSubscribe(topic)
+  sp[0] = uint64(uint32(token))  # write return value to sp[0]
+  nil
+
+proc hostEventWait(rt: M3Runtime, ctx: pointer,
+                   sp: M3Stack, mem: pointer): pointer {.cdecl, exportc.} =
+  ## env.event_wait(token: i32, buf_ptr: i32, max_len: i32) -> i32
+  ## Stack layout for (i32,i32,i32)->i32: sp[0]=return, sp[1]=token, sp[2]=buf, sp[3]=maxlen
+  let token   = EventToken(uint32(sp[1]))
+  let bufPtr  = uint32(sp[2])
+  let maxLen  = uint32(sp[3])
+
+  var size: uint32
+  let wasmMem = m3_GetMemory(rt, addr size, 0)
+  if wasmMem == nil or bufPtr + maxLen > size:
+    sp[0] = 0xFFFFFFFF'u64  # -1 as i32
+    return nil
+
+  let deadline = pitTicks() + 500  # 500 ticks @ 100Hz = 5 seconds
+  while pitTicks() < deadline:
+    pingServerTick()
+    let ev = eventPoll(token)
+    if ev.isSome:
+      let payload = ev.get().payload
+      let copyLen = if uint32(payload.len) < maxLen: uint32(payload.len) else: maxLen
+      let dst = cast[ptr UncheckedArray[byte]](
+        cast[uint64](wasmMem) + uint64(bufPtr))
+      for i in 0..<int(copyLen):
+        dst[i] = payload.data[i]
+      sp[0] = uint64(copyLen)  # return bytes written
+      return nil
+
+  sp[0] = 0xFFFFFFFF'u64  # timeout: return -1 as i32
+  nil
+
 # ── Result type ───────────────────────────────────────────────────────────────
 
 type
@@ -164,14 +214,15 @@ proc wasmRun*(wasmBytes: ptr byte, wasmLen: int,
     return wasmLinkError
 
   # Link host functions after LoadModule
-  discard m3_LinkRawFunction(module, "env", "serial_write", "v(ii)",
-                             hostSerialWrite)
-  discard m3_LinkRawFunction(module, "env", "sip_exit",     "v(i)",
-                             hostSipExit)
+  # Always available
+  discard m3_LinkRawFunction(module, "env", "serial_write",    "v(ii)",  hostSerialWrite)
+  discard m3_LinkRawFunction(module, "env", "sip_exit",        "v(i)",   hostSipExit)
+  discard m3_LinkRawFunction(module, "env", "event_subscribe", "i(i)",   hostEventSubscribe)
+  discard m3_LinkRawFunction(module, "env", "event_wait",      "i(iii)", hostEventWait)
+  # Capability-gated
   for c in caps:
     if c == CapIpc:
-      discard m3_LinkRawFunction(module, "env", "chan_send", "v(iii)",
-                                 hostChanSend)
+      discard m3_LinkRawFunction(module, "env", "chan_send", "v(iii)", hostChanSend)
       break
 
   var startFn: M3Function
