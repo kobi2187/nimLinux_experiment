@@ -2,6 +2,8 @@
 
 > **Status:** Design document — living reference, updated as decisions are made.
 > Last updated: 2026-06-20
+>
+> **Current state:** All three kernel models (monolithic, SASOS, microkernel) boot to an interactive serial shell. wasm3 and mpaland/printf vendored.
 
 ---
 

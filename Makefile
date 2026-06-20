@@ -3,10 +3,13 @@
 #
 # Usage:
 #   make          # build kernel, create ISO, boot in QEMU with UEFI+serial
-#   make build    # just compile the kernel
+#   make build    # just compile the kernel (all 3 models)
+#   make apps     # compile WASM apps from C source → update embedded arrays
 #   make iso      # create ISO from built kernel
+#   make iso-all  # create ISO with all 3 kernel models in GRUB menu
 #   make qemu     # boot ISO in QEMU (UEFI, serial, no display)
 #   make qemu-gui # boot with VGA display
+#   make test     # run host-side unit tests
 #   make clean    # remove build artifacts
 #
 # Config:
@@ -32,10 +35,31 @@ KERNEL_OUT = build/main
 ISO_OUT    = nimixos.iso
 ISO_ALL_OUT = nimixos-all-kernels.iso
 
-.PHONY: all build iso iso-all qemu qemu-gui run clean test
+.PHONY: all build apps iso iso-all qemu qemu-all qemu-gui run clean test
 
 # Default target: full cycle
 all: build iso qemu
+
+# ── Compile WASM apps from C source ──────────────────────────────
+# Rebuilds .wasm from .c and regenerates the embedded Nim byte array.
+CLANG_WASM = clang --target=wasm32 -nostdlib -Wl,--no-entry \
+             -Wl,--export=_start -Wl,--allow-undefined -O2
+
+apps: apps/ping/ping_embedded.nim
+
+apps/ping/ping.wasm: apps/ping/ping.c
+	$(CLANG_WASM) -o $@ $<
+
+apps/ping/ping_embedded.nim: apps/ping/ping.wasm
+	@echo "# SPDX-License-Identifier: GPL-2.0"                         > $@
+	@echo "## Embedded ping.wasm — generated from apps/ping/ping.c"   >> $@
+	@echo "## Rebuild with: make apps"                                 >> $@
+	@python3 -c "                                                        \
+	data = open('apps/ping/ping.wasm','rb').read();                      \
+	print('const pingWasm*: array['+str(len(data))+', byte] = [');      \
+	[print('  '+', '.join(f'0x{b:02x}' for b in data[i:i+16])+',')      \
+	 for i in range(0,len(data),16)];                                    \
+	print(']')"                                                        >> $@
 
 # ── Compile kernel ────────────────────────────────────────────────
 build: $(addprefix build/kernel-,$(KERNEL_MODELS))

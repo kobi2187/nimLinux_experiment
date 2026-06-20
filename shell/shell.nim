@@ -12,6 +12,8 @@ import ../core/serial
 import ../core/log
 import ../mm/physical_manager   # for PhysicalMemManager type
 import ../kernel/config          # for KernelModel, IsSasos, IsMicrokernel
+import ../runtime/wasm_runner
+import ../apps/ping/ping_embedded
 
 const
   ShellPrompt = "nimixos> "
@@ -26,6 +28,7 @@ type
     scMeminfo
     scClear
     scModel
+    scLoad    ## load <app> — run a built-in WASM app
 
 # ── String helpers ─────────────────────────────────────────────────────────
 
@@ -56,22 +59,24 @@ proc parseCommand*(buf: openArray[char], len: int): ShellCommand =
   if len == 0: return scEmpty
   let (first, last) = trimInput(buf, len)
   if first > last:  return scEmpty
-  if bufEq(buf, first, last, "help"):    return scHelp
-  if bufEq(buf, first, last, "version"): return scVersion
-  if bufEq(buf, first, last, "meminfo"): return scMeminfo
-  if bufEq(buf, first, last, "clear"):   return scClear
-  if bufEq(buf, first, last, "model"):   return scModel
+  if bufEq(buf, first, last, "help"):      return scHelp
+  if bufEq(buf, first, last, "version"):   return scVersion
+  if bufEq(buf, first, last, "meminfo"):   return scMeminfo
+  if bufEq(buf, first, last, "clear"):     return scClear
+  if bufEq(buf, first, last, "model"):     return scModel
+  if bufEq(buf, first, last, "load ping"): return scLoad
   scUnknown
 
 # ── Command implementations ────────────────────────────────────────────────
 
 proc cmdHelp() =
   kprint("Commands:\n")
-  kprint("  help     - show this message\n")
-  kprint("  version  - kernel version and model\n")
-  kprint("  meminfo  - physical memory usage\n")
-  kprint("  clear    - scroll past old output\n")
-  kprint("  model    - current kernel architecture model\n")
+  kprint("  help       - show this message\n")
+  kprint("  version    - kernel version and model\n")
+  kprint("  meminfo    - physical memory usage\n")
+  kprint("  clear      - scroll past old output\n")
+  kprint("  model      - current kernel architecture model\n")
+  kprint("  load ping  - run the embedded ping WASM app\n")
 
 proc cmdVersion() =
   kprint("NimixOS v0.1.0\n")
@@ -137,6 +142,13 @@ proc runShell*(physMgr: PhysicalMemManager) =
       of scMeminfo: cmdMeminfo(physMgr)
       of scClear:   cmdClear()
       of scModel:   cmdModel()
+      of scLoad:
+        kprint("[wasm] loading ping...\n")
+        let r = wasmRun(cast[ptr byte](unsafeAddr pingWasm[0]), pingWasm.len)
+        if r != wasmOk:
+          kprint("[wasm] error: ")
+          kprint($r)
+          kprint("\n")
       of scEmpty:   discard
       of scUnknown: cmdUnknown(inputBuf, first, last)
       # Reset buffer
