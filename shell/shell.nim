@@ -13,7 +13,9 @@ import ../core/log
 import ../mm/physical_manager   # for PhysicalMemManager type
 import ../kernel/config          # for KernelModel, IsSasos, IsMicrokernel
 import ../runtime/wasm_runner
-import ../runtime/wasm_host   # CapIpc, CapEvents
+import ../runtime/wasm_host     # CapIpc, CapEvents
+import ../runtime/elf_loader
+import ../fs/fatfs
 import ../apps/ping/ping_embedded
 import ../apps/pingpong/pingpong_embedded
 
@@ -30,8 +32,11 @@ type
     scMeminfo
     scClear
     scModel
-    scLoadPing      ## load ping — simple hello WASM
+    scLoadPing      ## load ping — embedded WASM
     scLoadPingpong  ## load pingpong — actor mailbox demo
+    scLs            ## ls — list files on disk
+    scRun           ## run <file> — load WASM from disk and execute
+    scExec          ## exec <file> — load ELF from disk and jump to entry
 
 # ── String helpers ─────────────────────────────────────────────────────────
 
@@ -69,19 +74,28 @@ proc parseCommand*(buf: openArray[char], len: int): ShellCommand =
   if bufEq(buf, first, last, "model"):     return scModel
   if bufEq(buf, first, last, "load ping"):      return scLoadPing
   if bufEq(buf, first, last, "load pingpong"):  return scLoadPingpong
+  if bufEq(buf, first, last, "ls"):             return scLs
+  # "run <file>" and "exec <file>" — prefix match
+  if last - first >= 3 and buf[first] == 'r' and buf[first+1] == 'u' and
+     buf[first+2] == 'n' and buf[first+3] == ' ':  return scRun
+  if last - first >= 4 and buf[first] == 'e' and buf[first+1] == 'x' and
+     buf[first+2] == 'e' and buf[first+3] == 'c' and buf[first+4] == ' ':  return scExec
   scUnknown
 
 # ── Command implementations ────────────────────────────────────────────────
 
 proc cmdHelp() =
   kprint("Commands:\n")
-  kprint("  help       - show this message\n")
-  kprint("  version    - kernel version and model\n")
-  kprint("  meminfo    - physical memory usage\n")
-  kprint("  clear      - scroll past old output\n")
-  kprint("  model      - current kernel architecture model\n")
-  kprint("  load ping      - run the simple ping WASM app\n")
-  kprint("  load pingpong  - run the actor mailbox demo (talks to ping_server)\n")
+  kprint("  help             - show this message\n")
+  kprint("  version          - kernel version and model\n")
+  kprint("  meminfo          - physical memory usage\n")
+  kprint("  clear            - scroll past old output\n")
+  kprint("  model            - current kernel architecture model\n")
+  kprint("  load ping        - run embedded ping WASM app\n")
+  kprint("  load pingpong    - run embedded pingpong demo\n")
+  kprint("  ls               - list files on disk\n")
+  kprint("  run <file.wasm>  - load and run WASM from disk\n")
+  kprint("  exec <file.elf>  - load and execute ELF from disk\n")
 
 proc cmdVersion() =
   kprint("NimixOS v0.1.0\n")
@@ -116,6 +130,103 @@ proc cmdUnknown(buf: openArray[char], first, last: int) =
   kprint("Unknown command: '")
   for i in first..last: defaultSerial.putChar(buf[i])
   kprint("'\nType 'help' for available commands.\n")
+
+# ── Filesystem commands ────────────────────────────────────────────────────
+
+# FatFs directory listing via f_opendir/f_readdir
+type
+  FDIR   {.importc: "DIR",    header: "ff.h".} = object
+  FILINFO2 {.importc: "FILINFO", header: "ff.h".} = object
+    fsize  {.importc: "fsize".}:  uint32
+    fattrib {.importc: "fattrib".}: uint8
+    fname  {.importc: "fname".}:  array[256, char]
+
+proc f_opendir(dp: ptr FDIR, path: cstring): cint
+  {.importc: "f_opendir", header: "ff.h".}
+proc f_readdir(dp: ptr FDIR, fno: ptr FILINFO2): cint
+  {.importc: "f_readdir", header: "ff.h".}
+proc f_closedir(dp: ptr FDIR): cint
+  {.importc: "f_closedir", header: "ff.h".}
+
+proc cmdLs() =
+  if not fsMounted:
+    if not fsMount():
+      kprint("No disk available\n")
+      return
+  var dir: FDIR
+  var info: FILINFO2
+  if f_opendir(addr dir, "/") != 0:
+    kprint("Cannot open directory\n")
+    return
+  kprint("Files on disk:\n")
+  while true:
+    if f_readdir(addr dir, addr info) != 0: break
+    if info.fname[0] == '\0': break   # end of directory
+    kprint("  ")
+    var i = 0
+    while info.fname[i] != '\0':
+      defaultSerial.putChar(info.fname[i])
+      inc i
+    kprint("  (")
+    kprintInt(int64(info.fsize))
+    kprint(" bytes)\n")
+  discard f_closedir(addr dir)
+
+# Static buffer for disk-loaded files (512 KB)
+var diskFileBuf: array[512 * 1024, byte]
+
+proc getArg(buf: openArray[char], cmdLen: int, first: int): string =
+  ## Extract the argument after the command (e.g. "run foo.wasm" → "foo.wasm")
+  var arg = ""
+  var i = first + cmdLen + 1  # skip cmd + space
+  while i < buf.len and buf[i] != '\0' and buf[i] != '\n':
+    arg.add(buf[i])
+    inc i
+  arg
+
+proc cmdRun(filename: cstring) =
+  ## Load a .wasm file from disk and execute it.
+  if not fsMounted and not fsMount():
+    kprint("No disk available\n")
+    return
+  kprint("Loading ")
+  defaultSerial.putString(filename)
+  kprint("...\n")
+  let (res, nbytes) = fsReadInto(filename,
+                                  cast[ptr byte](addr diskFileBuf[0]),
+                                  diskFileBuf.len)
+  if res != fOk:
+    kprint("File read failed\n")
+    return
+  kprintInt(int64(nbytes))
+  kprint(" bytes read\n")
+  let caps = [CapIpc, CapEvents]
+  let r = wasmRun(cast[ptr byte](addr diskFileBuf[0]), nbytes, caps)
+  if r != wasmOk:
+    kprint("WASM execution failed\n")
+
+proc cmdExec(filename: cstring) =
+  ## Load an ELF binary from disk and jump to its entry point.
+  if not fsMounted and not fsMount():
+    kprint("No disk available\n")
+    return
+  kprint("Loading ELF: ")
+  defaultSerial.putString(filename)
+  kprint("...\n")
+  let (res, nbytes) = fsReadInto(filename,
+                                  cast[ptr byte](addr diskFileBuf[0]),
+                                  diskFileBuf.len)
+  if res != fOk:
+    kprint("File read failed\n")
+    return
+  let loaded = elfLoad(cast[ptr byte](addr diskFileBuf[0]), nbytes)
+  if loaded.err != elfOk:
+    kprint("ELF load failed\n")
+    return
+  kprint("Jumping to ELF entry...\n")
+  # Cast entry point to a proc and call it
+  let entry = cast[proc() {.nimcall.}](loaded.entry)
+  entry()
 
 # ── Main shell loop ────────────────────────────────────────────────────────
 
@@ -159,6 +270,24 @@ proc runShell*(physMgr: PhysicalMemManager) =
                         pingpongWasm.len, caps)
         if r != wasmOk:
           kprint("[wasm] error running pingpong\n")
+      of scLs:      cmdLs()
+      of scRun:
+        # extract filename after "run "
+        var fname: array[128, char]
+        var fi = 0
+        var si = first + 4  # skip "run "
+        while si <= last and fi < 127:
+          fname[fi] = inputBuf[si]; inc fi; inc si
+        fname[fi] = '\0'
+        cmdRun(cast[cstring](addr fname[0]))
+      of scExec:
+        var fname: array[128, char]
+        var fi = 0
+        var si = first + 5  # skip "exec "
+        while si <= last and fi < 127:
+          fname[fi] = inputBuf[si]; inc fi; inc si
+        fname[fi] = '\0'
+        cmdExec(cast[cstring](addr fname[0]))
       of scEmpty:   discard
       of scUnknown: cmdUnknown(inputBuf, first, last)
       # Reset buffer

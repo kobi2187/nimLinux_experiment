@@ -30,6 +30,7 @@ import ../../kernel/event_server
 import ../../arch/x86_64/syscall_gate
 import ../../servers/ping_server
 import ../../ipc/server_chan
+import ../../fs/fatfs
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Linker Script Symbols
@@ -355,6 +356,9 @@ proc runKernel(bootInfo: ptr BootInfo) =
   # Start system servers
   serverChanRegistryInit()
   pingServerInit()
+
+  # Mount filesystem (non-fatal — disk may not be present)
+  discard fsMount()
 
   # Hand off to interactive shell — never returns.
   runShell(k.physMgr)

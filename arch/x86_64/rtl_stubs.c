@@ -195,6 +195,18 @@ void wasm_heap_reset(void) {
 void *__memset_chk(void *s, int c, size_t n, size_t sz) { (void)sz; return memset(s, c, n); }
 void *__memcpy_chk(void *d, const void *s, size_t n, size_t sz) { (void)sz; return memcpy(d, s, n); }
 
+char *strchr(const char *s, int c) {
+    while (*s) { if (*s == (char)c) return (char *)s; s++; }
+    return c == 0 ? (char *)s : (char *)0;
+}
+
+char *strncpy(char *dst, const char *src, size_t n) {
+    size_t i;
+    for (i = 0; i < n && src[i]; i++) dst[i] = src[i];
+    for (; i < n; i++) dst[i] = '\0';
+    return dst;
+}
+
 /* ── wasm3 stubs — symbols wasm3 needs, not provided by -nostdlib ── */
 
 int strcmp(const char *a, const char *b) {

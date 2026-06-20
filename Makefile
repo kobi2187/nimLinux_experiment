@@ -108,13 +108,18 @@ $(ISO_ALL_OUT): $(addprefix build/kernel-,$(KERNEL_MODELS))
 	rm -rf iso
 
 # ── Run in QEMU (headless, serial only) ───────────────────────────
+DISK ?= disk.img
+DISK_FLAGS = $(if $(wildcard $(DISK)),-hda $(DISK),)
+
 qemu: $(ISO_OUT)
 	qemu-system-x86_64 -cdrom $(ISO_OUT) -bios $(OVMF) \
+		$(DISK_FLAGS) \
 		-no-reboot -m $(QEMU_MEM)M -serial stdio -display none
 
 # ── Run in QEMU with all kernel variants ───────────────────────────────────────────
 qemu-all: $(ISO_ALL_OUT)
 	qemu-system-x86_64 -cdrom $(ISO_ALL_OUT) -bios $(OVMF) \
+		$(DISK_FLAGS) \
 		-no-reboot -m $(QEMU_MEM)M -serial stdio -display none
 
 # ── Run in QEMU (with VGA) ────────────────────────────────────────
@@ -124,6 +129,27 @@ qemu-gui: $(ISO_OUT)
 
 # ── Alias ─────────────────────────────────────────────────────────
 run: all
+
+# ── Disk image management ─────────────────────────────────────────
+# Create a fresh FAT16 disk image (32 MB) with WASM apps
+disk: $(DISK)
+
+$(DISK):
+	dd if=/dev/zero of=$(DISK) bs=512 count=65536
+	mkfs.fat -F 16 -n NIMIXOS $(DISK)
+	$(MAKE) disk-add-apps
+
+# Add/update WASM and ELF files on the disk image (uses mtools — no sudo)
+disk-add-apps: apps/ping/ping.wasm apps/pingpong/pingpong.wasm
+	MTOOLS_SKIP_CHECK=1 mcopy -oi $(DISK) $^ ::
+
+# Add a single file: make disk-add FILE=myapp.wasm
+disk-add:
+	MTOOLS_SKIP_CHECK=1 mcopy -oi $(DISK) $(FILE) ::
+
+# List disk contents
+disk-ls:
+	MTOOLS_SKIP_CHECK=1 mdir -i $(DISK) ::
 
 # ── Unit tests (host, no QEMU needed) ────────────────────────────
 # Uses --skipParentCfg to bypass kernel nim.cfg (-nostdlib, kernel.ld, etc.)
