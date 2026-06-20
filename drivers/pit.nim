@@ -50,15 +50,13 @@ when not defined(noKernelHardware):
 # (i.e. kern/interrupts.nim is in scope). Host tests skip this section.
 when defined(kernelFull):
   import ../kern/interrupts
+  import ../drivers/pic
 
   proc pitIrqHandler*(ctx: ptr ExceptionContext) {.nimcall.} =
     ## IRQ0 interrupt handler registered with the IDT at vector 0x20 (IRQ_TIMER).
-    ## Increments the tick counter. EOI must be sent by the interrupt dispatcher
-    ## or the PIC driver after this handler returns.
+    ## Increments the tick counter then sends EOI to unblock the master PIC.
     pitTick()
-    # NOTE: picEoi(0) is NOT called here — the interrupt dispatcher in
-    # kern/interrupts.nim is responsible for EOI signalling once it gains
-    # PIC awareness. When drivers/pic.nim (Task A1) is wired in, add EOI there.
+    picEoi(0)
 
   proc pitRegisterHandler*() =
     ## Register the PIT IRQ handler with the global interrupt manager.

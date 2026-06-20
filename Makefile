@@ -20,7 +20,7 @@ QEMU_MEM ?= 256
 
 # Nim flags for kernel build
 NIM_FLAGS = c --os:any --mm:arc -d:StandaloneHeapSize=16777216 \
-            -d:release -d:danger --noMain --outdir:build \
+            -d:release -d:danger -d:kernelFull --noMain --outdir:build \
             --nimblePath:nimcache
 
 # Source

@@ -306,8 +306,9 @@ proc runKernel(bootInfo: ptr BootInfo) =
   klog(llInfo, "Kernel model ready")
 
   pitInit(100)
-  # TODO: uncomment after Task A1 merges — picUnmask(0)
-  klog(llInfo, "PIT timer: 100Hz")
+  pitRegisterHandler()
+  picUnmask(0)
+  klog(llInfo, "PIT timer: 100Hz, IRQ0 handler registered")
 
   # Hand off to interactive shell — never returns.
   runShell(k.physMgr)

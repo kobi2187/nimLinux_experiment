@@ -161,7 +161,7 @@ proc setIdtEntry*(entry: var IdtEntry, offset: uint64, selector: uint16,
   ## Set up an IDT entry
   entry.offsetLow = uint16(offset and 0xFFFF)
   entry.offsetMid = uint16((offset shr 16) and 0xFFFF)
-  entry.offsetHigh = uint32((offset shr 32) and 0xFFFFFFFF)
+  entry.offsetHigh = uint32((offset shr 32) and 0xFFFFFFFF'u64)
   entry.selector = selector
   entry.ist = ist
   entry.flags = flags
