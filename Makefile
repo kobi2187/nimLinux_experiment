@@ -77,6 +77,7 @@ test:
 	$(NIM) c -r $(TEST_FLAGS) tests/test_pit.nim
 	$(NIM) c -r $(TEST_FLAGS) tests/test_event_server.nim
 	$(NIM) c -r $(TEST_FLAGS) tests/test_driver_registry.nim
+	$(NIM) c -r $(TEST_FLAGS) tests/test_tss.nim
 	@echo "=== All tests passed ==="
 
 # ── Clean ─────────────────────────────────────────────────────────

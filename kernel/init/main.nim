@@ -24,6 +24,7 @@ import ../../drivers/pit
 import ../../drivers/ps2_keyboard
 import ../../drivers/vga_text
 import ../../kernel/event_server
+import ../../arch/x86_64/syscall_gate
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Linker Script Symbols
@@ -325,6 +326,9 @@ proc runKernel(bootInfo: ptr BootInfo) =
   klog(llInfo, "Drivers probed")
   klogInt(llInfo, "  ok:   ", int64(drvOk))
   klogInt(llInfo, "  fail: ", int64(drvFail))
+
+  syscallGateInit()
+  klog(llInfo, "Syscall gate ready (ring 0<->3)")
 
   # Hand off to interactive shell — never returns.
   runShell(k.physMgr)
