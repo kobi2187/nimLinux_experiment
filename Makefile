@@ -28,7 +28,7 @@ KERNEL_SRC = kernel/init/main.nim
 KERNEL_OUT = build/main
 ISO_OUT    = nimixos.iso
 
-.PHONY: all build iso qemu qemu-gui run clean
+.PHONY: all build iso qemu qemu-gui run clean test
 
 # Default target: full cycle
 all: build iso qemu
@@ -62,6 +62,18 @@ qemu-gui: $(ISO_OUT)
 
 # ── Alias ─────────────────────────────────────────────────────────
 run: all
+
+# ── Unit tests (host, no QEMU needed) ────────────────────────────
+# Uses --skipParentCfg to bypass kernel nim.cfg (-nostdlib, kernel.ld, etc.)
+TEST_FLAGS = --skipParentCfg --mm:refc --path:$(CURDIR) -d:noSignalHandler
+
+test:
+	@echo "=== NimixOS Test Suite ==="
+	$(NIM) c -r $(TEST_FLAGS) tests/test_log.nim
+	$(NIM) c -r $(TEST_FLAGS) tests/test_vga_text.nim
+	$(NIM) c -r $(TEST_FLAGS) tests/test_traits.nim
+	$(NIM) c -r $(TEST_FLAGS) tests/test_ps2_keyboard.nim
+	@echo "=== All tests passed ==="
 
 # ── Clean ─────────────────────────────────────────────────────────
 clean:
