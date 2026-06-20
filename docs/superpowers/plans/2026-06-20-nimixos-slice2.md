@@ -1,52 +1,62 @@
 # NimixOS Slice 2 — Hardware Init, Event Server, WASM Runtime
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+>
+> **Reference:** See `docs/ARCHITECTURE.md` for the full three-tier model (Kernel / Servers / WASM Apps) before implementing anything here.
 
-**Goal:** From working serial shell → preemptive multitasking OS with pub/sub event system and first WASM application running in a capability-isolated sandbox.
+**Goal:** From working serial shell → preemptive multitasking OS with pub/sub event system, a `ping_server` ELF server, and a `pingpong.wasm` app that talks to it — proving the full three-tier IPC stack works end to end.
 
-**Architecture:** SASOS model (default). All "processes" are WASM modules running inside SIPs (Software Isolated Processes). The event server is a kernel module (zero-IPC pub/sub). Capabilities are `distinct uint64` tokens — unforgeable by construction.
+**Vertical slice goal:**
+```
+make qemu
+→ kernel boots
+→ ping_server (ELF) starts, registers mailbox
+→ pingpong.wasm loads, sends "ping" to ping_server
+→ ping_server replies "pong"
+→ pingpong.wasm prints "Got: pong" to serial
+→ shell shows: ps (lists both processes)
+```
 
-**Tech Stack:** Nim 2.x, `--mm:arc`, `--os:any`, x86_64, wasm3 (C WASM interpreter, zero deps), QEMU virtio-blk for disk, GRUB Multiboot2, OVMF UEFI.
+**Architecture:** Three tiers — Kernel (ring 0, Nim), Servers (ring 3, native ELF), Apps (ring 3, WASM). See `docs/ARCHITECTURE.md`.
 
-**Vertical slice goal:** `make qemu` → kernel boots → loads `hello.wasm` from a FAT32 disk image → WASM prints "Hello from NimixOS" to serial → shell shows process list.
+**Tech Stack:** Nim 2.x, `--mm:arc`, `--os:any`, x86_64, wasm3 (C WASM interpreter), QEMU.
 
 ---
 
 ## Dependency Graph
 
 ```
-[Slice 1 complete: serial shell boots]
+[Slice 1 complete: serial shell boots ✓]
           │
           ▼
 ┌─────────────────────────────────────────────────────────┐
-│  Phase A: Hardware Foundation (all parallel)            │
-│   A1: PIC 8259 init + IRQ routing                       │
-│   A2: PIT timer (100Hz tick)                            │
-│   A3: TSS + syscall gate (ring 0/3)                     │
+│  Phase A: Hardware Foundation (parallel)                │
+│   A1: PIC 8259A init + IRQ routing                      │
+│   A2: PIT timer 100Hz                                   │
 └─────────────────────────────────────────────────────────┘
-          │ (all of A must complete)
+          │
           ▼
 ┌─────────────────────────────────────────────────────────┐
 │  Phase B: Kernel Services (parallel after A)            │
-│   B1: Preemptive scheduler (needs A2 timer tick)        │
-│   B2: Driver registry + probe loop (needs A1 IRQ)       │
-│   B3: Event server — pub/sub backbone                   │
+│   B1: Driver registry + probe loop                      │
+│   B2: Event server (pub/sub backbone)                   │
+│   B3: Syscall gate (ring 0↔3, TSS)                     │
 └─────────────────────────────────────────────────────────┘
           │
           ▼
 ┌─────────────────────────────────────────────────────────┐
-│  Phase C: Storage + WASM (parallel after B)             │
-│   C1: PCI bus scan + virtio-blk driver                  │
-│   C2: FAT32 VFS reader                                  │
-│   C3: wasm3 integration + WASM host ABI                 │
+│  Phase C: IPC + Server Infrastructure (parallel after B)│
+│   C1: Server channel (ELF server mailbox API)           │
+│   C2: SIP channel (kernel-mediated app→server IPC)      │
+│   C3: wasm3 integration + host ABI skeleton             │
 └─────────────────────────────────────────────────────────┘
           │
           ▼
 ┌─────────────────────────────────────────────────────────┐
-│  Phase D: First App                                      │
-│   D1: SIP loader (load .wasm, assign capabilities)      │
-│   D2: hello.wasm — first userspace program              │
-│   D3: Shell commands: ps, kill, load <file.wasm>        │
+│  Phase D: Proof-of-Concept (sequential)                 │
+│   D1: ping_server — tiny ELF server, Nim                │
+│   D2: pingpong.wasm — WASM app, sends ping gets pong    │
+│   D3: Shell: ps, load <file>                            │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -54,27 +64,25 @@
 
 ## Phase A: Hardware Foundation
 
-### Task A1: PIC 8259 Interrupt Controller
+### Task A1: PIC 8259A
 
-**Files:**
-- Create: `drivers/pic.nim`
-- Create: `tests/test_pic.nim`
-- Modify: `kern/interrupts.nim` (register IRQ handlers via PIC)
+**Files:** `drivers/pic.nim`, `tests/test_pic.nim`
 
-**What it does:** Programs the 8259A Programmable Interrupt Controller (master + slave cascade). Remaps IRQs 0–15 from their BIOS defaults (vectors 0x08–0x0F, 0x70–0x77 — which collide with CPU exceptions) to vectors 0x20–0x2F. After this, IRQ1 (keyboard) fires vector 0x21, timer fires 0x20.
+**Why first:** Without PIC init, IRQ1 (keyboard) and IRQ0 (timer) are either disabled or
+mapped to vectors that collide with CPU exceptions. Nothing interactive works.
 
-- [ ] **Write test (host-compilable — pure port-address constants only)**
-
+- [ ] **Write failing test**
 ```nim
 # tests/test_pic.nim
 import ../drivers/pic
 
 proc testVectorMapping() =
-  assert PicMasterOffset == 0x20, "master IRQs start at vector 0x20"
-  assert PicSlaveOffset  == 0x28, "slave IRQs start at vector 0x28"
-  assert irqToVector(0)  == 0x20, "IRQ0 (timer) → vector 0x20"
-  assert irqToVector(1)  == 0x21, "IRQ1 (keyboard) → vector 0x21"
-  assert irqToVector(8)  == 0x28, "IRQ8 (RTC) → vector 0x28"
+  assert PicMasterOffset == 0x20'u8
+  assert PicSlaveOffset  == 0x28'u8
+  assert irqToVector(0)  == 0x20'u8   # timer
+  assert irqToVector(1)  == 0x21'u8   # keyboard
+  assert irqToVector(8)  == 0x28'u8   # RTC
+  assert irqToVector(15) == 0x2F'u8   # last slave IRQ
   echo "PASS: PIC vector mapping"
 
 when isMainModule:
@@ -82,19 +90,15 @@ when isMainModule:
   echo "All PIC tests passed."
 ```
 
-- [ ] **Run test to verify it fails:** `nim c -r --skipParentCfg --mm:refc --path:$(pwd) tests/test_pic.nim`
+- [ ] **Run:** `nim c -r --skipParentCfg --mm:refc --path:$(pwd) tests/test_pic.nim` → expect fail
 
 - [ ] **Implement `drivers/pic.nim`**
-
 ```nim
 # SPDX-License-Identifier: GPL-2.0
 ## PIC 8259A — Programmable Interrupt Controller
 ##
-## Two cascaded 8259A chips handle IRQs 0-15 on x86.
-## BIOS maps them to vectors 0x08-0x0F (collides with CPU exceptions).
-## We remap to 0x20-0x2F (safe, above the 32 CPU exception vectors).
-##
-## After picInit(), IRQ0=timer fires vector 0x20, IRQ1=kbd fires 0x21.
+## Remaps IRQ 0-15 from BIOS defaults (collide with CPU exception vectors)
+## to safe vectors 0x20-0x2F. Must be called before sti().
 
 import ../arch/x86_64/cpu_primitives
 
@@ -103,105 +107,71 @@ const
   PicMasterData*   = 0x21'u16
   PicSlaveCmd*     = 0xA0'u16
   PicSlaveData*    = 0xA1'u16
-
   PicMasterOffset* = 0x20'u8   ## IRQ 0-7  → vectors 0x20-0x27
   PicSlaveOffset*  = 0x28'u8   ## IRQ 8-15 → vectors 0x28-0x2F
-
-  PicEoi*          = 0x20'u8   ## End-of-interrupt command
+  PicEoi*          = 0x20'u8
 
 proc irqToVector*(irq: int): uint8 {.inline.} =
-  ## Convert IRQ number (0-15) to interrupt vector number.
   if irq < 8: uint8(irq) + PicMasterOffset
   else:       uint8(irq - 8) + PicSlaveOffset
 
-proc ioWait() {.inline.} =
-  ## Brief delay after PIC port writes (some hardware needs settling time).
-  outb(0x80, 0x00)
+proc ioWait() {.inline.} = outb(0x80, 0x00)
 
 proc picInit*() =
-  ## Remap PIC IRQs to vectors 0x20-0x2F and mask all interrupts.
-  ## Caller must unmask specific IRQs before enabling interrupts.
-
-  # ICW1: start init sequence (cascade mode, ICW4 needed)
+  ## Remap PIC and mask all IRQs. Caller unmasks what it needs.
   outb(PicMasterCmd,  0x11); ioWait()
   outb(PicSlaveCmd,   0x11); ioWait()
-
-  # ICW2: vector offsets
   outb(PicMasterData, PicMasterOffset); ioWait()
   outb(PicSlaveData,  PicSlaveOffset);  ioWait()
-
-  # ICW3: cascade wiring (master IRQ2 → slave)
-  outb(PicMasterData, 0x04); ioWait()  # master: slave on IRQ2
-  outb(PicSlaveData,  0x02); ioWait()  # slave: cascade identity = 2
-
-  # ICW4: 8086 mode
+  outb(PicMasterData, 0x04); ioWait()
+  outb(PicSlaveData,  0x02); ioWait()
   outb(PicMasterData, 0x01); ioWait()
   outb(PicSlaveData,  0x01); ioWait()
-
-  # Mask all IRQs (caller unmasks what it needs)
   outb(PicMasterData, 0xFF)
   outb(PicSlaveData,  0xFF)
 
 proc picEoi*(irq: uint8) {.inline.} =
-  ## Send End-Of-Interrupt signal after handling an IRQ.
-  ## Must be called at the END of every IRQ handler.
-  if irq >= 8:
-    outb(PicSlaveCmd, PicEoi)   # cascade: ack slave first
-  outb(PicMasterCmd, PicEoi)    # always ack master
+  if irq >= 8: outb(PicSlaveCmd, PicEoi)
+  outb(PicMasterCmd, PicEoi)
 
 proc picUnmask*(irq: uint8) {.inline.} =
-  ## Enable (unmask) a specific IRQ line.
   if irq < 8:
-    let mask = inb(PicMasterData) and not (1'u8 shl irq)
-    outb(PicMasterData, mask)
+    outb(PicMasterData, inb(PicMasterData) and not (1'u8 shl irq))
   else:
-    let mask = inb(PicSlaveData) and not (1'u8 shl (irq - 8))
-    outb(PicSlaveData, mask)
+    outb(PicSlaveData, inb(PicSlaveData) and not (1'u8 shl (irq - 8)))
 
 proc picMask*(irq: uint8) {.inline.} =
-  ## Disable (mask) a specific IRQ line.
   if irq < 8:
-    let mask = inb(PicMasterData) or (1'u8 shl irq)
-    outb(PicMasterData, mask)
+    outb(PicMasterData, inb(PicMasterData) or (1'u8 shl irq))
   else:
-    let mask = inb(PicSlaveData) or (1'u8 shl (irq - 8))
-    outb(PicSlaveData, mask)
+    outb(PicSlaveData, inb(PicSlaveData) or (1'u8 shl (irq - 8)))
 ```
 
 - [ ] **Run test:** all assertions pass
-- [ ] **Wire into kernel/init/main.nim:** call `picInit()` early in `runKernel`, before `sti()`
-- [ ] **Build kernel:** `make build`
-- [ ] **Commit:** `git commit -m "feat: PIC 8259A init — remap IRQs to vectors 0x20-0x2F"`
+- [ ] **Wire into `kernel/init/main.nim`:** call `picInit()` after IDT setup, before `sti()`
+- [ ] **Build:** `make build`
+- [ ] **Commit:** `git commit -m "feat: PIC 8259A — remap IRQs to vectors 0x20-0x2F"`
 
 ---
 
-### Task A2: PIT Timer (100Hz tick)
+### Task A2: PIT Timer 100Hz
 
-**Files:**
-- Create: `drivers/pit.nim`
-- Create: `tests/test_pit.nim`
-- Modify: `kern/interrupts.nim` (register vector 0x20 handler)
-- Modify: `kernel/init/main.nim` (call pitInit, unmask IRQ0)
+**Files:** `drivers/pit.nim`, `tests/test_pit.nim`
 
-**What it does:** Programs the Intel 8253/8254 Programmable Interval Timer to fire IRQ0 at 100Hz (10ms tick). This is the scheduler's heartbeat. Every tick, the interrupt handler increments a tick counter and may trigger a context switch.
-
-- [ ] **Write test**
-
+- [ ] **Write failing test**
 ```nim
 # tests/test_pit.nim
 import ../drivers/pit
 
 proc testDivisorCalc() =
-  # PIT base frequency is 1,193,182 Hz
-  # At 100 Hz: divisor = 1193182 / 100 = 11931
   let d = pitDivisor(100)
-  assert d >= 11931 and d <= 11932, "100Hz divisor should be ~11931"
+  assert d >= 11931 and d <= 11932, "100Hz divisor ~11931"
   let d2 = pitDivisor(1000)
-  assert d2 >= 1193 and d2 <= 1194, "1000Hz divisor should be ~1193"
+  assert d2 >= 1193 and d2 <= 1194, "1000Hz divisor ~1193"
   echo "PASS: PIT divisor calculation"
 
 proc testTickCounter() =
-  # Tick counter starts at 0, pitTick() increments it
+  resetTicks()
   assert pitTicks() == 0
   pitTick()
   assert pitTicks() == 1
@@ -216,102 +186,56 @@ when isMainModule:
 ```
 
 - [ ] **Implement `drivers/pit.nim`**
-
 ```nim
 # SPDX-License-Identifier: GPL-2.0
-## PIT 8253/8254 — Programmable Interval Timer
-##
-## Drives the scheduler at a fixed Hz rate.
-## IRQ0 (vector 0x20) fires at `pitHz` frequency after pitInit().
+## PIT 8253/8254 — drives the scheduler at a fixed Hz rate
 
 import ../arch/x86_64/cpu_primitives
 import ../drivers/pic
 
 const
-  PitChannel0* = 0x40'u16   ## Channel 0 data port (connected to IRQ0)
-  PitCmd*      = 0x43'u16   ## Mode/command register
-  PitBaseHz    = 1_193_182  ## PIT oscillator frequency in Hz
+  PitChannel0* = 0x40'u16
+  PitCmd*      = 0x43'u16
+  PitBaseHz    = 1_193_182
 
 var tickCount: uint64 = 0
 
 proc pitTicks*(): uint64 {.inline.} = tickCount
-
-proc pitTick*() {.inline.} =
-  ## Called by the IRQ0 handler on each timer interrupt.
-  inc tickCount
+proc pitTick*()          {.inline.} = inc tickCount
+proc resetTicks*()       {.inline.} = tickCount = 0
 
 proc pitDivisor*(hz: int): uint16 =
-  ## Calculate the PIT divisor for a given frequency.
   uint16(PitBaseHz div hz)
 
 proc pitInit*(hz: int = 100) =
-  ## Program PIT channel 0 to fire at `hz` Hz.
-  ## Call picUnmask(0) and sti() after this to start receiving ticks.
-  let divisor = pitDivisor(hz)
-  # Command: channel 0, lobyte/hibyte access, mode 3 (square wave)
+  let d = pitDivisor(hz)
   outb(PitCmd,      0x36)
-  outb(PitChannel0, uint8(divisor and 0xFF))         # low byte
-  outb(PitChannel0, uint8((divisor shr 8) and 0xFF)) # high byte
+  outb(PitChannel0, uint8(d and 0xFF))
+  outb(PitChannel0, uint8((d shr 8) and 0xFF))
 
 proc pitIrqHandler*(vector: uint8) {.nimcall.} =
-  ## IRQ0 handler — increments tick counter, signals scheduler.
   pitTick()
   picEoi(0)
-  # TODO: call scheduler.preempt() when preemptive scheduling is implemented
 ```
 
-- [ ] **Run test:** `nim c -r --skipParentCfg --mm:refc --path:$(pwd) tests/test_pit.nim`
-- [ ] **Register handler:** in `kern/interrupts.nim`, register `pitIrqHandler` at vector `irqToVector(0)`
-- [ ] **Wire into main.nim:** after `picInit()`, call `pitInit(100)` then `picUnmask(0)`
-- [ ] **Build kernel:** `make build`
-- [ ] **Boot test:** `make qemu` — serial should show tick counter incrementing (add `klogInt(llDebug, "tick=", int64(pitTicks()))` temporarily)
-- [ ] **Commit:** `git commit -m "feat: PIT timer at 100Hz — tick counter, IRQ0 handler"`
-
----
-
-### Task A3: TSS + Syscall Gate
-
-**Files:**
-- Create: `arch/x86_64/tss.nim`
-- Create: `arch/x86_64/syscall.nim`
-- Modify: `arch/x86_64/cpu_primitives.nim` (add `wrmsrl`, `syscall`/`sysret` support)
-
-**What it does:** Sets up the Task State Segment (TSS) so the CPU knows which stack to switch to on ring 3→ring 0 transition. Also configures the `syscall`/`sysret` MSRs so userspace WASM host calls can enter the kernel efficiently.
-
-*(Detailed steps TBD — depends on GDT layout which needs reading first)*
+- [ ] **Run test:** passes
+- [ ] **Register `pitIrqHandler` at vector `irqToVector(0)` in `kern/interrupts.nim`**
+- [ ] **Wire into `main.nim`:** after `picInit()`, call `pitInit(100)` then `picUnmask(0)`
+- [ ] **Build and boot:** `make qemu` — serial should show kernel running (no hang)
+- [ ] **Commit:** `git commit -m "feat: PIT 100Hz timer — tick counter, IRQ0 handler"`
 
 ---
 
 ## Phase B: Kernel Services
 
-### Task B1: Preemptive Scheduler
+### Task B1: Driver Registry + Probe Loop
 
-**Files:**
-- Modify: `kernel/models/monolithic.nim` (add context switch, tick-driven preemption)
-- Modify: `drivers/pit.nim` (pitIrqHandler calls scheduler)
+**Files:** `kernel/driver_registry.nim`
 
-**What it does:** On each PIT tick, save the current task's registers (rsp, rbp, rip via the interrupt frame), pick the next ready task, restore its registers. Round-robin with priority.
-
-*(Context switch requires careful inline asm — detailed steps in separate sub-plan)*
-
----
-
-### Task B2: Driver Registry + Probe Loop
-
-**Files:**
-- Create: `kernel/driver_registry.nim`
-- Modify: `kernel/init/main.nim`
-
-**What it does:** A static array of `DriverVTable` pointers. At boot, iterate and call `init()` on each. Drivers that detect their hardware return `drOk`; others return `drNotFound` and are skipped. Log results.
-
-- [ ] **Implement `kernel/driver_registry.nim`**
-
+- [ ] **Implement**
 ```nim
 # SPDX-License-Identifier: GPL-2.0
 ## Driver Registry — boot-time driver probe loop
-##
-## Add drivers to the registry in dependency order.
-## The probe loop calls init() on each; failures are logged and skipped.
 
 import ./traits/driver
 import ../core/log
@@ -319,8 +243,8 @@ import ../core/log
 const MaxDrivers = 32
 
 var
-  registry:     array[MaxDrivers, ptr DriverVTable]
-  registryCount = 0
+  registry:      array[MaxDrivers, ptr DriverVTable]
+  registryCount: int = 0
 
 proc registerDriver*(d: ptr DriverVTable) =
   if registryCount < MaxDrivers:
@@ -328,234 +252,350 @@ proc registerDriver*(d: ptr DriverVTable) =
     inc registryCount
 
 proc probeAllDrivers*() =
-  ## Call init() on every registered driver. Log pass/fail.
   klog(llInfo, "Probing drivers...")
   for i in 0..<registryCount:
     let d = registry[i]
     let r = d.init()
     if r == drOk:
-      klog(llInfo, d.name)  # "[INFO]  ps2_keyboard"
+      klog(llInfo,  d.name)
     else:
-      klog(llWarn, d.name)  # "[WARN]  some_driver (not found)"
+      klog(llWarn, d.name)
 ```
 
-- [ ] **Wire into main.nim:** after PIC/PIT init, register and probe all drivers
+- [ ] **Wire into `main.nim`:** register `ps2KeyboardDriver`, `vgaTextDriver`, then call `probeAllDrivers()`
 - [ ] **Commit:** `git commit -m "feat: driver registry — probe loop at boot"`
 
 ---
 
-### Task B3: Event Server
+### Task B2: Event Server
 
-**Files:**
-- Create: `kernel/event_server.nim`
-- Create: `kernel/traits/event.nim`
-- Create: `tests/test_event_server.nim`
+**Files:** `kernel/traits/event.nim`, `kernel/event_server.nim`, `tests/test_event_server.nim`
 
-**What it does:** Publish/subscribe backbone for the entire OS. All inter-process coordination goes through here — process exit notifications, device hotplug, timers, app-to-app signalling.
+The event server is the pub/sub backbone. All inter-tier communication flows through it.
+In SASOS mode: direct in-kernel call, zero IPC overhead.
 
-The event server is a **kernel module** (not a separate process), so pub/sub has zero IPC overhead in the SASOS model — it's a direct call into the kernel's event table.
-
-- [ ] **Write failing test**
-
-```nim
-# tests/test_event_server.nim
-import ../kernel/event_server
-
-proc testSubscribePublish() =
-  eventServerInit()
-
-  # Subscribe to a topic
-  let token = eventSubscribe("test.ping")
-  assert token.isValid, "subscribe should return valid token"
-
-  # Poll — nothing yet
-  let before = eventPoll(token)
-  assert before.isNone, "nothing published yet"
-
-  # Publish
-  eventPublish("test.ping", "hello")
-
-  # Poll — should have event
-  let after = eventPoll(token)
-  assert after.isSome, "event should be available after publish"
-  assert after.get().payload == "hello"
-  echo "PASS: subscribe/publish/poll"
-
-proc testWaitAny() =
-  eventServerInit()
-  let t1 = eventSubscribe("a")
-  let t2 = eventSubscribe("b")
-  eventPublish("b", "data")
-  let fired = eventWaitAny([t1, t2])
-  assert fired == t2, "t2 should fire since 'b' was published"
-  echo "PASS: waitAny"
-
-when isMainModule:
-  testSubscribePublish()
-  testWaitAny()
-  echo "All event server tests passed."
-```
-
-- [ ] **Implement `kernel/traits/event.nim`** (interface only)
-
+- [ ] **Create `kernel/traits/event.nim`**
 ```nim
 # SPDX-License-Identifier: GPL-2.0
-## Event System Trait — Interface
+## Event System Trait — Interface Only
 ##
-## Publish/subscribe event backbone.
-## In SASOS: direct kernel call (zero IPC overhead).
-## In microkernel: message through event server process.
+## All tiers (kernel, servers, apps) use this API.
+## Implementation: direct call in kernel; syscall from ring 3.
 
 import ../core/types
 
 const
   MaxTopicLen*    = 64
-  MaxPayloadSize* = 512
+  MaxPayloadLen*  = 512
   MaxSubscribers* = 256
+  MaxPendingPerToken* = 16
 
 type
   EventToken* = distinct uint32
-    ## Opaque subscription handle returned by eventSubscribe().
-    ## Pass to eventWait/eventPoll to receive events.
+    ## Opaque subscription handle. Pass to wait/poll to receive events.
 
-  EventPayload* = object
-    size*: uint16
-    data*: array[MaxPayloadSize, byte]
+  EventData* = object
+    len*:  uint16
+    data*: array[MaxPayloadLen, byte]
 
   Event* = object
     topic*:   array[MaxTopicLen, char]
-    payload*: EventPayload
-    seqNum*:  uint64   ## Monotonically increasing — detect missed events
+    payload*: EventData
+    seqNum*:  uint64
+
+  EventResult* = enum
+    evOk = 0
+    evNoToken    ## Token not found or invalid
+    evNoEvent    ## Poll found nothing (non-blocking)
+    evFull       ## Subscriber ring buffer full — event dropped
+    evBadTopic   ## Topic string too long or empty
 
 proc isValid*(t: EventToken): bool {.inline.} = uint32(t) != 0
 ```
 
-- [ ] **Implement `kernel/event_server.nim`**
+- [ ] **Write failing test `tests/test_event_server.nim`**
+```nim
+import ../kernel/event_server
+import ../kernel/traits/event
 
-Core design:
-- Topic table: array of `(topic: string, subscribers: seq[EventToken])`
-- Each token has a small ring buffer of pending events
-- `eventSubscribe(topic)` → allocates a token, registers it under the topic
-- `eventPublish(topic, payload)` → fans out to all token buffers for that topic
-- `eventPoll(token)` → non-blocking read from token's buffer
-- `eventWait(token)` → blocks current task until an event arrives (uses scheduler.blockTask/wake)
-- `eventWaitAny(tokens[])` → blocks until any token has an event
+proc testSubscribePublishPoll() =
+  eventServerInit()
+
+  let tok = eventSubscribe("test.ping")
+  assert tok.isValid, "subscribe returns valid token"
+
+  assert eventPoll(tok).isNone, "nothing published yet"
+
+  eventPublish("test.ping", "hello", 5)
+
+  let ev = eventPoll(tok)
+  assert ev.isSome, "event available after publish"
+  echo "PASS: subscribe/publish/poll"
+
+proc testMultipleSubscribers() =
+  eventServerInit()
+  let t1 = eventSubscribe("sys.tick")
+  let t2 = eventSubscribe("sys.tick")
+  eventPublish("sys.tick", "1", 1)
+  assert eventPoll(t1).isSome, "t1 receives event"
+  assert eventPoll(t2).isSome, "t2 also receives event (fan-out)"
+  echo "PASS: fan-out to multiple subscribers"
+
+proc testUnknownTopicReturnsNothing() =
+  eventServerInit()
+  let tok = eventSubscribe("test.other")
+  eventPublish("test.ping", "x", 1)
+  assert eventPoll(tok).isNone, "different topic → no event"
+  echo "PASS: topic filtering"
+
+when isMainModule:
+  testSubscribePublishPoll()
+  testMultipleSubscribers()
+  testUnknownTopicReturnsNothing()
+  echo "All event server tests passed."
+```
+
+- [ ] **Implement `kernel/event_server.nim`** (ring buffer per token, topic string matching, fan-out on publish)
 
 - [ ] **Run tests:** `make test`
-- [ ] **Wire into main.nim:** call `eventServerInit()` during kernel init
-- [ ] **Commit:** `git commit -m "feat: event server — pub/sub backbone for OS coordination"`
+- [ ] **Wire into `main.nim`:** call `eventServerInit()` during kernel init
+- [ ] **Commit:** `git commit -m "feat: event server — pub/sub backbone, fan-out, topic filtering"`
 
 ---
 
-## Phase C: Storage + WASM
+### Task B3: Syscall Gate (TSS + ring 0↔3)
 
-### Task C1: PCI Scan + virtio-blk
+**Files:** `arch/x86_64/tss.nim`, `arch/x86_64/syscall_gate.nim`
 
-**Files:**
-- Create: `drivers/pci.nim`
-- Create: `drivers/virtio_blk.nim`
+Sets up the Task State Segment and `syscall`/`sysret` MSRs.
+Required before any code (server or WASM host) runs in ring 3.
 
-**PCI scan:** Walk bus 0 devices 0-31, functions 0-7. Read vendor/device ID from config space (port 0xCF8/0xCFC). Build a device list. QEMU's virtio-blk presents as vendor=0x1AF4, device=0x1001.
+*(Detailed steps require reading the current GDT layout first — deferred to implementation phase)*
 
-**virtio-blk:** Map the virtio device's BAR, set up virtqueues, implement `blkRead(sector, buf)` and `blkWrite(sector, buf)`.
+- [ ] **Read current GDT in `arch/x86_64/cpu_primitives.nim`**
+- [ ] **Implement TSS with ring 0 stack pointer**
+- [ ] **Configure STAR, LSTAR, SFMASK MSRs for `syscall`/`sysret`**
+- [ ] **Implement `syscallDispatch` — routes syscall numbers to kernel handlers**
+- [ ] **Commit:** `git commit -m "feat: TSS + syscall gate — ring 0/3 transition"`
 
 ---
 
-### Task C2: FAT32 VFS
+## Phase C: IPC + Server Infrastructure
 
-**Files:**
-- Create: `fs/fat32.nim`
-- Create: `fs/vfs.nim`
-- Create: `tests/test_fat32.nim`
+### Task C1: Server Channel (ELF server mailbox)
 
-**FAT32 reader:** Parse BPB (BIOS Parameter Block), read FAT table, follow cluster chains, read directory entries. Implement `fsOpen(path)`, `fsRead(fd, buf, len)`, `fsClose(fd)`.
+**Files:** `ipc/server_chan.nim`, `tests/test_server_chan.nim`
 
-**VFS layer:** Abstract over the block device. `vfsMount(device, fs)`, `vfsOpen(path)` dispatches to the right filesystem.
+A server registers a named mailbox. Other servers or the kernel post typed messages to it.
+Backed by an MPSC (multi-producer, single-consumer) lock-free queue from arsenal.
 
-Test with a pre-built FAT32 image:
-```bash
-dd if=/dev/zero of=disk.img bs=512 count=65536
-mkfs.fat -F32 disk.img
-mount disk.img /mnt && cp hello.wasm /mnt/ && umount /mnt
+```nim
+# ipc/server_chan.nim
+type
+  ServerChan*[T] = object
+    name*: array[64, char]
+    queue: MpscQueue[T]    # from arsenal
+
+proc serverChanCreate*[T](name: cstring): ServerChan[T]
+proc serverChanPost*[T](ch: var ServerChan[T], msg: T): bool
+proc serverChanRecv*[T](ch: var ServerChan[T]): Option[T]
 ```
+
+- [ ] **Implement and test**
+- [ ] **Register in a global name table** so senders can look up by name
+- [ ] **Commit:** `git commit -m "feat: server channel — named MPSC mailbox for ELF servers"`
+
+---
+
+### Task C2: SIP Channel (kernel-mediated app→server IPC)
+
+**Files:** `ipc/sip_chan.nim`
+
+Bridges the WASM host ABI (`env.chan_send`) to the server mailbox system.
+The kernel routes the message: WASM app → kernel IPC table → server mailbox.
+
+```nim
+proc sipChanSend*(name: cstring, data: ptr byte, len: int, cap: SipCapability): IpcResult
+proc sipChanRecv*(name: cstring, buf: ptr byte, maxLen: int): int
+```
+
+- [ ] **Implement**
+- [ ] **Wire into WASM host ABI (`env.chan_send` / `env.chan_recv`)**
+- [ ] **Commit:** `git commit -m "feat: SIP channel — kernel-mediated WASM app to server IPC"`
 
 ---
 
 ### Task C3: wasm3 Integration
 
-**Files:**
-- Create: `vendor/wasm3/` (clone or copy wasm3 C source)
-- Create: `runtime/wasm_host.nim`
-- Create: `runtime/wasm_runner.nim`
+**Files:** `vendor/wasm3/` (C source), `runtime/wasm_host.nim`, `runtime/wasm_runner.nim`
 
-**wasm3** is a minimal WASM interpreter in C (~10k lines, zero dependencies). Integrates cleanly into a freestanding kernel via `--passC` and a custom allocator.
+wasm3 is a minimal (~10k line C) WASM interpreter, zero dependencies, works freestanding.
 
-**Host ABI** — the WASM module can import these host functions (all capability-gated):
-
-```
-env.serial_write(ptr, len)           ← write to serial console
-env.event_publish(topic_ptr, payload_ptr, len)
-env.event_subscribe(topic_ptr) → token
-env.event_wait(token) → filled payload_ptr
-env.fs_open(path_ptr) → fd
-env.fs_read(fd, buf_ptr, len) → bytes_read
-env.fs_close(fd)
-env.sip_exit(code)
+- [ ] **Clone wasm3 into `vendor/wasm3/`**
+```bash
+git clone https://github.com/wasm3/wasm3 vendor/wasm3 --depth=1
 ```
 
-Each import is only available if the loading SIP holds the matching `SipCapability` token.
+- [ ] **Add to Makefile — compile wasm3 C source alongside the kernel:**
+```makefile
+WASM3_SRC = vendor/wasm3/source
+WASM3_OBJS = $(WASM3_SRC)/m3_api_bare.c \
+             $(WASM3_SRC)/m3_api_wasi.c \
+             $(WASM3_SRC)/m3_core.c \
+             $(WASM3_SRC)/m3_env.c \
+             $(WASM3_SRC)/m3_exec.c \
+             $(WASM3_SRC)/m3_function.c \
+             $(WASM3_SRC)/m3_module.c \
+             $(WASM3_SRC)/m3_parse.c
+```
+
+- [ ] **Create `runtime/wasm_host.nim`** — defines the host ABI functions linked into wasm3:
+```nim
+# The functions a WASM module can import (capability-gated)
+proc hostSerialWrite(runtime: pointer, ctx: pointer): pointer {.exportc, cdecl.}
+proc hostChanSend(runtime: pointer, ctx: pointer): pointer {.exportc, cdecl.}
+proc hostChanRecv(runtime: pointer, ctx: pointer): pointer {.exportc, cdecl.}
+proc hostSipExit(runtime: pointer, ctx: pointer): pointer {.exportc, cdecl.}
+```
+
+- [ ] **Create `runtime/wasm_runner.nim`** — loads and runs a `.wasm` file:
+```nim
+proc wasmRun*(wasmBytes: ptr byte, wasmLen: int,
+              caps: openArray[SipCapability]): int
+  ## Load and execute a WASM module.
+  ## Only binds host functions matching the granted capabilities.
+  ## Returns the exit code from env.sip_exit().
+```
+
+- [ ] **Test with a trivial WASM module in memory (no filesystem yet):**
+```nim
+# tests/test_wasm_runner.nim
+# Embed a tiny hand-crafted WASM binary that calls serial_write("ok\n")
+# and verify it runs without crashing the kernel
+```
+
+- [ ] **Commit:** `git commit -m "feat: wasm3 integration — WASM interpreter embedded in kernel"`
 
 ---
 
-## Phase D: First App
+## Phase D: Proof-of-Concept Ping/Pong
 
-### Task D1: SIP Loader
+### Task D1: ping_server (ELF server, Nim)
 
-**Files:**
-- Create: `runtime/sip_loader.nim`
-- Modify: `kernel/models/sasos.nim`
+**Files:** `servers/ping_server.nim`
 
-**What it does:** Load a `.wasm` file from the filesystem, create a SIP with a capability set, instantiate the wasm3 runtime with the allowed host imports, and start execution.
+The simplest possible server. Registers a mailbox named `"ping"`.
+Reads messages in a loop. If message is `"ping"`, replies `"pong"`.
 
 ```nim
-proc sipLoad*(path: cstring, caps: openArray[SipCapability]): Result[SipId, LoadError]
+# servers/ping_server.nim
+# SPDX-License-Identifier: GPL-2.0
+## ping_server — proof-of-concept ELF server
+##
+## Registers mailbox "ping". Receives "ping", replies "pong".
+## Proves the kernel → server IPC path works.
+
+import ../ipc/server_chan
+import ../core/serial
+import ../kernel/event_server
+
+type PingMsg = object
+  data: array[16, char]
+  replyToken: EventToken
+
+proc main() =
+  kprint("ping_server: starting\n")
+  var ch = serverChanCreate[PingMsg]("ping")
+
+  # Announce readiness via event server
+  eventPublish("server.ready", "ping_server", 11)
+  kprint("ping_server: ready\n")
+
+  while true:
+    let msg = ch.serverChanRecv()
+    if msg.isSome:
+      let m = msg.get()
+      kprint("ping_server: got ping, sending pong\n")
+      # Reply via event token included in the message
+      eventPublish("pong", "pong", 4)
+
+main()
 ```
+
+- [ ] **Add `ping_server` to kernel boot sequence** — kernel spawns it as first ELF server after syscall gate is ready
+- [ ] **Commit:** `git commit -m "feat: ping_server — minimal ELF server, mailbox ping/pong"`
 
 ---
 
-### Task D2: hello.wasm
+### Task D2: pingpong.wasm
 
-**Files:**
-- Create: `apps/hello/hello.wat` (or `hello.c` compiled with wasi-sdk)
+**Files:** `apps/pingpong/pingpong.wat`
+
+A WASM app that:
+1. Subscribes to `"pong"` events
+2. Sends `"ping"` to `ping_server` via `env.chan_send`
+3. Waits for `"pong"` via `env.event_wait`
+4. Writes `"Got: pong\n"` to serial via `env.serial_write`
+5. Exits
 
 ```wat
 (module
-  (import "env" "serial_write" (func $serial_write (param i32 i32)))
-  (data (i32.const 0) "Hello from NimixOS WASM!\n")
+  (import "env" "serial_write"   (func $serial_write (param i32 i32)))
+  (import "env" "chan_send"      (func $chan_send (param i32 i32 i32 i32)))
+  (import "env" "event_subscribe"(func $event_subscribe (param i32) (result i32)))
+  (import "env" "event_wait"     (func $event_wait (param i32 i32) (result i32)))
+
+  (memory 1)
+  (data (i32.const 0)  "ping")           ;; offset 0, len 4
+  (data (i32.const 16) "ping\00")        ;; server name at 16
+  (data (i32.const 32) "pong\00")        ;; topic at 32
+  (data (i32.const 48) "Got: pong\n")    ;; output at 48, len 10
+
   (func (export "_start")
-    i32.const 0
-    i32.const 25
-    call $serial_write))
+    ;; subscribe to "pong" events
+    (local $token i32)
+    (local.set $token (call $event_subscribe (i32.const 32)))
+
+    ;; send "ping" to "ping" server
+    (call $chan_send
+      (i32.const 16)   ;; server name ptr
+      (i32.const 0)    ;; payload ptr
+      (i32.const 4)    ;; payload len
+      (i32.const 4))   ;; CAP_IPC = 4
+
+    ;; wait for pong
+    (drop (call $event_wait (local.get $token) (i32.const 0)))
+
+    ;; print result
+    (call $serial_write (i32.const 48) (i32.const 10))))
 ```
 
-Compile: `wat2wasm hello.wat -o hello.wasm`
+- [ ] **Compile:** `wat2wasm apps/pingpong/pingpong.wat -o apps/pingpong/pingpong.wasm`
+- [ ] **Embed in kernel build** (as a byte array) until FAT32 disk support is ready:
+```nim
+# runtime/embedded_apps.nim
+const PingpongWasm* = staticRead("../../apps/pingpong/pingpong.wasm")
+```
 
-Add to disk image, load from shell: `load hello.wasm`
-
----
-
-### Task D3: Shell Commands — ps, load
-
-**Files:**
-- Modify: `shell/shell.nim`
-
-Add commands:
-- `ps` — list running SIPs (id, name, state)
-- `load <file.wasm>` — load and run a WASM module from the filesystem
-- `kill <id>` — terminate a SIP by ID
+- [ ] **Add `load pingpong` to shell** — runs the embedded WASM
+- [ ] **Boot test:** `make qemu` → type `load pingpong` → see `Got: pong`
+- [ ] **Commit:** `git commit -m "feat: pingpong.wasm — first WASM app, ping/pong with ELF server"`
 
 ---
 
-## Reference: docs/OS_INIT_GAPS.md
+### Task D3: Shell `ps` and `load` commands
 
-See `docs/OS_INIT_GAPS.md` for the full comparison of what BeOS, QNX, and Linux do at init versus what NimixOS currently has, including the architectural decisions around WASM processes and the event server.
+**Files:** `shell/shell.nim` (modify)
+
+- [ ] **Add `scPs` and `scLoad` to `ShellCommand` enum**
+- [ ] **`ps`** — list running SIPs (id, name, state) from a kernel SIP table
+- [ ] **`load <name>`** — look up a named embedded WASM, run it via `wasmRun()`
+- [ ] **Commit:** `git commit -m "feat: shell ps + load commands"`
+
+---
+
+## Reference
+
+- Architecture: `docs/ARCHITECTURE.md`
+- Boot gap analysis: `docs/OS_INIT_GAPS.md`
+- Slice 1 plan (complete): `docs/superpowers/plans/2026-06-20-nimixos-foundation.md`
