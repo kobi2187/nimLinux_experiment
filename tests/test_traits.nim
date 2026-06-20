@@ -3,9 +3,20 @@
 ## Verifies types compile correctly and constants have expected values.
 
 import ../kernel/config
-import ../kernel/traits/scheduler
-import ../kernel/traits/ipc
+import ../kernel/traits/scheduler as schedTrait
+import ../kernel/traits/ipc as ipcTrait
 import ../kernel/traits/driver
+import ../kernel/models/monolithic
+
+# Re-open scheduler names for existing tests
+from ../kernel/traits/scheduler import TaskId, TaskState, SchedulerError,
+  TaskPriority, TaskProc, SchedulerVTable,
+  tsReady, tsRunning, tsBlocked, tsSleeping, tsZombie,
+  seOk, seOutOfSlots, seInvalidTask, seNotBlocked, `==`
+
+# Re-open ipc names for existing tests
+from ../kernel/traits/ipc import ChannelId, Message, IpcResult, IpcVTable,
+  mrOk, mrFull, mrEmpty, mrInvalid, mrTimeout, `==`
 
 proc testSchedulerTypes() =
   let id1 = TaskId(1)
@@ -44,9 +55,17 @@ proc testConfig() =
   echo "  MaxChannels = ", MaxChannels
   echo "  MessageSize = ", MessageSize
 
+proc testMonolithicInit() =
+  initMonolithicModel()
+  # Use module-qualified access to avoid `spawn` keyword conflict in Nim 2.x
+  assert schedTrait.scheduler.spawn != nil, "scheduler.spawn must be wired after initMonolithicModel"
+  assert ipcTrait.ipc.send != nil, "ipc.send must be wired after initMonolithicModel"
+  echo "PASS: monolithic model init wires vtables"
+
 when isMainModule:
   testSchedulerTypes()
   testIpcTypes()
   testDriverTypes()
   testConfig()
+  testMonolithicInit()
   echo "All trait tests passed."
