@@ -20,6 +20,8 @@ import ../apps/ping/ping_embedded
 import ../apps/pingpong/pingpong_embedded
 import ../kernel/abi/nimix_abi as abiModule
 import ../mm/region_allocator
+import ../kernel/process_table
+import ../drivers/pit   # pitTicks()
 
 const
   ShellPrompt = "nimixos> "
@@ -39,6 +41,9 @@ type
     scLs            ## ls — list files on disk
     scRun           ## run <file> — load WASM from disk and execute
     scExec          ## exec <file> — load ELF from disk and jump to entry
+    scPs            ## ps — list all tasks with pid/class/state/cpu
+    scKill          ## kill <pid> — terminate task by PID
+    scStats         ## stats — scheduler stats + uptime
 
 # ── String helpers ─────────────────────────────────────────────────────────
 
@@ -76,12 +81,16 @@ proc parseCommand*(buf: openArray[char], len: int): ShellCommand =
   if bufEq(buf, first, last, "model"):     return scModel
   if bufEq(buf, first, last, "load ping"):      return scLoadPing
   if bufEq(buf, first, last, "load pingpong"):  return scLoadPingpong
-  if bufEq(buf, first, last, "ls"):             return scLs
-  # "run <file>" and "exec <file>" — prefix match
+  if bufEq(buf, first, last, "ls"):    return scLs
+  if bufEq(buf, first, last, "ps"):    return scPs
+  if bufEq(buf, first, last, "stats"): return scStats
+  # "run <file>", "exec <file>", "kill <pid>" — prefix match
   if last - first >= 3 and buf[first] == 'r' and buf[first+1] == 'u' and
      buf[first+2] == 'n' and buf[first+3] == ' ':  return scRun
   if last - first >= 4 and buf[first] == 'e' and buf[first+1] == 'x' and
      buf[first+2] == 'e' and buf[first+3] == 'c' and buf[first+4] == ' ':  return scExec
+  if last - first >= 4 and buf[first] == 'k' and buf[first+1] == 'i' and
+     buf[first+2] == 'l' and buf[first+3] == 'l' and buf[first+4] == ' ':  return scKill
   scUnknown
 
 # ── Command implementations ────────────────────────────────────────────────
@@ -98,6 +107,100 @@ proc cmdHelp() =
   kprint("  ls               - list files on disk\n")
   kprint("  run <file.wasm>  - load and run WASM from disk\n")
   kprint("  exec <file.elf>  - load and execute ELF from disk\n")
+  kprint("  ps               - list all tasks\n")
+  kprint("  kill <pid>       - terminate task by PID\n")
+  kprint("  stats            - scheduler statistics and uptime\n")
+
+proc cmdPs() =
+  kprint("PID  CLASS      STATE    PRI  CPU%  NAME\n")
+  kprint("---  ---------  -------  ---  ----  ----------------\n")
+  let uptime = procTable.stats.uptimeTicks
+  for i in 0 ..< process_table.MaxTasks:
+    let t = procTable.tasks[i]
+    if not t.used: continue
+    # PID
+    defaultSerial.putInt(int64(t.pid))
+    kprint("    ")
+    # Class
+    case t.class
+    of tcRealtime: kprint("realtime  ")
+    of tcServer:   kprint("server    ")
+    of tcApp:      kprint("app       ")
+    # State
+    case t.state
+    of ptsReady:   kprint("ready    ")
+    of ptsRunning: kprint("running  ")
+    of ptsBlocked: kprint("blocked  ")
+    of ptsZombie:  kprint("zombie   ")
+    # Priority
+    defaultSerial.putInt(int64(t.priority))
+    kprint("    ")
+    # CPU% (integer approximation)
+    if uptime > 0:
+      let pct = (t.cpuTicks * 100) div uptime
+      defaultSerial.putInt(int64(pct))
+      kprint("%")
+    else:
+      kprint("0%")
+    kprint("   ")
+    # Name
+    defaultSerial.putString(t.getName())
+    kprint("\n")
+
+proc cmdKill(buf: openArray[char]; first, last: int) =
+  # Parse PID from "kill <pid>"
+  var si = first + 5  # skip "kill "
+  while si <= last and buf[si] == ' ': inc si
+  var pid: uint32 = 0
+  while si <= last and buf[si] >= '0' and buf[si] <= '9':
+    pid = pid * 10 + uint32(ord(buf[si]) - ord('0'))
+    inc si
+  if pid == 0:
+    kprint("Usage: kill <pid>\n")
+    return
+  let slot = procFindPid(pid)
+  if slot < 0:
+    kprint("kill: no such process\n")
+    return
+  let name = procTable.tasks[slot].getName()
+  let region = procTable.tasks[slot].regionSlot
+  discard procKill(slot)
+  if region >= 0:
+    regionFree(RegionHandle(region))
+  kprint("killed: ")
+  defaultSerial.putString(name)
+  kprint("\n")
+
+proc cmdStats() =
+  let s = procTable.stats
+  let uptime = s.uptimeTicks
+  kprint("Uptime:   ")
+  defaultSerial.putInt(int64(uptime))
+  kprint(" ticks (")
+  defaultSerial.putInt(int64(uptime div 100))
+  kprint("s)\n")
+  kprint("Switches: ")
+  defaultSerial.putInt(int64(s.totalSwitches))
+  kprint("\nIdle:     ")
+  defaultSerial.putInt(int64(s.idleTicks))
+  kprint(" ticks\n")
+  kprint("Tasks:    ")
+  defaultSerial.putInt(int64(procTable.taskCount))
+  kprint("/")
+  defaultSerial.putInt(int64(process_table.MaxTasks))
+  kprint("\nCPU by class:\n")
+  let classNames = ["realtime", "server  ", "app     "]
+  for c in 0..2:
+    kprint("  ")
+    kprint(classNames[c])
+    kprint(": ")
+    defaultSerial.putInt(int64(s.ticksPerClass[c]))
+    kprint(" ticks")
+    if uptime > 0:
+      kprint(" (")
+      defaultSerial.putInt(int64(s.ticksPerClass[c] * 100 div uptime))
+      kprint("%)")
+    kprint("\n")
 
 proc cmdVersion() =
   kprint("NimixOS v0.1.0\n")
@@ -277,9 +380,12 @@ proc cmdExec(filename: cstring) =
       return
 
     kprint("Calling appMain...\n")
+    # Register in process table so ps/kill can see it
+    let procSlot = procSpawn(filename, nil, tcApp, 128, int32(slot))
     let entry = cast[proc() {.nimcall.}](loaded.appMain)
     entry()
-    # App returned — free its region so the slot can be reused
+    # App returned — unregister and free its region
+    if procSlot >= 0: discard procKill(procSlot)
     regionFree(slot)
   else:
     # ET_EXEC — direct load to fixed p_vaddr (legacy path, no relocation)
@@ -351,6 +457,9 @@ proc runShell*(physMgr: PhysicalMemManager) =
           fname[fi] = inputBuf[si]; inc fi; inc si
         fname[fi] = '\0'
         cmdExec(cast[cstring](addr fname[0]))
+      of scPs:    cmdPs()
+      of scKill:  cmdKill(inputBuf, first, last)
+      of scStats: cmdStats()
       of scEmpty:   discard
       of scUnknown: cmdUnknown(inputBuf, first, last)
       # Reset buffer
