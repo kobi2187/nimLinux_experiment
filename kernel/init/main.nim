@@ -32,6 +32,7 @@ import ../../servers/ping_server
 import ../../ipc/server_chan
 import ../../fs/fatfs
 import ../../mm/region_allocator
+import ../../kernel/process_table
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Linker Script Symbols
@@ -358,6 +359,11 @@ proc runKernel(bootInfo: ptr BootInfo) =
   regionAllocInit()
   serverChanRegistryInit()
   pingServerInit()
+
+  # Register well-known kernel tasks in the process table
+  discard procSpawn("shell",       nil, tcServer,   128)
+  discard procSpawn("ping_server", nil, tcServer,   100)
+  discard procSpawn("event_srv",   nil, tcRealtime, 200)
 
   # Mount filesystem (non-fatal — disk may not be present)
   discard fsMount()

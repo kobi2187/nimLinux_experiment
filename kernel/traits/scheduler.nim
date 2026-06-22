@@ -35,12 +35,14 @@ type
   SchedulerVTable* = object
     ## Virtual dispatch table for the scheduler.
     ## Set by the chosen kernel model during init.
-    spawn*:   proc(entry: TaskProc, priority: TaskPriority): Result[TaskId, SchedulerError] {.nimcall.}
-    `yield`*: proc() {.nimcall.}
-    blockTask*: proc(id: TaskId): Result[void, SchedulerError] {.nimcall.}
-    wake*:    proc(id: TaskId): Result[void, SchedulerError] {.nimcall.}
-    current*: proc(): TaskId {.nimcall.}
-    exit*:    proc() {.nimcall.}
+    spawn*:      proc(entry: TaskProc, priority: TaskPriority): Result[TaskId, SchedulerError] {.nimcall.}
+    spawnNamed*: proc(name: cstring; entry: TaskProc; priority: TaskPriority; cls: uint8): Result[TaskId, SchedulerError] {.nimcall.}
+    `yield`*:    proc() {.nimcall.}
+    blockTask*:  proc(id: TaskId): Result[void, SchedulerError] {.nimcall.}
+    wake*:       proc(id: TaskId): Result[void, SchedulerError] {.nimcall.}
+    current*:    proc(): TaskId {.nimcall.}
+    exit*:       proc() {.nimcall.}
+    kill*:       proc(id: TaskId): Result[void, SchedulerError] {.nimcall.}
 
 proc `==`*(a, b: TaskId): bool {.inline.} = uint32(a) == uint32(b)
 

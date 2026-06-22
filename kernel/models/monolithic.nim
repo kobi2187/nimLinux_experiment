@@ -4,15 +4,18 @@
 ## Wires up the global `scheduler` and `ipc` vtables using direct in-kernel
 ## function calls. No privilege-level separation — everything runs in ring 0.
 ##
-## Scheduler: simple round-robin over a fixed task table (MaxTasks slots).
+## Scheduler: three-class (Realtime/Server/App) ring scheduler backed by
+##            the global ProcessTable (kernel/process_table.nim).
 ## IPC:       ring-buffer channels (MaxChannels slots, ChannelBufSize=8 msgs).
 
 import ../../core/types
+import ../../core/log
 import ../../kernel/config
 import ../../kernel/traits/scheduler as schedTrait
 import ../../kernel/traits/ipc as ipcTrait
 import ../../kernel/abi/nimix_abi as abiModule
 import ../../kernel/abi/nimix_abi_impl
+import ../../kernel/process_table
 
 # Re-export the trait types so callers can use them without further imports
 export schedTrait
@@ -24,22 +27,6 @@ export ipcTrait
 
 const
   ChannelBufSize* = 8   ## Ring-buffer capacity per IPC channel
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Task Table
-# ═══════════════════════════════════════════════════════════════════════════
-
-type
-  TaskEntry = object
-    used:     bool
-    state:    TaskState
-    entry:    TaskProc
-    priority: TaskPriority
-
-var
-  taskTable:   array[MaxTasks, TaskEntry]
-  taskCount:   uint32 = 0
-  currentTask: uint32 = 0
 
 # ═══════════════════════════════════════════════════════════════════════════
 # IPC Channel Ring Buffer
@@ -57,57 +44,65 @@ var
   channels: array[MaxChannels, Channel]
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Scheduler Implementation — Round-Robin
+# Scheduler Implementation — Three-Class Ring Scheduler
 # ═══════════════════════════════════════════════════════════════════════════
 
-proc monoSpawn(entry: TaskProc, priority: TaskPriority): Result[TaskId, SchedulerError] {.nimcall.} =
-  if taskCount >= uint32(MaxTasks):
+proc monoSpawn(entry: schedTrait.TaskProc; priority: TaskPriority): Result[TaskId, SchedulerError] {.nimcall.} =
+  let slot = procSpawn("task", entry, tcApp, uint8(priority))
+  if slot < 0:
     return Result[TaskId, SchedulerError](isOk: false, error: seOutOfSlots)
-  for i in 0 ..< MaxTasks:
-    if not taskTable[i].used:
-      taskTable[i].used     = true
-      taskTable[i].state    = tsReady
-      taskTable[i].entry    = entry
-      taskTable[i].priority = priority
-      inc taskCount
-      return Result[TaskId, SchedulerError](isOk: true, value: TaskId(uint32(i)))
-  Result[TaskId, SchedulerError](isOk: false, error: seOutOfSlots)
+  Result[TaskId, SchedulerError](isOk: true, value: TaskId(uint32(slot)))
+
+proc monoSpawnNamed(name: cstring; entry: schedTrait.TaskProc; priority: TaskPriority;
+                    cls: uint8): Result[TaskId, SchedulerError] {.nimcall.} =
+  let taskClass = if cls <= 2: TaskClass(cls) else: tcApp
+  let slot = procSpawn(name, entry, taskClass, uint8(priority))
+  if slot < 0:
+    return Result[TaskId, SchedulerError](isOk: false, error: seOutOfSlots)
+  Result[TaskId, SchedulerError](isOk: true, value: TaskId(uint32(slot)))
 
 proc monoYield() {.nimcall.} =
-  var next = (currentTask + 1) mod uint32(MaxTasks)
-  for _ in 0 ..< MaxTasks:
-    if taskTable[next].used and taskTable[next].state == tsReady:
-      currentTask = next
-      return
-    next = (next + 1) mod uint32(MaxTasks)
+  let next = procPickNext(procTable)
+  if next >= 0:
+    procTable.current = next
+    procTable.tasks[next].state = ptsRunning
+    inc procTable.tasks[next].switches
+    inc procTable.stats.totalSwitches
 
 proc monoBlock(id: TaskId): Result[void, SchedulerError] {.nimcall.} =
-  let idx = uint32(id)
-  if idx >= uint32(MaxTasks) or not taskTable[idx].used:
+  let idx = int(uint32(id))
+  if idx >= process_table.MaxTasks or not procTable.tasks[idx].used:
     return Result[void, SchedulerError](isOk: false, error: seInvalidTask)
-  taskTable[idx].state = tsBlocked
+  if procTable.tasks[idx].state == ptsReady:
+    process_table.ringRemove(procTable, int16(idx), int(procTable.tasks[idx].class))
+  procTable.tasks[idx].state = ptsBlocked
   Result[void, SchedulerError](isOk: true)
 
 proc monoWake(id: TaskId): Result[void, SchedulerError] {.nimcall.} =
-  let idx = uint32(id)
-  if idx >= uint32(MaxTasks) or not taskTable[idx].used:
+  let idx = int(uint32(id))
+  if idx >= process_table.MaxTasks or not procTable.tasks[idx].used:
     return Result[void, SchedulerError](isOk: false, error: seInvalidTask)
-  if taskTable[idx].state != tsBlocked:
+  if procTable.tasks[idx].state != ptsBlocked:
     return Result[void, SchedulerError](isOk: false, error: seNotBlocked)
-  taskTable[idx].state = tsReady
+  procTable.tasks[idx].state = ptsReady
+  process_table.ringInsertTail(procTable, int16(idx), int(procTable.tasks[idx].class))
   Result[void, SchedulerError](isOk: true)
 
 proc monoCurrent(): TaskId {.nimcall.} =
-  TaskId(currentTask)
+  TaskId(uint32(if procTable.current >= 0: procTable.current else: 0))
 
 proc monoExit() {.nimcall.} =
-  let idx = currentTask
-  if taskTable[idx].used:
-    taskTable[idx].used  = false
-    taskTable[idx].state = tsZombie
-    if taskCount > 0:
-      dec taskCount
+  let slot = procTable.current
+  if slot >= 0:
+    discard procKill(slot)
   monoYield()
+
+proc monoKill(id: TaskId): Result[void, SchedulerError] {.nimcall.} =
+  let slot = procFindPid(uint32(id))
+  if slot < 0:
+    return Result[void, SchedulerError](isOk: false, error: seInvalidTask)
+  discard procKill(slot)
+  Result[void, SchedulerError](isOk: true)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # IPC Implementation — Direct Ring-Buffer Copy
@@ -166,10 +161,8 @@ proc initMonolithicModel*() =
   ## Populate the global scheduler and ipc vtables.
   ## Must be called once during kernel init before any task or IPC operations.
 
-  # Zero out task table
-  for i in 0 ..< MaxTasks:
-    taskTable[i].used  = false
-    taskTable[i].state = tsReady
+  # Initialise process table (three-class ring scheduler)
+  procTableInit()
 
   # Zero out channel table
   for i in 0 ..< MaxChannels:
@@ -178,18 +171,16 @@ proc initMonolithicModel*() =
     channels[i].tail   = 0
     channels[i].count  = 0
 
-  taskCount   = 0
-  currentTask = 0
-
-  # Wire scheduler vtable — build local copy first to avoid `spawn` keyword
-  # ambiguity at the call site (Nim treats `scheduler.spawn` as parallel spawn)
+  # Wire scheduler vtable
   var sv: SchedulerVTable
-  sv.spawn     = monoSpawn
-  sv.`yield`   = monoYield
-  sv.blockTask = monoBlock
-  sv.wake      = monoWake
-  sv.current   = monoCurrent
-  sv.exit      = monoExit
+  sv.spawn       = monoSpawn
+  sv.spawnNamed  = monoSpawnNamed
+  sv.`yield`     = monoYield
+  sv.blockTask   = monoBlock
+  sv.wake        = monoWake
+  sv.current     = monoCurrent
+  sv.exit        = monoExit
+  sv.kill        = monoKill
   schedTrait.scheduler = sv
 
   # Wire IPC vtable
