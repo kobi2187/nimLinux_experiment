@@ -18,6 +18,8 @@ import ../runtime/elf_loader
 import ../fs/fatfs
 import ../apps/ping/ping_embedded
 import ../apps/pingpong/pingpong_embedded
+import ../kernel/abi/nimix_abi as abiModule
+import ../mm/region_allocator
 
 const
   ShellPrompt = "nimixos> "
@@ -206,7 +208,10 @@ proc cmdRun(filename: cstring) =
     kprint("WASM execution failed\n")
 
 proc cmdExec(filename: cstring) =
-  ## Load an ELF binary from disk and jump to its entry point.
+  ## Load an ELF binary from disk.
+  ## Handles both ET_EXEC (direct load) and ET_DYN (PIE with relocation).
+  ## PIE apps each get their own non-overlapping virtual region from
+  ## the region allocator — so multiple apps can coexist simultaneously.
   if not fsMounted and not fsMount():
     kprint("No disk available\n")
     return
@@ -219,14 +224,62 @@ proc cmdExec(filename: cstring) =
   if res != fOk:
     kprint("File read failed\n")
     return
-  let loaded = elfLoad(cast[ptr byte](addr diskFileBuf[0]), nbytes)
-  if loaded.err != elfOk:
-    kprint("ELF load failed\n")
-    return
-  kprint("Jumping to ELF entry...\n")
-  # Cast entry point to a proc and call it
-  let entry = cast[proc() {.nimcall.}](loaded.entry)
-  entry()
+
+  let dataBuf = cast[ptr byte](addr diskFileBuf[0])
+
+  # Detect PIE (ET_DYN=3) vs non-PIE (ET_EXEC=2) from e_type at offset 16
+  let elfType = cast[ptr uint16](cast[uint64](dataBuf) + 16)[]
+
+  if elfType == 3:  # ET_DYN — PIE
+    kprint("PIE ELF detected, loading with relocation...\n")
+
+    # Ask the region allocator for a slot sized to this binary.
+    # We don't know exact size until after parsing, so use RegionSize as
+    # upper bound — the allocator enforces it fits.
+    let slot = regionAlloc(RegionSize)
+    if not regionValid(slot):
+      kprint("No free region slots\n")
+      return
+    let base = regionBase(slot)
+    klogInt(llInfo, "ELF PIE: region base=0x", int64(base))
+
+    # ABI patch table — maps weak stub names to real kernel function addresses
+    var patches: array[4, AbiPatch]
+    patches[0] = AbiPatch(name: "nimixWrite",
+                          fn: cast[uint64](abiModule.nimixWrite))
+    patches[1] = AbiPatch(name: "nimixExit",
+                          fn: cast[uint64](abiModule.nimixExit))
+    patches[2] = AbiPatch(name: "nimixAllocRegion",
+                          fn: cast[uint64](abiModule.nimixAllocRegion))
+    patches[3] = AbiPatch(name: "nimixFreeRegion",
+                          fn: cast[uint64](abiModule.nimixFreeRegion))
+
+    let loaded = elfLoadPie(dataBuf, nbytes, base,
+                            cast[ptr UncheckedArray[AbiPatch]](addr patches[0]),
+                            4)
+    if loaded.err != elfOk:
+      kprint("PIE ELF load failed\n")
+      regionFree(slot)
+      return
+    if loaded.appMain == 0:
+      kprint("appMain not found in PIE ELF\n")
+      regionFree(slot)
+      return
+
+    kprint("Calling appMain...\n")
+    let entry = cast[proc() {.nimcall.}](loaded.appMain)
+    entry()
+    # App returned — free its region so the slot can be reused
+    regionFree(slot)
+  else:
+    # ET_EXEC — direct load to fixed p_vaddr (legacy path, no relocation)
+    let loaded = elfLoad(dataBuf, nbytes)
+    if loaded.err != elfOk:
+      kprint("ELF load failed\n")
+      return
+    kprint("Jumping to ELF entry...\n")
+    let entry = cast[proc() {.nimcall.}](loaded.entry)
+    entry()
 
 # ── Main shell loop ────────────────────────────────────────────────────────
 

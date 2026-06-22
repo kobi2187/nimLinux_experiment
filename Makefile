@@ -35,7 +35,7 @@ KERNEL_OUT = build/main
 ISO_OUT    = nimixos.iso
 ISO_ALL_OUT = nimixos-all-kernels.iso
 
-.PHONY: all build apps iso iso-all qemu qemu-all qemu-gui run clean test
+.PHONY: all build apps nim-apps iso iso-all qemu qemu-all qemu-gui run clean test
 
 # Default target: full cycle
 all: build iso qemu
@@ -44,6 +44,31 @@ all: build iso qemu
 # Rebuilds .wasm from .c and regenerates the embedded Nim byte array.
 CLANG_WASM = clang --target=wasm32 -nostdlib -Wl,--no-entry \
              -Wl,--export=_start -Wl,--allow-undefined -O2
+
+# ── Compile Nim userspace apps (PIE, --os:standalone) ────────────────────────
+# These are native Nim binaries that link against the kernel ABI.
+# Always compiled as PIE so the SASOS loader can place them anywhere.
+# Weak stub .o — provides nimixWrite/nimixExit/etc as weak symbols so the linker
+# resolves them. The kernel loader overwrites them with jmp <real_addr> at runtime.
+build/nimix_abi_stub.o: kernel/abi/nimix_abi_stub.c
+	@mkdir -p build
+	gcc -c -fPIC -ffreestanding -fno-stack-protector -o $@ $<
+
+NIM_APP = $(NIM) c --skipParentCfg --skipUserCfg \
+          --os:standalone --mm:arc --cpu:amd64 --noMain \
+          -d:StandaloneHeapSize=1048576 \
+          -d:noSignalHandler -d:nimNoLentIterators \
+          --passC:"-ffreestanding -fno-stack-protector -mno-red-zone -fPIC" \
+          --passC:"-I$(CURDIR)/kernel/abi" \
+          --passL:"-nostdlib -pie $(CURDIR)/build/nimix_abi_stub.o" \
+          --path:$(CURDIR) \
+          --path:$(CURDIR)/apps/nim
+
+nim-apps: build/apps/hello.elf
+
+build/apps/hello.elf: apps/nim/hello/hello.nim kernel/abi/nimix_abi.h build/nimix_abi_stub.o
+	@mkdir -p build/apps
+	$(NIM_APP) -o:$@ $<
 
 apps: apps/ping/ping_embedded.nim
 
