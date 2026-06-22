@@ -50,6 +50,10 @@ type
     fsReadDir*:   proc(path: cstring; buf: pointer; len: int): int {.nimcall.}
       ## List directory entries as newline-separated names. Returns bytes written.
 
+    # ── Capability-gated IPC ──────────────────────────────────────────────────
+    capSend*: proc(name: cstring; tok: uint64; data: pointer; dataLen: int): int {.nimcall.}
+      ## Like chanSend but requires a valid capIpc token. Returns -3 on permission denied.
+
 var nimixAbi*: NimixAbiVTable
   ## Global ABI vtable. Set once at boot by the chosen kernel model init.
   ## Apps never call this directly — the ELF loader patches weak stubs with

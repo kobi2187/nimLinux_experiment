@@ -43,3 +43,31 @@ proc makeToken*(serial: uint32; slot: int): CapToken =
 
 proc tokenSlot*(t: CapToken): int = int(uint64(t) and 0xFFFFFFFF'u64)
 proc tokenSerial*(t: CapToken): uint32 = uint32(uint64(t) shr 32)
+
+proc capGrant*(pid: uint32; right: CapRight): CapToken =
+  ## Mint a new capability token for `pid` with `right`.
+  ## Returns NullCap if table is full.
+  for i in 0 ..< MaxCaps:
+    if not gCapTable.entries[i].valid:
+      let tok = makeToken(gCapTable.nextSerial, i)
+      inc gCapTable.nextSerial
+      if gCapTable.nextSerial == 0: gCapTable.nextSerial = 1  # skip 0
+      gCapTable.entries[i] = CapEntry(token: tok, pid: pid, right: right, valid: true)
+      return tok
+  NullCap
+
+proc capRevoke*(tok: CapToken) =
+  ## Invalidate a capability token.
+  if tok.isNull: return
+  let slot = tokenSlot(tok)
+  if slot < 0 or slot >= MaxCaps: return
+  if gCapTable.entries[slot].token == tok:
+    gCapTable.entries[slot].valid = false
+
+proc capCheck*(tok: CapToken; right: CapRight): bool =
+  ## Returns true iff tok is valid, not revoked, and grants `right`.
+  if tok.isNull: return false
+  let slot = tokenSlot(tok)
+  if slot < 0 or slot >= MaxCaps: return false
+  let e = gCapTable.entries[slot]
+  e.valid and e.token == tok and e.right == right

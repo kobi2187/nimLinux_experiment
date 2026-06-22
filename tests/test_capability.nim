@@ -41,6 +41,47 @@ proc testTokenRoundTrip() =
   assert tokenSlot(t) == slot, "slot round-trip failed"
   echo "PASS: tokenSlot/tokenSerial round-trip"
 
+proc testCapGrantReturnsNonNull() =
+  capTableInit()
+  let tok = capGrant(1, capIpc)
+  assert not isNull(tok), "capGrant must return a non-null token"
+  echo "PASS: capGrant returns non-null token"
+
+proc testCapCheckPassesForCorrectRight() =
+  capTableInit()
+  let tok = capGrant(1, capIpc)
+  assert capCheck(tok, capIpc), "capCheck must pass for correct right"
+  echo "PASS: capCheck passes for correct right"
+
+proc testCapCheckFailsForWrongRight() =
+  capTableInit()
+  let tok = capGrant(1, capIpc)
+  assert not capCheck(tok, capFs), "capCheck must fail for wrong right"
+  echo "PASS: capCheck fails for wrong right"
+
+proc testCapCheckFailsAfterRevoke() =
+  capTableInit()
+  let tok = capGrant(1, capIpc)
+  capRevoke(tok)
+  assert not capCheck(tok, capIpc), "capCheck must fail after revoke"
+  echo "PASS: capCheck fails after capRevoke"
+
+proc testDoubleRevokeIsSafe() =
+  capTableInit()
+  let tok = capGrant(1, capIpc)
+  capRevoke(tok)
+  capRevoke(tok)  # must not crash
+  assert not capCheck(tok, capIpc)
+  echo "PASS: double-revoke is safe"
+
+proc testCapGrantFullTableReturnsNullCap() =
+  capTableInit()
+  for i in 0 ..< MaxCaps:
+    discard capGrant(uint32(i), capIpc)
+  let tok = capGrant(99, capIpc)
+  assert isNull(tok), "capGrant on full table must return NullCap"
+  echo "PASS: capGrant returns NullCap when table is full"
+
 when isMainModule:
   testNullCapIsNull()
   testDifferentTokensNotEqual()
@@ -48,4 +89,10 @@ when isMainModule:
   testCapTableInitZeroesEntries()
   testMakeTokenEncoding()
   testTokenRoundTrip()
+  testCapGrantReturnsNonNull()
+  testCapCheckPassesForCorrectRight()
+  testCapCheckFailsForWrongRight()
+  testCapCheckFailsAfterRevoke()
+  testDoubleRevokeIsSafe()
+  testCapGrantFullTableReturnsNullCap()
   echo "All capability tests passed."

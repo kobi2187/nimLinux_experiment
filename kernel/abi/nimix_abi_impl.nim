@@ -6,6 +6,7 @@
 
 import nimix_abi
 import app_args
+import ../../kernel/cap/capability as cap
 import ../../core/serial
 import ../../core/log
 import ../../ipc/server_chan
@@ -157,3 +158,8 @@ proc abiProcKillPid*(pid: uint32): int {.nimcall.} =
 proc abiFsReadDir*(path: cstring; buf: pointer; len: int): int {.nimcall.} =
   ## Directory listing — not yet implemented.
   -1
+
+proc abiCapSend*(name: cstring; tok: uint64; data: pointer; dataLen: int): int {.nimcall.} =
+  ## Capability-gated chanSend. Returns -3 if token is invalid or lacks capIpc.
+  if not cap.capCheck(CapToken(tok), capIpc): return -3
+  abiChanSend(name, data, dataLen)
