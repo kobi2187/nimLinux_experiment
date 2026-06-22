@@ -128,6 +128,9 @@ proc cmdModel() =
 proc cmdClear() =
   for i in 0..39: defaultSerial.putChar('\n')
 
+proc kprintKV(label: string; value: int64; unit: string) =
+  kprint(label); kprintInt(value); kprint(unit)
+
 proc cmdMeminfo(physMgr: PhysicalMemManager) =
   if physMgr == nil:
     kprint("Memory manager not available\n")
@@ -136,9 +139,9 @@ proc cmdMeminfo(physMgr: PhysicalMemManager) =
   let usedMB  = int64(physMgr.usedFrames)  * 4096 div (1024 * 1024)
   let freeMB  = totalMB - usedMB
   kprint("Physical memory:\n")
-  kprint("  Total: "); kprintInt(totalMB); kprint(" MB\n")
-  kprint("  Used:  "); kprintInt(usedMB);  kprint(" MB\n")
-  kprint("  Free:  "); kprintInt(freeMB);  kprint(" MB\n")
+  kprintKV("  Total: ", totalMB, " MB\n")
+  kprintKV("  Used:  ", usedMB,  " MB\n")
+  kprintKV("  Free:  ", freeMB,  " MB\n")
 
 proc cmdUnknown(buf: openArray[char], first, last: int) =
   kprint("Unknown command: '")
@@ -170,14 +173,65 @@ proc cmdRun(filename: cstring) =
   if r != wasmOk:
     kprint("WASM execution failed\n")
 
+proc buildAbiPatches(): array[14, AbiPatch] =
+  ## Build the kernel ABI patch table injected into every PIE ELF at load time.
+  proc fn(name: cstring; f: pointer): AbiPatch = AbiPatch(name: name, fn: cast[uint64](f))
+  result[0]  = fn("nimixWrite",          abiModule.nimixWrite)
+  result[1]  = fn("nimixExit",           abiModule.nimixExit)
+  result[2]  = fn("nimixAllocRegion",    abiModule.nimixAllocRegion)
+  result[3]  = fn("nimixFreeRegion",     abiModule.nimixFreeRegion)
+  result[4]  = fn("nimixChanSend",       abiModule.nimixChanSend)
+  result[5]  = fn("nimixChanRecv",       abiModule.nimixChanRecv)
+  result[6]  = fn("nimixEventPublish",   abiModule.nimixEventPublish)
+  result[7]  = fn("nimixEventSubscribe", abiModule.nimixEventSubscribe)
+  result[8]  = fn("nimixEventPoll",      abiModule.nimixEventPoll)
+  result[9]  = fn("nimixGetArgs",        abiModule.nimixGetArgs)
+  result[10] = fn("nimixProcList",       abiModule.nimixProcList)
+  result[11] = fn("nimixSchedStats",     abiModule.nimixSchedStats)
+  result[12] = fn("nimixProcKillPid",    abiModule.nimixProcKillPid)
+  result[13] = fn("nimixFsReadDir",      abiModule.nimixFsReadDir)
+
+proc runPieElf(filename: cstring; dataBuf: ptr byte; nbytes: int; appArgs: cstring) =
+  ## Load and run a PIE (ET_DYN) ELF. Allocates a region, patches ABI stubs,
+  ## runs appMain, then frees the region.
+  let slot = regionAlloc(RegionSize)
+  if not regionValid(slot):
+    kprint("No free region slots\n"); return
+  let base = regionBase(slot)
+  klogInt(llInfo, "ELF PIE: region base=0x", int64(base))
+
+  var patches = buildAbiPatches()
+  let loaded = elfLoadPie(dataBuf, nbytes, base,
+                          cast[ptr UncheckedArray[AbiPatch]](addr patches[0]),
+                          patches.len)
+  if loaded.err != elfOk:
+    kprint("PIE ELF load failed\n"); regionFree(slot); return
+  if loaded.appMain == 0:
+    kprint("appMain not found in PIE ELF\n"); regionFree(slot); return
+
+  kprint("Calling appMain...\n")
+  let procSlot = procSpawn(filename, nil, tcApp, 128, int32(slot))
+  setAppArgs(int(slot), appArgs)
+  let prevCurrent = procTable.current
+  if procSlot >= 0: procTable.current = int16(procSlot)
+  cast[proc() {.nimcall.}](loaded.appMain)()
+  procTable.current = prevCurrent
+  if procSlot >= 0: discard procKill(procSlot)
+  regionFree(slot)
+
+proc runExecElf(dataBuf: ptr byte; nbytes: int) =
+  ## Load and run a non-PIE (ET_EXEC) ELF at its fixed vaddr.
+  let loaded = elfLoad(dataBuf, nbytes)
+  if loaded.err != elfOk:
+    kprint("ELF load failed\n"); return
+  kprint("Jumping to ELF entry...\n")
+  cast[proc() {.nimcall.}](loaded.entry)()
+
 proc cmdExec(filename: cstring; appArgs: cstring = nil) =
-  ## Load an ELF binary from disk.
-  ## Handles both ET_EXEC (direct load) and ET_DYN (PIE with relocation).
-  ## PIE apps each get their own non-overlapping virtual region from
-  ## the region allocator — so multiple apps can coexist simultaneously.
+  ## Load an ELF binary from disk and execute it.
+  ## Detects PIE (ET_DYN) vs non-PIE (ET_EXEC) and dispatches accordingly.
   if not fsMounted and not fsMount():
-    kprint("No disk available\n")
-    return
+    kprint("No disk available\n"); return
   kprint("Loading ELF: ")
   defaultSerial.putString(filename)
   kprint("...\n")
@@ -185,90 +239,25 @@ proc cmdExec(filename: cstring; appArgs: cstring = nil) =
                                   cast[ptr byte](addr diskFileBuf[0]),
                                   diskFileBuf.len)
   if res != fOk:
-    kprint("File read failed\n")
-    return
-
+    kprint("File read failed\n"); return
   let dataBuf = cast[ptr byte](addr diskFileBuf[0])
-
-  # Detect PIE (ET_DYN=3) vs non-PIE (ET_EXEC=2) from e_type at offset 16
-  let elfType = cast[ptr uint16](cast[uint64](dataBuf) + 16)[]
-
-  if elfType == 3:  # ET_DYN — PIE
-    kprint("PIE ELF detected, loading with relocation...\n")
-
-    # Ask the region allocator for a slot sized to this binary.
-    # We don't know exact size until after parsing, so use RegionSize as
-    # upper bound — the allocator enforces it fits.
-    let slot = regionAlloc(RegionSize)
-    if not regionValid(slot):
-      kprint("No free region slots\n")
-      return
-    let base = regionBase(slot)
-    klogInt(llInfo, "ELF PIE: region base=0x", int64(base))
-
-    # ABI patch table — all 9 kernel ABI symbols injected at load time
-    var patches: array[14, AbiPatch]
-    patches[0] = AbiPatch(name: "nimixWrite",
-                          fn: cast[uint64](abiModule.nimixWrite))
-    patches[1] = AbiPatch(name: "nimixExit",
-                          fn: cast[uint64](abiModule.nimixExit))
-    patches[2] = AbiPatch(name: "nimixAllocRegion",
-                          fn: cast[uint64](abiModule.nimixAllocRegion))
-    patches[3] = AbiPatch(name: "nimixFreeRegion",
-                          fn: cast[uint64](abiModule.nimixFreeRegion))
-    patches[4] = AbiPatch(name: "nimixChanSend",
-                          fn: cast[uint64](abiModule.nimixChanSend))
-    patches[5] = AbiPatch(name: "nimixChanRecv",
-                          fn: cast[uint64](abiModule.nimixChanRecv))
-    patches[6] = AbiPatch(name: "nimixEventPublish",
-                          fn: cast[uint64](abiModule.nimixEventPublish))
-    patches[7] = AbiPatch(name: "nimixEventSubscribe",
-                          fn: cast[uint64](abiModule.nimixEventSubscribe))
-    patches[8] = AbiPatch(name: "nimixEventPoll",
-                          fn: cast[uint64](abiModule.nimixEventPoll))
-    patches[9]  = AbiPatch(name: "nimixGetArgs",
-                           fn: cast[uint64](abiModule.nimixGetArgs))
-    patches[10] = AbiPatch(name: "nimixProcList",
-                           fn: cast[uint64](abiModule.nimixProcList))
-    patches[11] = AbiPatch(name: "nimixSchedStats",
-                           fn: cast[uint64](abiModule.nimixSchedStats))
-    patches[12] = AbiPatch(name: "nimixProcKillPid",
-                           fn: cast[uint64](abiModule.nimixProcKillPid))
-    patches[13] = AbiPatch(name: "nimixFsReadDir",
-                           fn: cast[uint64](abiModule.nimixFsReadDir))
-
-    let loaded = elfLoadPie(dataBuf, nbytes, base,
-                            cast[ptr UncheckedArray[AbiPatch]](addr patches[0]),
-                            14)
-    if loaded.err != elfOk:
-      kprint("PIE ELF load failed\n")
-      regionFree(slot)
-      return
-    if loaded.appMain == 0:
-      kprint("appMain not found in PIE ELF\n")
-      regionFree(slot)
-      return
-
-    kprint("Calling appMain...\n")
-    let procSlot = procSpawn(filename, nil, tcApp, 128, int32(slot))
-    setAppArgs(int(slot), appArgs)
-    # Set current so abiGetArgs can find this app's regionSlot
-    let prevCurrent = procTable.current
-    if procSlot >= 0: procTable.current = int16(procSlot)
-    let entry = cast[proc() {.nimcall.}](loaded.appMain)
-    entry()
-    procTable.current = prevCurrent
-    if procSlot >= 0: discard procKill(procSlot)
-    regionFree(slot)
+  # e_type at ELF offset 16: 2=ET_EXEC, 3=ET_DYN
+  if cast[ptr uint16](cast[uint64](dataBuf) + 16)[] == 3:
+    runPieElf(filename, dataBuf, nbytes, appArgs)
   else:
-    # ET_EXEC — direct load to fixed p_vaddr (legacy path, no relocation)
-    let loaded = elfLoad(dataBuf, nbytes)
-    if loaded.err != elfOk:
-      kprint("ELF load failed\n")
-      return
-    kprint("Jumping to ELF entry...\n")
-    let entry = cast[proc() {.nimcall.}](loaded.entry)
-    entry()
+    runExecElf(dataBuf, nbytes)
+
+# ── Argument extraction ────────────────────────────────────────────────────
+
+proc extractArg[N: static int](buf: openArray[char]; first, last, skip: int;
+                                dst: var array[N, char]) =
+  ## Copy the token after `skip` bytes from `first` into `dst`, NUL-terminated.
+  var si = first + skip
+  while si <= last and buf[si] == ' ': inc si
+  var di = 0
+  while si <= last and di < N - 1:
+    dst[di] = buf[si]; inc di; inc si
+  dst[di] = '\0'
 
 # ── App exec helper ────────────────────────────────────────────────────────
 
@@ -320,32 +309,17 @@ proc runShell*(physMgr: PhysicalMemManager) =
           kprint("[wasm] error running pingpong\n")
       of scLs:      execApp("ls.elf", "/")
       of scRun:
-        # extract filename after "run "
         var fname: array[128, char]
-        var fi = 0
-        var si = first + 4  # skip "run "
-        while si <= last and fi < 127:
-          fname[fi] = inputBuf[si]; inc fi; inc si
-        fname[fi] = '\0'
+        extractArg(inputBuf, first, last, 4, fname)
         cmdRun(cast[cstring](addr fname[0]))
       of scExec:
         var fname: array[128, char]
-        var fi = 0
-        var si = first + 5  # skip "exec "
-        while si <= last and fi < 127:
-          fname[fi] = inputBuf[si]; inc fi; inc si
-        fname[fi] = '\0'
+        extractArg(inputBuf, first, last, 5, fname)
         cmdExec(cast[cstring](addr fname[0]))
       of scPs:    execApp("ps.elf", "")
       of scKill:
-        # Extract pid string after "kill "
         var pidBuf: array[32, char]
-        var pi = 0
-        var si = first + 5  # skip "kill "
-        while si <= last and inputBuf[si] == ' ': inc si
-        while si <= last and pi < 31:
-          pidBuf[pi] = inputBuf[si]; inc pi; inc si
-        pidBuf[pi] = '\0'
+        extractArg(inputBuf, first, last, 5, pidBuf)
         execApp("kill.elf", cast[cstring](addr pidBuf[0]))
       of scStats: execApp("stats.elf", "")
       of scEmpty:   discard

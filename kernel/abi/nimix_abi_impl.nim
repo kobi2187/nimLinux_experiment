@@ -84,33 +84,37 @@ proc abiGetArgs*(buf: pointer; len: int): int {.nimcall.} =
   let slot = int(procTable.tasks[procTable.current].regionSlot)
   getAppArgs(slot, buf, len)
 
+# ── Text serialisation helpers (used by abiProcList / abiSchedStats) ─────────
+
+proc bufEmit(dst: ptr UncheckedArray[char]; pos: var int; cap: int; s: cstring) =
+  var i = 0
+  while s[i] != '\0':
+    if pos < cap - 1: dst[pos] = s[i]; inc pos
+    inc i
+
+proc bufEmitUInt(dst: ptr UncheckedArray[char]; pos: var int; cap: int; n: uint64) =
+  if n == 0:
+    if pos < cap - 1: dst[pos] = '0'; inc pos
+    return
+  var tmp: array[20, char]; var ti = 0; var v = n
+  while v > 0:
+    tmp[ti] = char(ord('0') + int(v mod 10)); inc ti
+    v = v div 10
+  while ti > 0:
+    dec ti
+    if pos < cap - 1: dst[pos] = tmp[ti]; inc pos
+
 proc abiProcList*(buf: pointer; len: int): int {.nimcall.} =
   ## Serialize the process table as "pid class state name\n" lines.
   let dst = cast[ptr UncheckedArray[char]](buf)
   var pos = 0
-
-  proc emit(s: cstring) =
-    var i = 0
-    while s[i] != '\0':
-      if pos < len - 1: dst[pos] = s[i]; inc pos
-      inc i
-
-  proc emitUInt(n: uint64) =
-    if n == 0:
-      if pos < len - 1: dst[pos] = '0'; inc pos
-      return
-    var tmp: array[20, char]; var ti = 0; var v = n
-    while v > 0:
-      tmp[ti] = char(ord('0') + int(v mod 10)); inc ti
-      v = v div 10
-    while ti > 0:
-      dec ti
-      if pos < len - 1: dst[pos] = tmp[ti]; inc pos
+  template emit(s: cstring)   = bufEmit(dst, pos, len, s)
+  template emitU(n: uint64)   = bufEmitUInt(dst, pos, len, n)
 
   for i in 0 ..< MaxTasks:
     let t = procTable.tasks[i]
     if not t.used: continue
-    emitUInt(uint64(t.pid)); emit(" ")
+    emitU(uint64(t.pid)); emit(" ")
     case t.class
     of tcRealtime: emit("RT ")
     of tcServer:   emit("SV ")
@@ -129,30 +133,14 @@ proc abiSchedStats*(buf: pointer; len: int): int {.nimcall.} =
   ## Serialize scheduler stats as human-readable text.
   let dst = cast[ptr UncheckedArray[char]](buf)
   var pos = 0
-
-  proc emit(s: cstring) =
-    var i = 0
-    while s[i] != '\0':
-      if pos < len - 1: dst[pos] = s[i]; inc pos
-      inc i
-
-  proc emitUInt(n: uint64) =
-    if n == 0:
-      if pos < len - 1: dst[pos] = '0'; inc pos
-      return
-    var tmp: array[20, char]; var ti = 0; var v = n
-    while v > 0:
-      tmp[ti] = char(ord('0') + int(v mod 10)); inc ti
-      v = v div 10
-    while ti > 0:
-      dec ti
-      if pos < len - 1: dst[pos] = tmp[ti]; inc pos
+  template emit(s: cstring)   = bufEmit(dst, pos, len, s)
+  template emitU(n: uint64)   = bufEmitUInt(dst, pos, len, n)
 
   let s = procTable.stats
-  emit("Uptime:   "); emitUInt(s.uptimeTicks); emit(" ticks\n")
-  emit("Switches: "); emitUInt(s.totalSwitches); emit("\n")
-  emit("Idle:     "); emitUInt(s.idleTicks); emit(" ticks\n")
-  emit("Tasks:    "); emitUInt(uint64(procTable.taskCount)); emit("\n")
+  emit("Uptime:   "); emitU(s.uptimeTicks);             emit(" ticks\n")
+  emit("Switches: "); emitU(s.totalSwitches);            emit("\n")
+  emit("Idle:     "); emitU(s.idleTicks);                emit(" ticks\n")
+  emit("Tasks:    "); emitU(uint64(procTable.taskCount)); emit("\n")
 
   if pos < len: dst[pos] = '\0'
   pos
