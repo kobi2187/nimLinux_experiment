@@ -6,6 +6,7 @@ Usage:
     python3 tests/qemu_harness.py --iso nimixos.iso
     python3 tests/qemu_harness.py --iso nimixos.iso --disk disk.img --timeout 60
     python3 tests/qemu_harness.py --iso nimixos.iso --bios /usr/share/ovmf/OVMF.fd
+    python3 tests/qemu_harness.py --list
 
 Launches QEMU with a named pipe on /tmp/nimix, sends shell commands to the
 NimixOS serial console, and asserts patterns in the output.
@@ -27,17 +28,41 @@ PIPE_BASE = "/tmp/nimix"
 PIPE_IN   = PIPE_BASE + ".in"
 PIPE_OUT  = PIPE_BASE + ".out"
 
+PROMPT = "nimixos> "
+
 # ---------------------------------------------------------------------------
-# Built-in test cases: (name, command_or_None, expected_pattern)
+# Built-in test cases: (name, command_or_None, expected_pattern, timeout_s)
 # ---------------------------------------------------------------------------
-TESTS = [
-    ("boot",    None,       r"nimixos>"),
-    ("help",    "help",     r"Commands:"),
-    ("version", "version",  r"NimixOS"),
-    ("meminfo", "meminfo",  r"Physical memory"),
-    ("model",   "model",    r"Kernel model"),
-    ("unknown", "zzz",      r"Unknown command"),
-]
+def build_tests(disk=None):
+    """Return list of test dicts. disk-dependent tests are skipped if disk absent."""
+    tests = [
+        {"name": "boot",    "cmd": None,         "pattern": r"nimixos>",         "timeout": 30},
+        {"name": "help",    "cmd": "help",        "pattern": r"Commands:",        "timeout": 10},
+        {"name": "version", "cmd": "version",     "pattern": r"NimixOS",          "timeout": 10},
+        {"name": "model",   "cmd": "model",       "pattern": r"Kernel model",     "timeout": 10},
+        {"name": "unknown", "cmd": "zzz",         "pattern": r"Unknown command",  "timeout": 10},
+        {"name": "ps",      "cmd": "ps",          "pattern": r"PID",              "timeout": 10},
+        {"name": "stats",   "cmd": "stats",       "pattern": r"Uptime",           "timeout": 10},
+        {"name": "meminfo", "cmd": "meminfo",     "pattern": r"Physical memory",  "timeout": 10},
+    ]
+    # exec_hello requires disk image
+    if disk and os.path.exists(disk):
+        tests.append({
+            "name": "exec_hello",
+            "cmd": "exec hello.elf",
+            "pattern": r"Hello from",
+            "timeout": 15,
+        })
+    else:
+        tests.append({
+            "name": "exec_hello",
+            "cmd": "exec hello.elf",
+            "pattern": r"Hello from",
+            "timeout": 15,
+            "skip": True,
+            "skip_reason": "disk.img not present",
+        })
+    return tests
 
 
 class QemuHarness:
@@ -65,7 +90,6 @@ class QemuHarness:
 
     def start(self):
         """Create named pipes and launch QEMU."""
-        # Remove stale pipes
         for p in (PIPE_IN, PIPE_OUT):
             try:
                 os.remove(p)
@@ -87,21 +111,15 @@ class QemuHarness:
         if self.disk and os.path.exists(self.disk):
             cmd += ["-hda", self.disk]
 
-        # Launch QEMU; keep stdout/stderr quiet unless debugging
         self._proc = subprocess.Popen(
             cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
 
-        # Open the write end of .in (QEMU reads from it)
-        # Must open non-blocking first so we don't deadlock waiting for reader
         self._in_fd = open(PIPE_IN, "wb", buffering=0)
-
-        # Open the read end of .out (QEMU writes to it)
         self._out_fd = open(PIPE_OUT, "rb", buffering=0)
 
-        # Background reader thread fills self._buf
         self._reader = threading.Thread(target=self._read_loop, daemon=True)
         self._reader.start()
 
@@ -181,53 +199,101 @@ class QemuHarness:
         with self._buf_lock:
             self._buf = ""
 
-    def wait_prompt(self, timeout: float = None) -> bool:
-        """Wait for the initial shell prompt."""
+    def wait_for_prompt(self, timeout: float = None) -> str:
+        """
+        Wait specifically for the 'nimixos> ' shell prompt.
+
+        Returns the accumulated output when the prompt is found.
+        Raises TimeoutError with a descriptive message (including what was
+        received so far) if the prompt does not appear within `timeout` seconds.
+        """
         t = timeout if timeout is not None else self.timeout
-        ok, _ = self.expect(r"nimixos>", timeout=t)
-        return ok
+        deadline = time.monotonic() + t
+        prompt_re = re.compile(re.escape(PROMPT))
+        while time.monotonic() < deadline:
+            buf = self._get_buf()
+            if prompt_re.search(buf):
+                return buf
+            time.sleep(0.1)
+        buf = self._get_buf()
+        snippet = buf[-400:].replace("\r", "").strip()
+        raise TimeoutError(
+            f"Timed out after {t}s waiting for {PROMPT!r}. "
+            f"Received so far: {snippet!r}"
+        )
+
+    def wait_prompt(self, timeout: float = None) -> bool:
+        """Wait for the initial shell prompt. Returns True on success."""
+        try:
+            self.wait_for_prompt(timeout=timeout)
+            return True
+        except TimeoutError:
+            return False
 
 
 # ---------------------------------------------------------------------------
 # Test runner
 # ---------------------------------------------------------------------------
 
-def run_tests(harness: QemuHarness) -> bool:
-    """Run all TESTS.  Returns True if every test passes."""
+def run_tests(harness: QemuHarness, tests: list) -> bool:
+    """Run all tests.  Returns True if every non-skipped test passes."""
     print(f"\n{'='*60}")
     print("NimixOS QEMU Test Suite")
     print(f"{'='*60}")
 
-    all_pass = True
+    results = []  # list of (name, status, detail)
 
-    for name, cmd, pattern in TESTS:
+    for t in tests:
+        name    = t["name"]
+        cmd     = t["cmd"]
+        pattern = t["pattern"]
+        timeout = t.get("timeout", 10)
+
+        # Skip check
+        if t.get("skip"):
+            reason = t.get("skip_reason", "skipped")
+            print(f"  [SKIP] {name:<12}  ({reason})")
+            results.append((name, "SKIP", reason))
+            continue
+
         harness.clear_buf()
 
         if cmd is None:
-            # Boot test: just wait for initial prompt (already booted)
+            # Boot test: wait for initial prompt
             ok, output = harness.expect(pattern, timeout=harness.timeout)
         else:
             harness.send(cmd)
-            ok, output = harness.expect(pattern, timeout=10)
+            ok, output = harness.expect(pattern, timeout=timeout)
 
-        status = "PASS" if ok else "FAIL"
-        if not ok:
-            all_pass = False
-
-        print(f"  [{status}] {name:<12}  pattern={pattern!r}")
-        if not ok:
-            # Show last 400 chars of output for debugging
+        if ok:
+            print(f"  [PASS] {name:<12}  pattern={pattern!r}")
+            results.append((name, "PASS", None))
+        else:
             snippet = output[-400:].replace("\r", "").strip()
-            print(f"           Output (tail):\n{snippet}\n")
+            print(f"  [FAIL] {name:<12}  pattern={pattern!r}")
+            results.append((name, "FAIL", (pattern, snippet)))
 
         # Wait for next prompt before next test
         if cmd is not None:
             harness.expect(r"nimixos>", timeout=5)
 
+    # ------------------------------------------------------------------
+    # Structured summary
+    # ------------------------------------------------------------------
     print(f"{'='*60}")
-    print("Result:", "ALL PASS" if all_pass else "SOME TESTS FAILED")
+    passed  = sum(1 for _, s, _ in results if s == "PASS")
+    skipped = sum(1 for _, s, _ in results if s == "SKIP")
+    total   = len(results)
+    ran     = total - skipped
+    print(f"Results: {passed}/{ran} passed" +
+          (f"  ({skipped} skipped)" if skipped else ""))
+
+    failures = [(n, d) for n, s, d in results if s == "FAIL"]
+    for name, (pattern, snippet) in failures:
+        print(f"FAIL: {name} — expected {pattern!r} in output, got: {snippet!r}")
+
     print(f"{'='*60}\n")
-    return all_pass
+    return len(failures) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -240,7 +306,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument("--iso",     required=True,
+    parser.add_argument("--iso",     default=None,
                         help="Path to NimixOS ISO image")
     parser.add_argument("--disk",    default=None,
                         help="Path to disk image (optional)")
@@ -250,7 +316,22 @@ def main():
                         help="QEMU memory in MB (default: 256)")
     parser.add_argument("--timeout", type=int, default=30,
                         help="Boot timeout in seconds (default: 30)")
+    parser.add_argument("--list",    action="store_true",
+                        help="Print all test names without running them")
     args = parser.parse_args()
+
+    tests = build_tests(disk=args.disk)
+
+    if args.list:
+        print("Available tests:")
+        for t in tests:
+            suffix = "  [skip: disk absent]" if t.get("skip") else ""
+            print(f"  {t['name']}{suffix}")
+        return
+
+    # Running tests requires --iso
+    if not args.iso:
+        parser.error("--iso is required unless --list is used")
 
     if not os.path.isfile(args.iso):
         print(f"ERROR: ISO not found: {args.iso}", file=sys.stderr)
@@ -274,14 +355,16 @@ def main():
     harness.start()
 
     print("Waiting for boot prompt…")
-    if not harness.wait_prompt():
-        print("FAIL: timed out waiting for nimixos> prompt", file=sys.stderr)
+    try:
+        harness.wait_for_prompt()
+    except TimeoutError as e:
+        print(f"FAIL: {e}", file=sys.stderr)
         harness.cleanup()
         sys.exit(1)
 
     print("Boot prompt received.")
 
-    passed = run_tests(harness)
+    passed = run_tests(harness, tests)
     harness.cleanup()
     sys.exit(0 if passed else 1)
 
