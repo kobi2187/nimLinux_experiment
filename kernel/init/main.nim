@@ -24,6 +24,7 @@ import ../config
 import ../../kernel/driver_registry
 import ../../drivers/pic
 import ../../drivers/pit
+import ../../kern/interrupts
 import ../../drivers/ps2_keyboard
 import ../../drivers/vga_text
 import ../../kernel/event_server
@@ -337,10 +338,23 @@ proc runKernel(bootInfo: ptr BootInfo) =
   
   klog(llInfo, "Kernel model ready")
 
+  # Initialize interrupt system (IDT + default exception handlers)
+  # KernelCS = 0x08 (64-bit code segment, see boot_asm.S GDT)
+  discard initInterruptSystem(0x08'u16)
+  klog(llInfo, "Interrupt system initialized")
+
   pitInit(100)
   pitRegisterHandler()
   picUnmask(0)
   klog(llInfo, "PIT timer: 100Hz, IRQ0 handler registered")
+
+  # Load IDT and enable interrupts so the timer fires
+  let intMgr = getInterruptManager()
+  if intMgr != nil:
+    intMgr.loadIdt()
+    klog(llInfo, "IDT loaded")
+  sti()
+  klog(llInfo, "Interrupts enabled")
 
   # Register all drivers
   registerDriver(addr ps2KeyboardDriver)

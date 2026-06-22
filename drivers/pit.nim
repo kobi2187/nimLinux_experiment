@@ -51,12 +51,31 @@ when not defined(noKernelHardware):
 when defined(kernelFull):
   import ../kern/interrupts
   import ../drivers/pic
+  import ../kernel/process_table
+
+  proc contextSwitch(oldRsp: ptr uint64; newRsp: uint64) {.importc, cdecl.}
 
   proc pitIrqHandler*(ctx: ptr ExceptionContext) {.nimcall.} =
     ## IRQ0 interrupt handler registered with the IDT at vector 0x20 (IRQ_TIMER).
-    ## Increments the tick counter then sends EOI to unblock the master PIC.
+    ## Increments the tick counter, updates scheduler stats, sends EOI,
+    ## then performs a context switch if a different task is ready.
     pitTick()
+    procTickCurrent(procTable)
     picEoi(0)
+    # Pick next ready task
+    let next = procPickNext(procTable)
+    if next >= 0 and next != procTable.current:
+      let prev = procTable.current
+      procTable.current = next
+      procTable.tasks[next].state = ptsRunning
+      inc procTable.tasks[next].switches
+      inc procTable.stats.totalSwitches
+      if prev >= 0:
+        procTable.tasks[prev].state = ptsReady
+        contextSwitch(addr procTable.tasks[prev].rsp,
+                      procTable.tasks[next].rsp)
+      # If prev == -1 (idle/boot), we cannot save the current RSP here
+      # because we're on the interrupt stack. Skip the switch in that case.
 
   proc pitRegisterHandler*() =
     ## Register the PIT IRQ handler with the global interrupt manager.

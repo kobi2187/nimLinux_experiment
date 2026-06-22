@@ -21,43 +21,36 @@ import ../core/serial
 # ═══════════════════════════════════════════════════════════════════════════
 
 type
-  ExceptionContext* = object
-    ## CPU context saved on exception
-    # General purpose registers
-    rax*: uint64
-    rbx*: uint64
-    rcx*: uint64
-    rdx*: uint64
-    rsi*: uint64
-    rdi*: uint64
-    rbp*: uint64
-    r8*: uint64
-    r9*: uint64
-    r10*: uint64
-    r11*: uint64
-    r12*: uint64
-    r13*: uint64
-    r14*: uint64
-    r15*: uint64
-
-    # Special registers
-    rsp*: uint64
-    rflags*: uint64
-    rip*: uint64
-
-    # Segment registers
-    cs*: uint16
-    ss*: uint16
-    ds*: uint16
-    es*: uint16
-    fs*: uint16
-    gs*: uint16
-
-    # Exception info
-    vectorNum*: uint32       ## Interrupt/exception vector number
-    errorCode*: uint64       ## Error code (if applicable)
-    isException*: bool       ## True if from exception, false if IRQ
-    hasErrorCode*: bool      ## True if error code is valid
+  ExceptionContext* {.packed.} = object
+    ## CPU context saved on exception.
+    ## Field order MUST match the assembly push sequence in isr_common_stub exactly.
+    ##
+    ## Stack layout at nimInterruptDispatch entry (RSP → rax, low addr first):
+    ##   [pushed by isr_common_stub]  rax rbx rcx rdx rsi rdi rbp r8..r15
+    ##   [pushed by entry stub]       vectorNum  errorCode
+    ##   [pushed by CPU on interrupt] rip cs rflags rsp ss
+    rax*:      uint64
+    rbx*:      uint64
+    rcx*:      uint64
+    rdx*:      uint64
+    rsi*:      uint64
+    rdi*:      uint64
+    rbp*:      uint64
+    r8*:       uint64
+    r9*:       uint64
+    r10*:      uint64
+    r11*:      uint64
+    r12*:      uint64
+    r13*:      uint64
+    r14*:      uint64
+    r15*:      uint64
+    vectorNum*: uint64       ## Interrupt/exception vector number (pushed second)
+    errorCode*: uint64       ## Error code pushed first (or fake 0)
+    rip*:      uint64        ## CPU interrupt frame: instruction pointer
+    cs*:       uint64        ## Code segment (64-bit frame uses 8-byte slots)
+    rflags*:   uint64        ## CPU flags
+    rsp*:      uint64        ## Stack pointer at time of interrupt
+    ss*:       uint64        ## Stack segment
 
   ExceptionError* = enum
     eeSuccess = 0
@@ -167,26 +160,110 @@ proc setIdtEntry*(entry: var IdtEntry, offset: uint64, selector: uint16,
   entry.flags = flags
   entry.reserved = 0
 
-proc loadIdt*(idt: array[256, IdtEntry]) {.inline.} =
-  ## Load IDT into IDTR and enable interrupts
-  # In real implementation, would call x86 LIDT instruction
-  # For now, this is a placeholder
-  discard
+# ── ISR entry stubs from boot_asm.S ──────────────────────────────────────────
+# Forward declarations for all 48 ISR entry stubs (exceptions 0-31, IRQs 32-47)
+proc isr_entry_0()  {.importc, cdecl.}
+proc isr_entry_1()  {.importc, cdecl.}
+proc isr_entry_2()  {.importc, cdecl.}
+proc isr_entry_3()  {.importc, cdecl.}
+proc isr_entry_4()  {.importc, cdecl.}
+proc isr_entry_5()  {.importc, cdecl.}
+proc isr_entry_6()  {.importc, cdecl.}
+proc isr_entry_7()  {.importc, cdecl.}
+proc isr_entry_8()  {.importc, cdecl.}
+proc isr_entry_9()  {.importc, cdecl.}
+proc isr_entry_10() {.importc, cdecl.}
+proc isr_entry_11() {.importc, cdecl.}
+proc isr_entry_12() {.importc, cdecl.}
+proc isr_entry_13() {.importc, cdecl.}
+proc isr_entry_14() {.importc, cdecl.}
+proc isr_entry_15() {.importc, cdecl.}
+proc isr_entry_16() {.importc, cdecl.}
+proc isr_entry_17() {.importc, cdecl.}
+proc isr_entry_18() {.importc, cdecl.}
+proc isr_entry_19() {.importc, cdecl.}
+proc isr_entry_20() {.importc, cdecl.}
+proc isr_entry_21() {.importc, cdecl.}
+proc isr_entry_22() {.importc, cdecl.}
+proc isr_entry_23() {.importc, cdecl.}
+proc isr_entry_24() {.importc, cdecl.}
+proc isr_entry_25() {.importc, cdecl.}
+proc isr_entry_26() {.importc, cdecl.}
+proc isr_entry_27() {.importc, cdecl.}
+proc isr_entry_28() {.importc, cdecl.}
+proc isr_entry_29() {.importc, cdecl.}
+proc isr_entry_30() {.importc, cdecl.}
+proc isr_entry_31() {.importc, cdecl.}
+proc isr_entry_32() {.importc, cdecl.}
+proc isr_entry_33() {.importc, cdecl.}
+proc isr_entry_34() {.importc, cdecl.}
+proc isr_entry_35() {.importc, cdecl.}
+proc isr_entry_36() {.importc, cdecl.}
+proc isr_entry_37() {.importc, cdecl.}
+proc isr_entry_38() {.importc, cdecl.}
+proc isr_entry_39() {.importc, cdecl.}
+proc isr_entry_40() {.importc, cdecl.}
+proc isr_entry_41() {.importc, cdecl.}
+proc isr_entry_42() {.importc, cdecl.}
+proc isr_entry_43() {.importc, cdecl.}
+proc isr_entry_44() {.importc, cdecl.}
+proc isr_entry_45() {.importc, cdecl.}
+proc isr_entry_46() {.importc, cdecl.}
+proc isr_entry_47() {.importc, cdecl.}
+
+proc isrAddr(p: proc() {.cdecl.}): uint64 {.inline.} =
+  ## Extract the raw function pointer address from a cdecl proc.
+  cast[uint64](p)
+
+# Table of all entry stub addresses (indexed by vector)
+let isrEntries: array[48, uint64] = [
+  isrAddr(isr_entry_0),  isrAddr(isr_entry_1),
+  isrAddr(isr_entry_2),  isrAddr(isr_entry_3),
+  isrAddr(isr_entry_4),  isrAddr(isr_entry_5),
+  isrAddr(isr_entry_6),  isrAddr(isr_entry_7),
+  isrAddr(isr_entry_8),  isrAddr(isr_entry_9),
+  isrAddr(isr_entry_10), isrAddr(isr_entry_11),
+  isrAddr(isr_entry_12), isrAddr(isr_entry_13),
+  isrAddr(isr_entry_14), isrAddr(isr_entry_15),
+  isrAddr(isr_entry_16), isrAddr(isr_entry_17),
+  isrAddr(isr_entry_18), isrAddr(isr_entry_19),
+  isrAddr(isr_entry_20), isrAddr(isr_entry_21),
+  isrAddr(isr_entry_22), isrAddr(isr_entry_23),
+  isrAddr(isr_entry_24), isrAddr(isr_entry_25),
+  isrAddr(isr_entry_26), isrAddr(isr_entry_27),
+  isrAddr(isr_entry_28), isrAddr(isr_entry_29),
+  isrAddr(isr_entry_30), isrAddr(isr_entry_31),
+  isrAddr(isr_entry_32), isrAddr(isr_entry_33),
+  isrAddr(isr_entry_34), isrAddr(isr_entry_35),
+  isrAddr(isr_entry_36), isrAddr(isr_entry_37),
+  isrAddr(isr_entry_38), isrAddr(isr_entry_39),
+  isrAddr(isr_entry_40), isrAddr(isr_entry_41),
+  isrAddr(isr_entry_42), isrAddr(isr_entry_43),
+  isrAddr(isr_entry_44), isrAddr(isr_entry_45),
+  isrAddr(isr_entry_46), isrAddr(isr_entry_47),
+]
+
+proc loadIdt*(mgr: InterruptManager) {.inline.} =
+  ## Load IDT into IDTR (lidt instruction).
+  let limit = uint16(256 * sizeof(IdtEntry) - 1)
+  lidt(addr mgr.idt[0], limit)
 
 proc initializeIdt*(manager: InterruptManager, kernelCodeSelector: uint16): Result[void, ExceptionError] =
-  ## Initialize IDT with default handlers
+  ## Initialize IDT with real ISR stub addresses.
   manager.lock.init()
 
   # Clear all handlers
   for i in 0..<256:
     manager.handlers[i] = nil
 
-  # Set up exception entries (would normally set to assembly stubs)
   let flags = IDT_PRESENT or IDT_DPL_KERNEL or IDT_INTERRUPT_GATE
 
-  for i in 0..<256:
-    # In real implementation, would set to actual handler stub addresses
-    # For now, initialize with dummy values
+  # Wire ISR entry stubs for vectors 0-47
+  for i in 0..<48:
+    setIdtEntry(manager.idt[i], isrEntries[i], kernelCodeSelector, flags)
+
+  # Fill remaining entries 48-255 with zeroed-but-present entries (no valid offset)
+  for i in 48..<256:
     manager.idt[i].flags = flags
     manager.idt[i].selector = kernelCodeSelector
     manager.idt[i].ist = 0
@@ -233,11 +310,12 @@ proc unregisterExceptionHandler*(manager: InterruptManager, vector: uint32): Res
 
 proc dispatchException*(manager: InterruptManager, ctx: ptr ExceptionContext): Result[void, ExceptionError] =
   ## Dispatch exception to registered handler
-  if ctx.vectorNum >= 256:
+  let vec = int(ctx.vectorNum)
+  if vec >= 256:
     return err(eeInvalidVector)
 
   manager.lock.acquire()
-  let handler = manager.handlers[ctx.vectorNum]
+  let handler = manager.handlers[vec]
   manager.lock.release()
 
   if handler == nil:
@@ -245,16 +323,22 @@ proc dispatchException*(manager: InterruptManager, ctx: ptr ExceptionContext): R
 
   # Update statistics
   inc manager.totalInterrupts
-  if ctx.isException and ctx.vectorNum < 32:
-    inc manager.exceptionCount[ctx.vectorNum]
-  elif not ctx.isException:
-    let irqNum = ctx.vectorNum - IRQ_OFFSET
+  if vec < 32:
+    inc manager.exceptionCount[vec]
+  elif vec >= IRQ_OFFSET:
+    let irqNum = vec - IRQ_OFFSET
     if irqNum < 16:
       inc manager.irqCount[irqNum]
 
   # Call handler
   handler(ctx)
   ok()
+
+proc nimInterruptDispatch*(ctx: ptr ExceptionContext) {.exportc, cdecl.} =
+  ## Called from isr_common_stub. Dispatches to registered Nim handler.
+  let mgr = getInterruptManager()
+  if mgr != nil:
+    discard mgr.dispatchException(ctx)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Default Exception Handlers

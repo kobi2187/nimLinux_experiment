@@ -57,6 +57,10 @@ type
     classNext*:  int16
     classPrev*:  int16
 
+    # ── Kernel stack (per-task, for context switching) ─────────────────────
+    kstack*:     array[4096, byte]   ## 4 KB kernel stack for this task
+    rsp*:        uint64              ## saved RSP (set by contextSwitch)
+
   SchedulerStats* = object
     ticksPerClass*: array[3, uint64]   ## CPU quanta consumed per class
     totalSwitches*: uint64
@@ -156,7 +160,11 @@ proc procSpawn*(name: cstring; entry: TaskProc;
       t.switches   = 0
       t.classNext  = -1
       t.classPrev  = -1
+      # Initialize RSP to top of per-task kernel stack (16-byte aligned)
+      t.rsp = (cast[uint64](addr t.kstack[4095])) and not 15'u64
       procTable.tasks[i] = t
+      # Fix up rsp after copy: point into the copied stack in the table
+      procTable.tasks[i].rsp = (cast[uint64](addr procTable.tasks[i].kstack[4095])) and not 15'u64
       inc procTable.nextPid
       inc procTable.taskCount
       ringInsertTail(procTable, int16(i), int(cls))
