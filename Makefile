@@ -225,6 +225,7 @@ test:
 	$(NIM) c -r $(TEST_FLAGS) tests/test_driver_registry.nim
 	$(NIM) c -r $(TEST_FLAGS) tests/test_tss.nim
 	$(NIM) c -r $(TEST_FLAGS) tests/test_server_chan.nim
+	$(NIM) c -r $(TEST_FLAGS) tests/test_capability.nim
 	@echo "=== All tests passed ==="
 
 # ── QEMU integration tests (serial pipe harness) ──────────────────
