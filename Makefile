@@ -9,8 +9,10 @@
 #   make iso-all  # create ISO with all 3 kernel models in GRUB menu
 #   make qemu     # boot ISO in QEMU (UEFI, serial, no display)
 #   make qemu-gui # boot with VGA display
-#   make test     # run host-side unit tests
-#   make clean    # remove build artifacts
+#   make qemu-debug # boot with GDB server on :1234 (paused at start)
+#   make test      # run host-side unit tests
+#   make test-qemu # boot ISO in QEMU and run serial test suite
+#   make clean     # remove build artifacts
 #
 # Config:
 #   NIM      = path to nim compiler (default: /home/kl/apps/Nim/bin/nim)
@@ -35,7 +37,7 @@ KERNEL_OUT = build/main
 ISO_OUT    = nimixos.iso
 ISO_ALL_OUT = nimixos-all-kernels.iso
 
-.PHONY: all build apps nim-apps iso iso-all qemu qemu-all qemu-gui run clean test
+.PHONY: all build apps nim-apps iso iso-all qemu qemu-all qemu-gui qemu-debug run clean test test-qemu
 
 # Default target: full cycle
 all: build iso qemu
@@ -174,6 +176,14 @@ qemu-gui: $(ISO_OUT)
 	qemu-system-x86_64 -cdrom $(ISO_OUT) -bios $(OVMF) \
 		-no-reboot -m $(QEMU_MEM)M -serial stdio
 
+# ── Run in QEMU with GDB server (paused at start) ─────────────────
+qemu-debug: $(ISO_OUT)
+	@echo "GDB: target remote :1234  —  symbol file: build/kernel-monolithic"
+	qemu-system-x86_64 -cdrom $(ISO_OUT) -bios $(OVMF) \
+		$(DISK_FLAGS) \
+		-no-reboot -m $(QEMU_MEM)M -serial stdio -display none \
+		-s -S
+
 # ── Alias ─────────────────────────────────────────────────────────
 run: all
 
@@ -216,6 +226,11 @@ test:
 	$(NIM) c -r $(TEST_FLAGS) tests/test_tss.nim
 	$(NIM) c -r $(TEST_FLAGS) tests/test_server_chan.nim
 	@echo "=== All tests passed ==="
+
+# ── QEMU integration tests (serial pipe harness) ──────────────────
+test-qemu: $(ISO_OUT)
+	python3 tests/qemu_harness.py --iso $(ISO_OUT) --bios $(OVMF) \
+		$(if $(wildcard $(DISK)),--disk $(DISK),)
 
 # ── Clean ─────────────────────────────────────────────────────────
 clean:
