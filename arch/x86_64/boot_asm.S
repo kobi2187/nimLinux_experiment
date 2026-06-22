@@ -241,5 +241,99 @@ stack_bottom:
             .skip 16384             /* 16 KB kernel stack            */
 stack_top:
 
+/* ── ISR common stub ──────────────────────────────────────────────────────
+ * Called by per-vector entry stubs (see below).
+ * On entry: stack has [rip, cs, rflags, rsp, ss] pushed by CPU (interrupt frame)
+ *           plus error code and vector number pushed by the entry stub.
+ * We push all GPRs, call the Nim dispatcher, pop, iretq.
+ *
+ * Stack layout at nimInterruptDispatch call (RSP = &rax, low addr first):
+ *   rax rbx rcx rdx rsi rdi rbp r8..r15  <- pushed here (15 regs × 8 = 120 bytes)
+ *   vector_num (uint64)                   <- pushed by entry stub (second)
+ *   error_code (uint64)                   <- pushed by entry stub or fake 0 (first)
+ *   rip cs rflags rsp ss                  <- pushed by CPU on interrupt
+ */
+.section .text
+
+.global isr_common_stub
+isr_common_stub:
+    /* Save all general-purpose registers */
+    push %rax; push %rbx; push %rcx; push %rdx
+    push %rsi; push %rdi; push %rbp
+    push %r8;  push %r9;  push %r10; push %r11
+    push %r12; push %r13; push %r14; push %r15
+
+    /* RSP now points at a fully-saved context layout.
+     * Pass it to the Nim dispatcher (System V AMD64: first arg in RDI). */
+    mov %rsp, %rdi
+    call nimInterruptDispatch
+
+    /* Restore GPRs */
+    pop %r15; pop %r14; pop %r13; pop %r12
+    pop %r11; pop %r10; pop %r9;  pop %r8
+    pop %rbp; pop %rdi; pop %rsi; pop %rdx
+    pop %rcx; pop %rbx; pop %rax
+
+    /* Remove vector_num + error_code pushed by entry stub */
+    add $16, %rsp
+    iretq
+
+/* Macro: entry stub for vectors WITHOUT an error code */
+.macro ISR_NOERR num
+.global isr_entry_\num
+isr_entry_\num:
+    push $0          /* fake error code */
+    push $\num       /* vector number */
+    jmp isr_common_stub
+.endm
+
+/* Macro: entry stub for vectors WITH an error code (CPU pushes it) */
+.macro ISR_ERR num
+.global isr_entry_\num
+isr_entry_\num:
+    push $\num       /* vector number (error code already on stack) */
+    jmp isr_common_stub
+.endm
+
+/* Exception stubs 0-31 */
+ISR_NOERR 0;  ISR_NOERR 1;  ISR_NOERR 2;  ISR_NOERR 3
+ISR_NOERR 4;  ISR_NOERR 5;  ISR_NOERR 6;  ISR_NOERR 7
+ISR_ERR   8;  ISR_NOERR 9;  ISR_ERR   10; ISR_ERR   11
+ISR_ERR   12; ISR_ERR   13; ISR_ERR   14; ISR_NOERR 15
+ISR_NOERR 16; ISR_ERR   17; ISR_NOERR 18; ISR_NOERR 19
+ISR_NOERR 20; ISR_NOERR 21; ISR_NOERR 22; ISR_NOERR 23
+ISR_NOERR 24; ISR_NOERR 25; ISR_NOERR 26; ISR_NOERR 27
+ISR_NOERR 28; ISR_NOERR 29; ISR_ERR   30; ISR_NOERR 31
+
+/* IRQ stubs 32-47 (hardware IRQs — no error code) */
+ISR_NOERR 32; ISR_NOERR 33; ISR_NOERR 34; ISR_NOERR 35
+ISR_NOERR 36; ISR_NOERR 37; ISR_NOERR 38; ISR_NOERR 39
+ISR_NOERR 40; ISR_NOERR 41; ISR_NOERR 42; ISR_NOERR 43
+ISR_NOERR 44; ISR_NOERR 45; ISR_NOERR 46; ISR_NOERR 47
+
+/* Context switch stub — called from the timer ISR Nim handler.
+ * Switches kernel stack from current task to next task.
+ * C/Nim ABI: contextSwitch(oldRsp: ptr uint64, newRsp: uint64)
+ *   RDI = pointer to where to save current RSP
+ *   RSI = new RSP to load
+ */
+.global contextSwitch
+contextSwitch:
+    /* Save callee-saved registers onto current stack */
+    push %rbp; push %rbx
+    push %r12; push %r13; push %r14; push %r15
+
+    /* Save current RSP into *oldRsp */
+    mov %rsp, (%rdi)
+
+    /* Switch to new stack */
+    mov %rsi, %rsp
+
+    /* Restore callee-saved registers from new stack */
+    pop %r15; pop %r14; pop %r13; pop %r12
+    pop %rbx; pop %rbp
+
+    ret
+
 /* Mark the stack as non-executable (silences linker warning) */
 .section .note.GNU-stack, "", @progbits
