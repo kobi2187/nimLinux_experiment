@@ -29,7 +29,7 @@ import ../../kernel/config
 import ../../kernel/traits/scheduler as schedTrait
 import ../../kernel/traits/ipc as ipcTrait
 import ../../kernel/abi/nimix_abi as abiModule
-import ../../kernel/abi/nimix_abi_impl
+import ../../kernel/abi/nimix_abi_wiring
 export schedTrait
 export ipcTrait
 
@@ -325,18 +325,11 @@ proc initSasosModel*() =
   ipcTrait.ipc.close   = sasosClose
 
   # Wire app ABI vtable — SASOS: alloc from shared address space region map.
-  # Each SIP gets a 1MB-aligned region; for now we use the kernel heap and
-  # will replace with the virtual region allocator in the next slice.
+  # TODO: replace with virtual region allocator (task 13).
   proc sasosAlloc(size: int): pointer {.nimcall.} = cast[pointer](alloc(size))
   proc sasosFree(p: pointer; size: int) {.nimcall.} = dealloc(p)
   var av: abiModule.NimixAbiVTable
-  av.allocRegion    = sasosAlloc
-  av.freeRegion     = sasosFree
-  av.write          = abiWrite
-  av.exit           = abiExit
-  av.chanSend       = abiChanSend
-  av.chanRecv       = abiChanRecv
-  av.eventPublish   = abiEventPublish
-  av.eventSubscribe = abiEventSubscribe
-  av.eventPoll      = abiEventPoll
+  wireSharedAbi(av)
+  av.allocRegion = sasosAlloc
+  av.freeRegion  = sasosFree
   abiModule.nimixAbi = av

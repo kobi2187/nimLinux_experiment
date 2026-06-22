@@ -174,22 +174,24 @@ proc cmdRun(filename: cstring) =
     kprint("WASM execution failed\n")
 
 proc buildAbiPatches(): array[14, AbiPatch] =
-  ## Build the kernel ABI patch table injected into every PIE ELF at load time.
-  proc fn(name: cstring; f: pointer): AbiPatch = AbiPatch(name: name, fn: cast[uint64](f))
-  result[0]  = fn("nimixWrite",          abiModule.nimixWrite)
-  result[1]  = fn("nimixExit",           abiModule.nimixExit)
-  result[2]  = fn("nimixAllocRegion",    abiModule.nimixAllocRegion)
-  result[3]  = fn("nimixFreeRegion",     abiModule.nimixFreeRegion)
-  result[4]  = fn("nimixChanSend",       abiModule.nimixChanSend)
-  result[5]  = fn("nimixChanRecv",       abiModule.nimixChanRecv)
-  result[6]  = fn("nimixEventPublish",   abiModule.nimixEventPublish)
-  result[7]  = fn("nimixEventSubscribe", abiModule.nimixEventSubscribe)
-  result[8]  = fn("nimixEventPoll",      abiModule.nimixEventPoll)
-  result[9]  = fn("nimixGetArgs",        abiModule.nimixGetArgs)
-  result[10] = fn("nimixProcList",       abiModule.nimixProcList)
-  result[11] = fn("nimixSchedStats",     abiModule.nimixSchedStats)
-  result[12] = fn("nimixProcKillPid",    abiModule.nimixProcKillPid)
-  result[13] = fn("nimixFsReadDir",      abiModule.nimixFsReadDir)
+  ## Build the ABI patch table from the live vtable fields.
+  ## Points directly at the kernel implementations — no bridge indirection.
+  proc p(name: cstring; f: pointer): AbiPatch = AbiPatch(name: name, fn: cast[uint64](f))
+  let v = abiModule.nimixAbi
+  result[0]  = p("nimixWrite",          v.write)
+  result[1]  = p("nimixExit",           v.exit)
+  result[2]  = p("nimixAllocRegion",    v.allocRegion)
+  result[3]  = p("nimixFreeRegion",     v.freeRegion)
+  result[4]  = p("nimixChanSend",       v.chanSend)
+  result[5]  = p("nimixChanRecv",       v.chanRecv)
+  result[6]  = p("nimixEventPublish",   v.eventPublish)
+  result[7]  = p("nimixEventSubscribe", v.eventSubscribe)
+  result[8]  = p("nimixEventPoll",      v.eventPoll)
+  result[9]  = p("nimixGetArgs",        v.getArgs)
+  result[10] = p("nimixProcList",       v.procList)
+  result[11] = p("nimixSchedStats",     v.schedStats)
+  result[12] = p("nimixProcKillPid",    v.procKillPid)
+  result[13] = p("nimixFsReadDir",      v.fsReadDir)
 
 proc runPieElf(filename: cstring; dataBuf: ptr byte; nbytes: int; appArgs: cstring) =
   ## Load and run a PIE (ET_DYN) ELF. Allocates a region, patches ABI stubs,

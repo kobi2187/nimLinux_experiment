@@ -24,7 +24,7 @@ import ../../kernel/config
 import ../../kernel/traits/scheduler as schedTrait
 import ../../kernel/traits/ipc as ipcTrait
 import ../../kernel/abi/nimix_abi as abiModule
-import ../../kernel/abi/nimix_abi_impl
+import ../../kernel/abi/nimix_abi_wiring
 export schedTrait
 export ipcTrait
 
@@ -275,18 +275,12 @@ proc initMicrokernelModel*() =
   ipcTrait.ipc.open    = mkOpen
   ipcTrait.ipc.close   = mkClose
 
-  # Wire app ABI vtable — microkernel: alloc from kernel heap;
-  # in a real micro, this would be a separate user-space allocator server.
+  # Wire app ABI vtable — microkernel: alloc from kernel heap.
+  # In a real micro, allocRegion would be a user-space allocator server.
   proc mkAlloc(size: int): pointer {.nimcall.} = cast[pointer](alloc(size))
   proc mkFree(p: pointer; size: int) {.nimcall.} = dealloc(p)
   var av: abiModule.NimixAbiVTable
-  av.allocRegion    = mkAlloc
-  av.freeRegion     = mkFree
-  av.write          = abiWrite
-  av.exit           = abiExit
-  av.chanSend       = abiChanSend
-  av.chanRecv       = abiChanRecv
-  av.eventPublish   = abiEventPublish
-  av.eventSubscribe = abiEventSubscribe
-  av.eventPoll      = abiEventPoll
+  wireSharedAbi(av)
+  av.allocRegion = mkAlloc
+  av.freeRegion  = mkFree
   abiModule.nimixAbi = av

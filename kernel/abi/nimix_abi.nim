@@ -51,51 +51,6 @@ type
       ## List directory entries as newline-separated names. Returns bytes written.
 
 var nimixAbi*: NimixAbiVTable
-  ## Global ABI vtable. Set once at boot; read-only after that.
-
-# ── C-ABI bridge ─────────────────────────────────────────────────────────────
-# These are the symbols apps link against. They simply forward to the vtable.
-# Declared with exportc so the linker sees them as plain C symbols.
-
-proc nimixAllocRegion*(size: int): pointer {.exportc, cdecl.} =
-  nimixAbi.allocRegion(size)
-
-proc nimixFreeRegion*(p: pointer; size: int) {.exportc, cdecl.} =
-  nimixAbi.freeRegion(p, size)
-
-proc nimixWrite*(buf: pointer; len: int) {.exportc, cdecl.} =
-  nimixAbi.write(buf, len)
-
-proc nimixExit*(code: int) {.exportc, cdecl.} =
-  nimixAbi.exit(code)
-  while true: discard
-
-proc nimixChanSend*(name: cstring; data: pointer; dataLen: int): int {.exportc, cdecl.} =
-  nimixAbi.chanSend(name, data, dataLen)
-
-proc nimixChanRecv*(name: cstring; buf: pointer; bufLen: int): int {.exportc, cdecl.} =
-  nimixAbi.chanRecv(name, buf, bufLen)
-
-proc nimixEventPublish*(topic: cstring; data: pointer; dataLen: int) {.exportc, cdecl.} =
-  nimixAbi.eventPublish(topic, data, dataLen)
-
-proc nimixEventSubscribe*(topic: cstring): uint32 {.exportc, cdecl.} =
-  nimixAbi.eventSubscribe(topic)
-
-proc nimixEventPoll*(token: uint32; buf: pointer; bufLen: int): int {.exportc, cdecl.} =
-  nimixAbi.eventPoll(token, buf, bufLen)
-
-proc nimixGetArgs*(buf: pointer; len: int): int {.exportc, cdecl.} =
-  nimixAbi.getArgs(buf, len)
-
-proc nimixProcList*(buf: pointer; len: int): int {.exportc, cdecl.} =
-  nimixAbi.procList(buf, len)
-
-proc nimixSchedStats*(buf: pointer; len: int): int {.exportc, cdecl.} =
-  nimixAbi.schedStats(buf, len)
-
-proc nimixProcKillPid*(pid: uint32): int {.exportc, cdecl.} =
-  nimixAbi.procKillPid(pid)
-
-proc nimixFsReadDir*(path: cstring; buf: pointer; len: int): int {.exportc, cdecl.} =
-  nimixAbi.fsReadDir(path, buf, len)
+  ## Global ABI vtable. Set once at boot by the chosen kernel model init.
+  ## Apps never call this directly — the ELF loader patches weak stubs with
+  ## movabs+jmp trampolines pointing at the vtable fields before calling appMain.

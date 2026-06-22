@@ -14,7 +14,7 @@ import ../../kernel/config
 import ../../kernel/traits/scheduler as schedTrait
 import ../../kernel/traits/ipc as ipcTrait
 import ../../kernel/abi/nimix_abi as abiModule
-import ../../kernel/abi/nimix_abi_impl
+import ../../kernel/abi/nimix_abi_wiring
 import ../../kernel/process_table
 
 # Re-export the trait types so callers can use them without further imports
@@ -194,18 +194,7 @@ proc initMonolithicModel*() =
   proc monoAlloc(size: int): pointer {.nimcall.} = cast[pointer](alloc(size))
   proc monoFree(p: pointer; size: int) {.nimcall.} = dealloc(p)
   var av: abiModule.NimixAbiVTable
-  av.allocRegion    = monoAlloc
-  av.freeRegion     = monoFree
-  av.write          = abiWrite
-  av.exit           = abiExit
-  av.chanSend       = abiChanSend
-  av.chanRecv       = abiChanRecv
-  av.eventPublish   = abiEventPublish
-  av.eventSubscribe = abiEventSubscribe
-  av.eventPoll      = abiEventPoll
-  av.getArgs        = abiGetArgs
-  av.procList       = abiProcList
-  av.schedStats     = abiSchedStats
-  av.procKillPid    = abiProcKillPid
-  av.fsReadDir      = abiFsReadDir
+  wireSharedAbi(av)
+  av.allocRegion = monoAlloc
+  av.freeRegion  = monoFree
   abiModule.nimixAbi = av
