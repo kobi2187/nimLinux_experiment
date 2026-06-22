@@ -11,6 +11,8 @@ import ../../core/types
 import ../../kernel/config
 import ../../kernel/traits/scheduler as schedTrait
 import ../../kernel/traits/ipc as ipcTrait
+import ../../kernel/abi/nimix_abi as abiModule
+import ../../kernel/abi/nimix_abi_impl
 
 # Re-export the trait types so callers can use them without further imports
 export schedTrait
@@ -196,3 +198,13 @@ proc initMonolithicModel*() =
   ipcTrait.ipc.tryRecv = monoTryRecv
   ipcTrait.ipc.open    = monoOpen
   ipcTrait.ipc.close   = monoClose
+
+  # Wire app ABI vtable — monolithic: alloc from global kernel heap
+  proc monoAlloc(size: int): pointer {.nimcall.} = cast[pointer](alloc(size))
+  proc monoFree(p: pointer; size: int) {.nimcall.} = dealloc(p)
+  var av: abiModule.NimixAbiVTable
+  av.allocRegion = monoAlloc
+  av.freeRegion  = monoFree
+  av.write       = abiWrite
+  av.exit        = abiExit
+  abiModule.nimixAbi = av

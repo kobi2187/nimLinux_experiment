@@ -31,6 +31,7 @@ import ../../arch/x86_64/syscall_gate
 import ../../servers/ping_server
 import ../../ipc/server_chan
 import ../../fs/fatfs
+import ../../mm/region_allocator
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Linker Script Symbols
@@ -354,6 +355,7 @@ proc runKernel(bootInfo: ptr BootInfo) =
   klog(llInfo, "Syscall gate ready (ring 0<->3)")
 
   # Start system servers
+  regionAllocInit()
   serverChanRegistryInit()
   pingServerInit()
 
