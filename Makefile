@@ -64,7 +64,9 @@ NIM_APP = $(NIM) c --skipParentCfg --skipUserCfg \
           --path:$(CURDIR) \
           --path:$(CURDIR)/apps/nim
 
-nim-apps: build/apps/hello.elf build/apps/ping_server.elf
+nim-apps: build/apps/hello.elf build/apps/ping_server.elf \
+          build/apps/ps.elf build/apps/kill.elf \
+          build/apps/stats.elf build/apps/ls.elf
 
 build/apps/hello.elf: apps/nim/hello/hello.nim kernel/abi/nimix_abi.h build/nimix_abi_stub.o
 	@mkdir -p build/apps
@@ -73,6 +75,22 @@ build/apps/hello.elf: apps/nim/hello/hello.nim kernel/abi/nimix_abi.h build/nimi
 build/apps/ping_server.elf: servers/ping/ping_server_elf.nim kernel/abi/nimix_abi.h build/nimix_abi_stub.o
 	@mkdir -p build/apps
 	$(NIM_APP) --path:$(CURDIR)/servers/ping -o:$@ $<
+
+build/apps/ps.elf: apps/nim/ps/ps.nim kernel/abi/nimix_abi_stub.c build/nimix_abi_stub.o
+	@mkdir -p build/apps
+	$(NIM_APP) --path:$(CURDIR)/apps/nim/ps -o:$@ $<
+
+build/apps/kill.elf: apps/nim/kill/kill.nim kernel/abi/nimix_abi_stub.c build/nimix_abi_stub.o
+	@mkdir -p build/apps
+	$(NIM_APP) --path:$(CURDIR)/apps/nim/kill -o:$@ $<
+
+build/apps/stats.elf: apps/nim/stats/stats.nim kernel/abi/nimix_abi_stub.c build/nimix_abi_stub.o
+	@mkdir -p build/apps
+	$(NIM_APP) --path:$(CURDIR)/apps/nim/stats -o:$@ $<
+
+build/apps/ls.elf: apps/nim/ls/ls.nim kernel/abi/nimix_abi_stub.c build/nimix_abi_stub.o
+	@mkdir -p build/apps
+	$(NIM_APP) --path:$(CURDIR)/apps/nim/ls -o:$@ $<
 
 apps: apps/ping/ping_embedded.nim
 
@@ -169,8 +187,9 @@ $(DISK):
 	$(MAKE) disk-add-apps
 
 # Add/update WASM and ELF files on the disk image (uses mtools — no sudo)
-disk-add-apps: apps/ping/ping.wasm apps/pingpong/pingpong.wasm
-	MTOOLS_SKIP_CHECK=1 mcopy -oi $(DISK) $^ ::
+disk-add-apps: apps/ping/ping.wasm apps/pingpong/pingpong.wasm nim-apps
+	MTOOLS_SKIP_CHECK=1 mcopy -oi $(DISK) apps/ping/ping.wasm apps/pingpong/pingpong.wasm ::
+	MTOOLS_SKIP_CHECK=1 mcopy -oi $(DISK) build/apps/hello.elf build/apps/ps.elf build/apps/kill.elf build/apps/stats.elf build/apps/ls.elf ::
 
 # Add a single file: make disk-add FILE=myapp.wasm
 disk-add:

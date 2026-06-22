@@ -19,9 +19,9 @@ import ../fs/fatfs
 import ../apps/ping/ping_embedded
 import ../apps/pingpong/pingpong_embedded
 import ../kernel/abi/nimix_abi as abiModule
+import ../kernel/abi/app_args
 import ../mm/region_allocator
 import ../kernel/process_table
-import ../drivers/pit   # pitTicks()
 
 const
   ShellPrompt = "nimixos> "
@@ -111,97 +111,6 @@ proc cmdHelp() =
   kprint("  kill <pid>       - terminate task by PID\n")
   kprint("  stats            - scheduler statistics and uptime\n")
 
-proc cmdPs() =
-  kprint("PID  CLASS      STATE    PRI  CPU%  NAME\n")
-  kprint("---  ---------  -------  ---  ----  ----------------\n")
-  let uptime = procTable.stats.uptimeTicks
-  for i in 0 ..< process_table.MaxTasks:
-    let t = procTable.tasks[i]
-    if not t.used: continue
-    # PID
-    defaultSerial.putInt(int64(t.pid))
-    kprint("    ")
-    # Class
-    case t.class
-    of tcRealtime: kprint("realtime  ")
-    of tcServer:   kprint("server    ")
-    of tcApp:      kprint("app       ")
-    # State
-    case t.state
-    of ptsReady:   kprint("ready    ")
-    of ptsRunning: kprint("running  ")
-    of ptsBlocked: kprint("blocked  ")
-    of ptsZombie:  kprint("zombie   ")
-    # Priority
-    defaultSerial.putInt(int64(t.priority))
-    kprint("    ")
-    # CPU% (integer approximation)
-    if uptime > 0:
-      let pct = (t.cpuTicks * 100) div uptime
-      defaultSerial.putInt(int64(pct))
-      kprint("%")
-    else:
-      kprint("0%")
-    kprint("   ")
-    # Name
-    defaultSerial.putString(t.getName())
-    kprint("\n")
-
-proc cmdKill(buf: openArray[char]; first, last: int) =
-  # Parse PID from "kill <pid>"
-  var si = first + 5  # skip "kill "
-  while si <= last and buf[si] == ' ': inc si
-  var pid: uint32 = 0
-  while si <= last and buf[si] >= '0' and buf[si] <= '9':
-    pid = pid * 10 + uint32(ord(buf[si]) - ord('0'))
-    inc si
-  if pid == 0:
-    kprint("Usage: kill <pid>\n")
-    return
-  let slot = procFindPid(pid)
-  if slot < 0:
-    kprint("kill: no such process\n")
-    return
-  let name = procTable.tasks[slot].getName()
-  let region = procTable.tasks[slot].regionSlot
-  discard procKill(slot)
-  if region >= 0:
-    regionFree(RegionHandle(region))
-  kprint("killed: ")
-  defaultSerial.putString(name)
-  kprint("\n")
-
-proc cmdStats() =
-  let s = procTable.stats
-  let uptime = s.uptimeTicks
-  kprint("Uptime:   ")
-  defaultSerial.putInt(int64(uptime))
-  kprint(" ticks (")
-  defaultSerial.putInt(int64(uptime div 100))
-  kprint("s)\n")
-  kprint("Switches: ")
-  defaultSerial.putInt(int64(s.totalSwitches))
-  kprint("\nIdle:     ")
-  defaultSerial.putInt(int64(s.idleTicks))
-  kprint(" ticks\n")
-  kprint("Tasks:    ")
-  defaultSerial.putInt(int64(procTable.taskCount))
-  kprint("/")
-  defaultSerial.putInt(int64(process_table.MaxTasks))
-  kprint("\nCPU by class:\n")
-  let classNames = ["realtime", "server  ", "app     "]
-  for c in 0..2:
-    kprint("  ")
-    kprint(classNames[c])
-    kprint(": ")
-    defaultSerial.putInt(int64(s.ticksPerClass[c]))
-    kprint(" ticks")
-    if uptime > 0:
-      kprint(" (")
-      defaultSerial.putInt(int64(s.ticksPerClass[c] * 100 div uptime))
-      kprint("%)")
-    kprint("\n")
-
 proc cmdVersion() =
   kprint("NimixOS v0.1.0\n")
 
@@ -236,58 +145,9 @@ proc cmdUnknown(buf: openArray[char], first, last: int) =
   for i in first..last: defaultSerial.putChar(buf[i])
   kprint("'\nType 'help' for available commands.\n")
 
-# ── Filesystem commands ────────────────────────────────────────────────────
-
-# FatFs directory listing via f_opendir/f_readdir
-type
-  FDIR   {.importc: "DIR",    header: "ff.h".} = object
-  FILINFO2 {.importc: "FILINFO", header: "ff.h".} = object
-    fsize  {.importc: "fsize".}:  uint32
-    fattrib {.importc: "fattrib".}: uint8
-    fname  {.importc: "fname".}:  array[256, char]
-
-proc f_opendir(dp: ptr FDIR, path: cstring): cint
-  {.importc: "f_opendir", header: "ff.h".}
-proc f_readdir(dp: ptr FDIR, fno: ptr FILINFO2): cint
-  {.importc: "f_readdir", header: "ff.h".}
-proc f_closedir(dp: ptr FDIR): cint
-  {.importc: "f_closedir", header: "ff.h".}
-
-proc cmdLs() =
-  if not fsMounted:
-    if not fsMount():
-      kprint("No disk available\n")
-      return
-  var dir: FDIR
-  var info: FILINFO2
-  if f_opendir(addr dir, "/") != 0:
-    kprint("Cannot open directory\n")
-    return
-  kprint("Files on disk:\n")
-  while true:
-    if f_readdir(addr dir, addr info) != 0: break
-    if info.fname[0] == '\0': break   # end of directory
-    kprint("  ")
-    var i = 0
-    while info.fname[i] != '\0':
-      defaultSerial.putChar(info.fname[i])
-      inc i
-    kprint("  (")
-    kprintInt(int64(info.fsize))
-    kprint(" bytes)\n")
-  discard f_closedir(addr dir)
 
 # Static buffer for disk-loaded files (512 KB)
 var diskFileBuf: array[512 * 1024, byte]
-
-proc getArg(buf: openArray[char], cmdLen: int, first: int): string =
-  ## Extract the argument after the command (e.g. "run foo.wasm" → "foo.wasm")
-  var arg = ""
-  var i = first + cmdLen + 1  # skip cmd + space
-  while i < buf.len and buf[i] != '\0' and buf[i] != '\n':
-    arg.add(buf[i])
-    inc i
-  arg
 
 proc cmdRun(filename: cstring) =
   ## Load a .wasm file from disk and execute it.
@@ -310,7 +170,7 @@ proc cmdRun(filename: cstring) =
   if r != wasmOk:
     kprint("WASM execution failed\n")
 
-proc cmdExec(filename: cstring) =
+proc cmdExec(filename: cstring; appArgs: cstring = nil) =
   ## Load an ELF binary from disk.
   ## Handles both ET_EXEC (direct load) and ET_DYN (PIE with relocation).
   ## PIE apps each get their own non-overlapping virtual region from
@@ -347,7 +207,7 @@ proc cmdExec(filename: cstring) =
     klogInt(llInfo, "ELF PIE: region base=0x", int64(base))
 
     # ABI patch table — all 9 kernel ABI symbols injected at load time
-    var patches: array[9, AbiPatch]
+    var patches: array[14, AbiPatch]
     patches[0] = AbiPatch(name: "nimixWrite",
                           fn: cast[uint64](abiModule.nimixWrite))
     patches[1] = AbiPatch(name: "nimixExit",
@@ -366,10 +226,20 @@ proc cmdExec(filename: cstring) =
                           fn: cast[uint64](abiModule.nimixEventSubscribe))
     patches[8] = AbiPatch(name: "nimixEventPoll",
                           fn: cast[uint64](abiModule.nimixEventPoll))
+    patches[9]  = AbiPatch(name: "nimixGetArgs",
+                           fn: cast[uint64](abiModule.nimixGetArgs))
+    patches[10] = AbiPatch(name: "nimixProcList",
+                           fn: cast[uint64](abiModule.nimixProcList))
+    patches[11] = AbiPatch(name: "nimixSchedStats",
+                           fn: cast[uint64](abiModule.nimixSchedStats))
+    patches[12] = AbiPatch(name: "nimixProcKillPid",
+                           fn: cast[uint64](abiModule.nimixProcKillPid))
+    patches[13] = AbiPatch(name: "nimixFsReadDir",
+                           fn: cast[uint64](abiModule.nimixFsReadDir))
 
     let loaded = elfLoadPie(dataBuf, nbytes, base,
                             cast[ptr UncheckedArray[AbiPatch]](addr patches[0]),
-                            9)
+                            14)
     if loaded.err != elfOk:
       kprint("PIE ELF load failed\n")
       regionFree(slot)
@@ -380,11 +250,14 @@ proc cmdExec(filename: cstring) =
       return
 
     kprint("Calling appMain...\n")
-    # Register in process table so ps/kill can see it
     let procSlot = procSpawn(filename, nil, tcApp, 128, int32(slot))
+    setAppArgs(int(slot), appArgs)
+    # Set current so abiGetArgs can find this app's regionSlot
+    let prevCurrent = procTable.current
+    if procSlot >= 0: procTable.current = int16(procSlot)
     let entry = cast[proc() {.nimcall.}](loaded.appMain)
     entry()
-    # App returned — unregister and free its region
+    procTable.current = prevCurrent
     if procSlot >= 0: discard procKill(procSlot)
     regionFree(slot)
   else:
@@ -396,6 +269,12 @@ proc cmdExec(filename: cstring) =
     kprint("Jumping to ELF entry...\n")
     let entry = cast[proc() {.nimcall.}](loaded.entry)
     entry()
+
+# ── App exec helper ────────────────────────────────────────────────────────
+
+proc execApp(name: cstring; args: cstring) =
+  ## Load a PIE ELF app from disk with given args string.
+  cmdExec(name, args)
 
 # ── Main shell loop ────────────────────────────────────────────────────────
 
@@ -439,7 +318,7 @@ proc runShell*(physMgr: PhysicalMemManager) =
                         pingpongWasm.len, caps)
         if r != wasmOk:
           kprint("[wasm] error running pingpong\n")
-      of scLs:      cmdLs()
+      of scLs:      execApp("ls.elf", "/")
       of scRun:
         # extract filename after "run "
         var fname: array[128, char]
@@ -457,9 +336,18 @@ proc runShell*(physMgr: PhysicalMemManager) =
           fname[fi] = inputBuf[si]; inc fi; inc si
         fname[fi] = '\0'
         cmdExec(cast[cstring](addr fname[0]))
-      of scPs:    cmdPs()
-      of scKill:  cmdKill(inputBuf, first, last)
-      of scStats: cmdStats()
+      of scPs:    execApp("ps.elf", "")
+      of scKill:
+        # Extract pid string after "kill "
+        var pidBuf: array[32, char]
+        var pi = 0
+        var si = first + 5  # skip "kill "
+        while si <= last and inputBuf[si] == ' ': inc si
+        while si <= last and pi < 31:
+          pidBuf[pi] = inputBuf[si]; inc pi; inc si
+        pidBuf[pi] = '\0'
+        execApp("kill.elf", cast[cstring](addr pidBuf[0]))
+      of scStats: execApp("stats.elf", "")
       of scEmpty:   discard
       of scUnknown: cmdUnknown(inputBuf, first, last)
       # Reset buffer

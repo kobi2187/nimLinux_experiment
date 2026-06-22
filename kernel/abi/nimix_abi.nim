@@ -38,6 +38,18 @@ type
     eventPoll*: proc(token: uint32; buf: pointer; bufLen: int): int {.nimcall.}
       ## Non-blocking poll. Returns bytes written to buf, or -1 if no event.
 
+    # ── Process management ────────────────────────────────────────────────────
+    getArgs*:     proc(buf: pointer; len: int): int {.nimcall.}
+      ## Copy args string for the current app into buf. Returns bytes written.
+    procList*:    proc(buf: pointer; len: int): int {.nimcall.}
+      ## Serialize process table as text. Returns bytes written.
+    schedStats*:  proc(buf: pointer; len: int): int {.nimcall.}
+      ## Serialize scheduler stats as text. Returns bytes written.
+    procKillPid*: proc(pid: uint32): int {.nimcall.}
+      ## Kill task by PID. Returns 0=ok, -1=not found.
+    fsReadDir*:   proc(path: cstring; buf: pointer; len: int): int {.nimcall.}
+      ## List directory entries as newline-separated names. Returns bytes written.
+
 var nimixAbi*: NimixAbiVTable
   ## Global ABI vtable. Set once at boot; read-only after that.
 
@@ -72,3 +84,18 @@ proc nimixEventSubscribe*(topic: cstring): uint32 {.exportc, cdecl.} =
 
 proc nimixEventPoll*(token: uint32; buf: pointer; bufLen: int): int {.exportc, cdecl.} =
   nimixAbi.eventPoll(token, buf, bufLen)
+
+proc nimixGetArgs*(buf: pointer; len: int): int {.exportc, cdecl.} =
+  nimixAbi.getArgs(buf, len)
+
+proc nimixProcList*(buf: pointer; len: int): int {.exportc, cdecl.} =
+  nimixAbi.procList(buf, len)
+
+proc nimixSchedStats*(buf: pointer; len: int): int {.exportc, cdecl.} =
+  nimixAbi.schedStats(buf, len)
+
+proc nimixProcKillPid*(pid: uint32): int {.exportc, cdecl.} =
+  nimixAbi.procKillPid(pid)
+
+proc nimixFsReadDir*(path: cstring; buf: pointer; len: int): int {.exportc, cdecl.} =
+  nimixAbi.fsReadDir(path, buf, len)

@@ -5,11 +5,14 @@
 ## Everything else is wired here and reused by mono/micro/sasos.
 
 import nimix_abi
+import app_args
 import ../../core/serial
 import ../../core/log
 import ../../ipc/server_chan
 import ../../kernel/event_server
 import ../../kernel/traits/event
+import ../../kernel/process_table
+import ../../mm/region_allocator
 
 # ── I/O ───────────────────────────────────────────────────────────────────────
 
@@ -73,3 +76,96 @@ proc abiEventPoll*(token: uint32; buf: pointer; bufLen: int): int {.nimcall.} =
   for i in 0 ..< copyLen:
     dst[i] = src[i]
   copyLen
+
+# ── Process management ────────────────────────────────────────────────────────
+
+proc abiGetArgs*(buf: pointer; len: int): int {.nimcall.} =
+  ## Copy args for the currently-running app (keyed by regionSlot) into buf.
+  let slot = int(procTable.tasks[procTable.current].regionSlot)
+  getAppArgs(slot, buf, len)
+
+proc abiProcList*(buf: pointer; len: int): int {.nimcall.} =
+  ## Serialize the process table as "pid class state name\n" lines.
+  let dst = cast[ptr UncheckedArray[char]](buf)
+  var pos = 0
+
+  proc emit(s: cstring) =
+    var i = 0
+    while s[i] != '\0':
+      if pos < len - 1: dst[pos] = s[i]; inc pos
+      inc i
+
+  proc emitUInt(n: uint64) =
+    if n == 0:
+      if pos < len - 1: dst[pos] = '0'; inc pos
+      return
+    var tmp: array[20, char]; var ti = 0; var v = n
+    while v > 0:
+      tmp[ti] = char(ord('0') + int(v mod 10)); inc ti
+      v = v div 10
+    while ti > 0:
+      dec ti
+      if pos < len - 1: dst[pos] = tmp[ti]; inc pos
+
+  for i in 0 ..< MaxTasks:
+    let t = procTable.tasks[i]
+    if not t.used: continue
+    emitUInt(uint64(t.pid)); emit(" ")
+    case t.class
+    of tcRealtime: emit("RT ")
+    of tcServer:   emit("SV ")
+    of tcApp:      emit("AP ")
+    case t.state
+    of ptsReady:   emit("ready   ")
+    of ptsRunning: emit("running ")
+    of ptsBlocked: emit("blocked ")
+    of ptsZombie:  emit("zombie  ")
+    emit(cast[cstring](unsafeAddr t.name[0])); emit("\n")
+
+  if pos < len: dst[pos] = '\0'
+  pos
+
+proc abiSchedStats*(buf: pointer; len: int): int {.nimcall.} =
+  ## Serialize scheduler stats as human-readable text.
+  let dst = cast[ptr UncheckedArray[char]](buf)
+  var pos = 0
+
+  proc emit(s: cstring) =
+    var i = 0
+    while s[i] != '\0':
+      if pos < len - 1: dst[pos] = s[i]; inc pos
+      inc i
+
+  proc emitUInt(n: uint64) =
+    if n == 0:
+      if pos < len - 1: dst[pos] = '0'; inc pos
+      return
+    var tmp: array[20, char]; var ti = 0; var v = n
+    while v > 0:
+      tmp[ti] = char(ord('0') + int(v mod 10)); inc ti
+      v = v div 10
+    while ti > 0:
+      dec ti
+      if pos < len - 1: dst[pos] = tmp[ti]; inc pos
+
+  let s = procTable.stats
+  emit("Uptime:   "); emitUInt(s.uptimeTicks); emit(" ticks\n")
+  emit("Switches: "); emitUInt(s.totalSwitches); emit("\n")
+  emit("Idle:     "); emitUInt(s.idleTicks); emit(" ticks\n")
+  emit("Tasks:    "); emitUInt(uint64(procTable.taskCount)); emit("\n")
+
+  if pos < len: dst[pos] = '\0'
+  pos
+
+proc abiProcKillPid*(pid: uint32): int {.nimcall.} =
+  ## Kill a task by PID. Frees its region. Returns 0=ok, -1=not found.
+  let slot = procFindPid(pid)
+  if slot < 0: return -1
+  let regionSlot = procTable.tasks[slot].regionSlot
+  discard procKill(slot)
+  if regionSlot >= 0: regionFree(RegionHandle(regionSlot))
+  0
+
+proc abiFsReadDir*(path: cstring; buf: pointer; len: int): int {.nimcall.} =
+  ## Directory listing — not yet implemented.
+  -1
