@@ -330,8 +330,13 @@ proc initSasosModel*() =
   proc sasosAlloc(size: int): pointer {.nimcall.} = cast[pointer](alloc(size))
   proc sasosFree(p: pointer; size: int) {.nimcall.} = dealloc(p)
   var av: abiModule.NimixAbiVTable
-  av.allocRegion = sasosAlloc
-  av.freeRegion  = sasosFree
-  av.write       = abiWrite
-  av.exit        = abiExit
+  av.allocRegion    = sasosAlloc
+  av.freeRegion     = sasosFree
+  av.write          = abiWrite
+  av.exit           = abiExit
+  av.chanSend       = abiChanSend
+  av.chanRecv       = abiChanRecv
+  av.eventPublish   = abiEventPublish
+  av.eventSubscribe = abiEventSubscribe
+  av.eventPoll      = abiEventPoll
   abiModule.nimixAbi = av

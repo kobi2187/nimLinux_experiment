@@ -64,11 +64,15 @@ NIM_APP = $(NIM) c --skipParentCfg --skipUserCfg \
           --path:$(CURDIR) \
           --path:$(CURDIR)/apps/nim
 
-nim-apps: build/apps/hello.elf
+nim-apps: build/apps/hello.elf build/apps/ping_server.elf
 
 build/apps/hello.elf: apps/nim/hello/hello.nim kernel/abi/nimix_abi.h build/nimix_abi_stub.o
 	@mkdir -p build/apps
 	$(NIM_APP) -o:$@ $<
+
+build/apps/ping_server.elf: servers/ping/ping_server_elf.nim kernel/abi/nimix_abi.h build/nimix_abi_stub.o
+	@mkdir -p build/apps
+	$(NIM_APP) --path:$(CURDIR)/servers/ping -o:$@ $<
 
 apps: apps/ping/ping_embedded.nim
 

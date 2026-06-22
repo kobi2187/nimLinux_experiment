@@ -203,8 +203,13 @@ proc initMonolithicModel*() =
   proc monoAlloc(size: int): pointer {.nimcall.} = cast[pointer](alloc(size))
   proc monoFree(p: pointer; size: int) {.nimcall.} = dealloc(p)
   var av: abiModule.NimixAbiVTable
-  av.allocRegion = monoAlloc
-  av.freeRegion  = monoFree
-  av.write       = abiWrite
-  av.exit        = abiExit
+  av.allocRegion    = monoAlloc
+  av.freeRegion     = monoFree
+  av.write          = abiWrite
+  av.exit           = abiExit
+  av.chanSend       = abiChanSend
+  av.chanRecv       = abiChanRecv
+  av.eventPublish   = abiEventPublish
+  av.eventSubscribe = abiEventSubscribe
+  av.eventPoll      = abiEventPoll
   abiModule.nimixAbi = av

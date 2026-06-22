@@ -11,18 +11,32 @@
 type
   NimixAbiVTable* = object
     ## Kernel-side implementations assigned at boot by each model's init.
+
+    # ── Memory ────────────────────────────────────────────────────────────────
     allocRegion*: proc(size: int): pointer {.nimcall.}
-      ## Allocate `size` bytes. In SASOS: carve from next free region.
-      ## In process model: allocate from per-process heap.
+    freeRegion*:  proc(p: pointer; size: int) {.nimcall.}
 
-    freeRegion*: proc(p: pointer; size: int) {.nimcall.}
-      ## Release memory previously returned by allocRegion.
-
+    # ── I/O ───────────────────────────────────────────────────────────────────
     write*: proc(buf: pointer; len: int) {.nimcall.}
-      ## Write `len` bytes from `buf` to the app's stdout (VGA + serial).
+    exit*:  proc(code: int) {.nimcall.}
 
-    exit*: proc(code: int) {.nimcall.}
-      ## Terminate the calling app/SIP. Never returns.
+    # ── IPC: named channel (ServerChan) ───────────────────────────────────────
+    chanSend*: proc(name: cstring; data: pointer; dataLen: int): int {.nimcall.}
+      ## Post `dataLen` bytes to the named channel. Returns 0=ok, -1=not found, -2=full.
+
+    chanRecv*: proc(name: cstring; buf: pointer; bufLen: int): int {.nimcall.}
+      ## Dequeue one message from the named channel into buf.
+      ## Returns number of bytes written, or -1 if empty / not found.
+
+    # ── IPC: event pub/sub ────────────────────────────────────────────────────
+    eventPublish*:   proc(topic: cstring; data: pointer; dataLen: int) {.nimcall.}
+      ## Publish an event to all subscribers on topic.
+
+    eventSubscribe*: proc(topic: cstring): uint32 {.nimcall.}
+      ## Subscribe to a topic. Returns a token (>0) for polling, 0 on error.
+
+    eventPoll*: proc(token: uint32; buf: pointer; bufLen: int): int {.nimcall.}
+      ## Non-blocking poll. Returns bytes written to buf, or -1 if no event.
 
 var nimixAbi*: NimixAbiVTable
   ## Global ABI vtable. Set once at boot; read-only after that.
@@ -42,4 +56,19 @@ proc nimixWrite*(buf: pointer; len: int) {.exportc, cdecl.} =
 
 proc nimixExit*(code: int) {.exportc, cdecl.} =
   nimixAbi.exit(code)
-  while true: discard  # unreachable; silences noreturn requirement
+  while true: discard
+
+proc nimixChanSend*(name: cstring; data: pointer; dataLen: int): int {.exportc, cdecl.} =
+  nimixAbi.chanSend(name, data, dataLen)
+
+proc nimixChanRecv*(name: cstring; buf: pointer; bufLen: int): int {.exportc, cdecl.} =
+  nimixAbi.chanRecv(name, buf, bufLen)
+
+proc nimixEventPublish*(topic: cstring; data: pointer; dataLen: int) {.exportc, cdecl.} =
+  nimixAbi.eventPublish(topic, data, dataLen)
+
+proc nimixEventSubscribe*(topic: cstring): uint32 {.exportc, cdecl.} =
+  nimixAbi.eventSubscribe(topic)
+
+proc nimixEventPoll*(token: uint32; buf: pointer; bufLen: int): int {.exportc, cdecl.} =
+  nimixAbi.eventPoll(token, buf, bufLen)

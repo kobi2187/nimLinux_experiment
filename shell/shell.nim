@@ -243,8 +243,8 @@ proc cmdExec(filename: cstring) =
     let base = regionBase(slot)
     klogInt(llInfo, "ELF PIE: region base=0x", int64(base))
 
-    # ABI patch table — maps weak stub names to real kernel function addresses
-    var patches: array[4, AbiPatch]
+    # ABI patch table — all 9 kernel ABI symbols injected at load time
+    var patches: array[9, AbiPatch]
     patches[0] = AbiPatch(name: "nimixWrite",
                           fn: cast[uint64](abiModule.nimixWrite))
     patches[1] = AbiPatch(name: "nimixExit",
@@ -253,10 +253,20 @@ proc cmdExec(filename: cstring) =
                           fn: cast[uint64](abiModule.nimixAllocRegion))
     patches[3] = AbiPatch(name: "nimixFreeRegion",
                           fn: cast[uint64](abiModule.nimixFreeRegion))
+    patches[4] = AbiPatch(name: "nimixChanSend",
+                          fn: cast[uint64](abiModule.nimixChanSend))
+    patches[5] = AbiPatch(name: "nimixChanRecv",
+                          fn: cast[uint64](abiModule.nimixChanRecv))
+    patches[6] = AbiPatch(name: "nimixEventPublish",
+                          fn: cast[uint64](abiModule.nimixEventPublish))
+    patches[7] = AbiPatch(name: "nimixEventSubscribe",
+                          fn: cast[uint64](abiModule.nimixEventSubscribe))
+    patches[8] = AbiPatch(name: "nimixEventPoll",
+                          fn: cast[uint64](abiModule.nimixEventPoll))
 
     let loaded = elfLoadPie(dataBuf, nbytes, base,
                             cast[ptr UncheckedArray[AbiPatch]](addr patches[0]),
-                            4)
+                            9)
     if loaded.err != elfOk:
       kprint("PIE ELF load failed\n")
       regionFree(slot)
