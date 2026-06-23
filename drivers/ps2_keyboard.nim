@@ -69,9 +69,8 @@ proc kbdReady*(): bool {.inline.} =
   ## Returns true if at least one character is waiting in the buffer.
   kbdCount > 0
 
-proc kbdIrqHandler*(vector: uint8) {.nimcall.} =
-  ## IRQ1 handler — called by the interrupt dispatcher on each keypress.
-  ## Reads one scancode from the data port and pushes the ASCII char to the buffer.
+proc kbdIrqHandlerLegacy*(vector: uint8) {.nimcall.} =
+  ## Legacy IRQ1 handler (driver-registry path) — reads scancode, pushes ASCII to buffer.
   let scancode = inb(Ps2DataPort)
   let ch = scancodeToAscii(scancode)
   if ch != '\0':
@@ -90,5 +89,30 @@ let ps2KeyboardDriver* = DriverVTable(
   name:   "ps2_keyboard",
   init:   kbdInit,
   deinit: kbdDeinit,
-  irq:    kbdIrqHandler
+  irq:    kbdIrqHandlerLegacy
 )
+
+# IRQ handler and registration — only compiled when building the full kernel
+# (i.e. kern/interrupts.nim is in scope). Host tests skip this section.
+when defined(kernelFull):
+  import ../kern/interrupts
+  import ../drivers/pic
+  import ../kernel/event_server
+
+  proc kbdIrqHandler*(ctx: ptr ExceptionContext) {.nimcall.} =
+    ## IRQ1 handler — reads scancode, publishes key.down event.
+    let scancode = inb(Ps2DataPort)   # read from PS2 data port
+    picEoi(1)                          # IRQ1 → PIC line 1
+    # Also push to ring buffer for shell reads
+    let ch = scancodeToAscii(scancode)
+    if ch != '\0':
+      kbdBufPush(ch)
+    # Publish scancode as 1-byte payload
+    var sc = scancode
+    eventPublish("key.down", addr sc, 1)
+
+  proc kbdRegisterHandler*() =
+    ## Register the PS2 keyboard IRQ handler with the global interrupt manager.
+    ## Call after initInterruptSystem() and picInit().
+    let mgr = getInterruptManager()
+    discard mgr.registerExceptionHandler(IRQ_KEYBOARD, kbdIrqHandler)

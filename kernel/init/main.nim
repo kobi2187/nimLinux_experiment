@@ -348,6 +348,10 @@ proc runKernel(bootInfo: ptr BootInfo) =
   picUnmask(0)
   klog(llInfo, "PIT timer: 100Hz, IRQ0 handler registered")
 
+  kbdRegisterHandler()
+  picUnmask(1)   # unmask IRQ1 (keyboard)
+  klog(llInfo, "PS2 keyboard: IRQ1 handler registered")
+
   # Load IDT and enable interrupts so the timer fires
   let intMgr = getInterruptManager()
   if intMgr != nil:
