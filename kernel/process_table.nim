@@ -172,11 +172,27 @@ proc procSpawn*(name: cstring; entry: TaskProc;
       t.classPrev  = -1
       t.ipcCap     = NullCap
       t.wakeAt     = 0
-      # Initialize RSP to top of per-task kernel stack (16-byte aligned)
-      t.rsp = (cast[uint64](addr t.kstack[4095])) and not 15'u64
       procTable.tasks[i] = t
-      # Fix up rsp after copy: point into the copied stack in the table
-      procTable.tasks[i].rsp = (cast[uint64](addr procTable.tasks[i].kstack[4095])) and not 15'u64
+      # Build initial stack frame so contextSwitch can switch TO this task.
+      # contextSwitch pops r15,r14,r13,r12,rbx,rbp then does ret.
+      # We push: entry address (ret target) + 6 zero callee-saved regs.
+      # Stack grows down; top of kstack is at index 4095 (16-byte aligned).
+      # Build initial stack frame so contextSwitch can switch TO this task.
+      # contextSwitch does: pop r15,r14,r13,r12,rbx,rbp; ret
+      # Frame layout (low addr = rsp, high addr = top):
+      #   [rsp+0]  r15  [rsp+8]  r14  [rsp+16] r13  [rsp+24] r12
+      #   [rsp+32] rbx  [rsp+40] rbp  [rsp+48] entry (ret target)
+      let stackTop = (cast[uint64](addr procTable.tasks[i].kstack[4095])) and not 15'u64
+      let rsp = stackTop - 56
+      let frame = cast[ptr UncheckedArray[uint64]](rsp)
+      frame[0] = 0  # r15
+      frame[1] = 0  # r14
+      frame[2] = 0  # r13
+      frame[3] = 0  # r12
+      frame[4] = 0  # rbx
+      frame[5] = 0  # rbp
+      frame[6] = if entry != nil: cast[uint64](entry) else: 0  # ret → entry
+      procTable.tasks[i].rsp = rsp
       inc procTable.nextPid
       inc procTable.taskCount
       # Auto-grant IPC capability to trusted task classes
