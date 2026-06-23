@@ -59,6 +59,18 @@ type
                     replyBuf: pointer; replyBufLen: int): int {.nimcall.}
       ## Send to server and spin-wait for reply. Returns reply bytes written, or -1.
 
+    # ── Timing ────────────────────────────────────────────────────────────────
+    sleep*: proc(ticks: uint64) {.nimcall.}
+      ## Block calling task for `ticks` PIT ticks (100 ticks = 1 second at 100Hz).
+
+    # ── Scheduler ─────────────────────────────────────────────────────────────
+    `yield`*: proc() {.nimcall.}
+      ## Cooperative yield — hint scheduler to run other ready tasks.
+
+    # ── System info ───────────────────────────────────────────────────────────
+    sysInfo*: proc(buf: pointer; len: int): int {.nimcall.}
+      ## Serialize system snapshot as YAML into buf. Returns bytes written.
+
 var nimixAbi*: NimixAbiVTable
   ## Global ABI vtable. Set once at boot by the chosen kernel model init.
   ## Apps never call this directly — the ELF loader patches weak stubs with

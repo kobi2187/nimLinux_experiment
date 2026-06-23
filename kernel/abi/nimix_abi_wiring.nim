@@ -25,3 +25,6 @@ proc wireSharedAbi*(av: var NimixAbiVTable) =
   av.fsReadDir      = abiFsReadDir
   av.capSend        = abiCapSend
   av.chanCall       = abiChanCall
+  av.sleep          = abiSleep
+  av.`yield`        = abiYield
+  av.sysInfo        = abiSysInfo

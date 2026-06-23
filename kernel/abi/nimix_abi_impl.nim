@@ -15,6 +15,7 @@ import ../../kernel/event_server
 import ../../kernel/traits/event
 import ../../kernel/process_table
 import ../../mm/region_allocator
+import ../../drivers/pit
 
 # ── I/O ───────────────────────────────────────────────────────────────────────
 
@@ -167,3 +168,76 @@ proc abiCapSend*(name: cstring; tok: uint64; data: pointer; dataLen: int): int {
   ## Capability-gated chanSend. Returns -3 if token is invalid or lacks capIpc.
   if not cap.capCheck(CapToken(tok), capIpc): return -3
   abiChanSend(name, data, dataLen)
+
+# ── Scheduler ─────────────────────────────────────────────────────────────────
+
+proc abiYield*() {.nimcall.} =
+  ## Cooperative yield: update scheduler bookkeeping, let next ready task run.
+  ## Without full RSP context switch this just updates state metadata.
+  let next = procPickNext(procTable)
+  if next >= 0 and next != procTable.current:
+    let prev = procTable.current
+    procTable.tasks[prev].state = ptsReady
+    ringInsertTail(procTable, int16(prev), int(procTable.tasks[prev].class))
+    procTable.current = next
+    procTable.tasks[next].state = ptsRunning
+    inc procTable.tasks[next].switches
+    inc procTable.stats.totalSwitches
+
+# ── System info ───────────────────────────────────────────────────────────────
+
+proc abiSysInfo*(buf: pointer; len: int): int {.nimcall.} =
+  ## Emit a YAML system snapshot into buf. Returns bytes written.
+  let dst = cast[ptr UncheckedArray[char]](buf)
+  var pos = 0
+  template emit(s: cstring)  = bufEmit(dst, pos, len, s)
+  template emitU(n: uint64)  = bufEmitUInt(dst, pos, len, n)
+
+  let s = procTable.stats
+  let upSec = s.uptimeTicks div 100
+
+  emit("---\n")
+  emit("uptime_ticks: ");    emitU(s.uptimeTicks);                          emit("\n")
+  emit("uptime_sec: ");      emitU(upSec);                                  emit("\n")
+  emit("total_switches: ");  emitU(s.totalSwitches);                        emit("\n")
+  emit("idle_ticks: ");      emitU(s.idleTicks);                            emit("\n")
+  emit("task_count: ");      emitU(uint64(procTable.taskCount));             emit("\n")
+  emit("regions_used: ");    emitU(uint64(regionUsedCount()));               emit("\n")
+  emit("regions_total: ");   emitU(uint64(MaxRegions));                     emit("\n")
+  emit("cpu_by_class:\n")
+  emit("  realtime: ");      emitU(s.ticksPerClass[0]);                     emit("\n")
+  emit("  server: ");        emitU(s.ticksPerClass[1]);                     emit("\n")
+  emit("  app: ");           emitU(s.ticksPerClass[2]);                     emit("\n")
+  emit("tasks:\n")
+  for i in 0 ..< MaxTasks:
+    let t = procTable.tasks[i]
+    if not t.used: continue
+    emit("  - pid: ");    emitU(uint64(t.pid));                             emit("\n")
+    emit("    name: ");   emit(cast[cstring](unsafeAddr t.name[0]));        emit("\n")
+    emit("    class: ")
+    case t.class
+    of tcRealtime: emit("realtime\n")
+    of tcServer:   emit("server\n")
+    of tcApp:      emit("app\n")
+    emit("    state: ")
+    case t.state
+    of ptsReady:   emit("ready\n")
+    of ptsRunning: emit("running\n")
+    of ptsBlocked: emit("blocked\n")
+    of ptsZombie:  emit("zombie\n")
+    emit("    switches: ");   emitU(t.switches);                            emit("\n")
+    emit("    cpu_ticks: ");  emitU(t.cpuTicks);                            emit("\n")
+
+  if pos < len: dst[pos] = '\0'
+  pos
+
+# ── Timing ────────────────────────────────────────────────────────────────────
+
+proc abiSleep*(ticks: uint64) {.nimcall.} =
+  ## Cooperative sleep: spin-wait until ticks have elapsed.
+  ## Replaced with real block+wake once context switch is complete.
+  let target = pitTicks() + ticks
+  procSleepUntil(int(procTable.current), target)
+  # Spin until woken (PIT ISR fires and runs procWakeExpired)
+  while procTable.tasks[procTable.current].state == ptsBlocked:
+    discard

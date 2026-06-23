@@ -72,3 +72,7 @@ proc regionFree*(h: RegionHandle) =
 
 proc regionValid*(h: RegionHandle): bool =
   int(h) >= 0
+
+proc regionUsedCount*(): int =
+  ## Number of region slots currently in use (allocated minus freed).
+  gRegionAlloc.nextSlot - gRegionAlloc.freeCount
