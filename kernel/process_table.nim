@@ -10,6 +10,7 @@
 
 import ../core/log
 import ../drivers/pit    # pitTicks()
+import cap/capability
 
 const
   MaxTasks*    = 32
@@ -50,6 +51,9 @@ type
     birthTick*:  uint64         ## pitTicks() at spawn
     cpuTicks*:   uint64         ## quanta consumed
     switches*:   uint64         ## times this task was scheduled
+
+    # ── Capability token ──────────────────────────────────────────────────
+    ipcCap*:     CapToken          ## IPC capability token (NullCap = no IPC access)
 
     # ── Intrusive class-ring links ─────────────────────────────────────────
     # next/prev are slot indices into the flat tasks[] array, -1 = none.
@@ -136,6 +140,7 @@ proc procTableInit*() =
     procTable.tasks[i].used      = false
     procTable.tasks[i].classNext = -1
     procTable.tasks[i].classPrev = -1
+    procTable.tasks[i].ipcCap    = NullCap
 
 # ── Spawn ─────────────────────────────────────────────────────────────────────
 
@@ -160,6 +165,7 @@ proc procSpawn*(name: cstring; entry: TaskProc;
       t.switches   = 0
       t.classNext  = -1
       t.classPrev  = -1
+      t.ipcCap     = NullCap
       # Initialize RSP to top of per-task kernel stack (16-byte aligned)
       t.rsp = (cast[uint64](addr t.kstack[4095])) and not 15'u64
       procTable.tasks[i] = t
@@ -167,6 +173,9 @@ proc procSpawn*(name: cstring; entry: TaskProc;
       procTable.tasks[i].rsp = (cast[uint64](addr procTable.tasks[i].kstack[4095])) and not 15'u64
       inc procTable.nextPid
       inc procTable.taskCount
+      # Auto-grant IPC capability to trusted task classes
+      if cls in {tcRealtime, tcServer}:
+        procTable.tasks[i].ipcCap = capGrant(procTable.tasks[i].pid, capIpc)
       ringInsertTail(procTable, int16(i), int(cls))
       klogInt(llInfo, "procSpawn: pid=", int64(t.pid))
       return i

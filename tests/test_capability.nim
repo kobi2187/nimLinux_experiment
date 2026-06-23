@@ -82,6 +82,18 @@ proc testCapGrantFullTableReturnsNullCap() =
   assert isNull(tok), "capGrant on full table must return NullCap"
   echo "PASS: capGrant returns NullCap when table is full"
 
+proc testNullCapFailsCapCheck() =
+  capTableInit()
+  assert not capCheck(NullCap, capIpc), "NullCap must fail capCheck for capIpc"
+  echo "PASS: NullCap fails capCheck for capIpc"
+
+proc testGrantCheckSucceeds() =
+  capTableInit()
+  let tok = capGrant(42, capIpc)
+  assert not isNull(tok), "capGrant must return non-null token"
+  assert capCheck(tok, capIpc), "capGrant+capCheck must succeed"
+  echo "PASS: capGrant+capCheck succeeds"
+
 when isMainModule:
   testNullCapIsNull()
   testDifferentTokensNotEqual()
@@ -95,4 +107,6 @@ when isMainModule:
   testCapCheckFailsAfterRevoke()
   testDoubleRevokeIsSafe()
   testCapGrantFullTableReturnsNullCap()
+  testNullCapFailsCapCheck()
+  testGrantCheckSucceeds()
   echo "All capability tests passed."

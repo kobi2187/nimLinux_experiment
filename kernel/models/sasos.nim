@@ -31,6 +31,8 @@ import ../../kernel/traits/ipc as ipcTrait
 import ../../kernel/abi/nimix_abi as abiModule
 import ../../kernel/abi/nimix_abi_wiring
 import ../../mm/region_allocator
+import ../../kernel/cap/capability as capMod
+import ../../kernel/process_table as ptMod
 export schedTrait
 export ipcTrait
 
@@ -144,23 +146,25 @@ proc sasosSetCurrentSip*(sip: SipId) =
 # Task Table — Round-Robin (same policy as monolithic)
 # ═══════════════════════════════════════════════════════════════════════════
 
+const SasosMaxTasks = config.MaxTasks  ## from kernel/config (256 slots)
+
 type
   SasosTaskEntry = object
     used:     bool
     state:    TaskState
-    entry:    TaskProc
+    entry:    schedTrait.TaskProc
     priority: TaskPriority
     sipOwner: SipId  ## Which SIP owns this task
 
 var
-  sasosTaskTable:   array[MaxTasks, SasosTaskEntry]
+  sasosTaskTable:   array[SasosMaxTasks, SasosTaskEntry]
   sasosTaskCount:   uint32 = 0
   sasosCurrentTask: uint32 = 0
 
-proc sasosSpawn(entry: TaskProc, priority: TaskPriority): Result[TaskId, SchedulerError] {.nimcall.} =
-  if sasosTaskCount >= uint32(MaxTasks):
+proc sasosSpawn(entry: schedTrait.TaskProc, priority: TaskPriority): Result[TaskId, SchedulerError] {.nimcall.} =
+  if sasosTaskCount >= uint32(SasosMaxTasks):
     return Result[TaskId, SchedulerError](isOk: false, error: seOutOfSlots)
-  for i in 0 ..< MaxTasks:
+  for i in 0 ..< SasosMaxTasks:
     if not sasosTaskTable[i].used:
       sasosTaskTable[i] = SasosTaskEntry(
         used: true, state: tsReady, entry: entry,
@@ -170,25 +174,25 @@ proc sasosSpawn(entry: TaskProc, priority: TaskPriority): Result[TaskId, Schedul
   Result[TaskId, SchedulerError](isOk: false, error: seOutOfSlots)
 
 proc sasosYield() {.nimcall.} =
-  var next = (sasosCurrentTask + 1) mod uint32(MaxTasks)
-  for _ in 0 ..< MaxTasks:
+  var next = (sasosCurrentTask + 1) mod uint32(SasosMaxTasks)
+  for _ in 0 ..< SasosMaxTasks:
     if sasosTaskTable[next].used and sasosTaskTable[next].state == tsReady:
       sasosCurrentTask = next
       # Update current SIP to match the task we're switching to
       currentSip = sasosTaskTable[next].sipOwner
       return
-    next = (next + 1) mod uint32(MaxTasks)
+    next = (next + 1) mod uint32(SasosMaxTasks)
 
 proc sasosBlock(id: TaskId): Result[void, SchedulerError] {.nimcall.} =
   let idx = uint32(id)
-  if idx >= uint32(MaxTasks) or not sasosTaskTable[idx].used:
+  if idx >= uint32(SasosMaxTasks) or not sasosTaskTable[idx].used:
     return Result[void, SchedulerError](isOk: false, error: seInvalidTask)
   sasosTaskTable[idx].state = tsBlocked
   Result[void, SchedulerError](isOk: true)
 
 proc sasosWake(id: TaskId): Result[void, SchedulerError] {.nimcall.} =
   let idx = uint32(id)
-  if idx >= uint32(MaxTasks) or not sasosTaskTable[idx].used:
+  if idx >= uint32(SasosMaxTasks) or not sasosTaskTable[idx].used:
     return Result[void, SchedulerError](isOk: false, error: seInvalidTask)
   if sasosTaskTable[idx].state != tsBlocked:
     return Result[void, SchedulerError](isOk: false, error: seNotBlocked)
@@ -204,6 +208,8 @@ proc sasosExit() {.nimcall.} =
     sasosTaskTable[idx].state = tsZombie
     if sasosTaskCount > 0: dec sasosTaskCount
   sasosYield()
+
+const ProcMaxTasks = ptMod.MaxTasks  ## Slots in the kernel process table (32)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # IPC — Capability-Gated Direct Copy
@@ -228,6 +234,11 @@ proc sasosSend(ch: ChannelId, msg: ptr Message): IpcResult {.nimcall.} =
   let idx = uint32(ch)
   if idx >= uint32(MaxChannels) or not sasosChannels[idx].isOpen:
     return mrInvalid
+  # ── CapToken gate: current task must hold a capIpc token ──
+  let curSlot = int(ptMod.procTable.current)
+  if curSlot >= 0 and curSlot < ProcMaxTasks:
+    if not capMod.capCheck(ptMod.procTable.tasks[curSlot].ipcCap, capMod.capIpc):
+      return mrInvalid
   # ── Capability gate: current SIP must hold write permission ──
   if not sasosHasCapability(currentSip, capChannelWrite, idx):
     return mrInvalid
@@ -243,6 +254,11 @@ proc sasosRecv(ch: ChannelId, msg: ptr Message): IpcResult {.nimcall.} =
   let idx = uint32(ch)
   if idx >= uint32(MaxChannels) or not sasosChannels[idx].isOpen:
     return mrInvalid
+  # ── CapToken gate: current task must hold a capIpc token ──
+  let curSlot = int(ptMod.procTable.current)
+  if curSlot >= 0 and curSlot < ProcMaxTasks:
+    if not capMod.capCheck(ptMod.procTable.tasks[curSlot].ipcCap, capMod.capIpc):
+      return mrInvalid
   # ── Capability gate: current SIP must hold read permission ──
   if not sasosHasCapability(currentSip, capChannelRead, idx):
     return mrInvalid
@@ -288,7 +304,7 @@ proc initSasosModel*() =
   ## Creates the kernel SIP (SipId 0) and wires up capability-gated IPC.
 
   # Zero task table
-  for i in 0 ..< MaxTasks:
+  for i in 0 ..< SasosMaxTasks:
     sasosTaskTable[i].used  = false
     sasosTaskTable[i].state = tsReady
   sasosTaskCount   = 0
