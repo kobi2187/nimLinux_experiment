@@ -226,6 +226,7 @@ test:
 	$(NIM) c -r $(TEST_FLAGS) tests/test_tss.nim
 	$(NIM) c -r $(TEST_FLAGS) tests/test_server_chan.nim
 	$(NIM) c -r $(TEST_FLAGS) tests/test_capability.nim
+	$(NIM) c -r $(TEST_FLAGS) tests/test_cap_registry.nim
 	$(NIM) c -r $(TEST_FLAGS) tests/test_region_allocator.nim
 	$(NIM) c -r $(TEST_FLAGS) -d:testing tests/test_osalloc.nim
 	$(NIM) c -r $(TEST_FLAGS) -d:testing tests/test_fd_table.nim
