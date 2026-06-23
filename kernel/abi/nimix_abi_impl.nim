@@ -9,6 +9,7 @@ import app_args
 import ../../kernel/cap/capability as cap
 import ../../core/serial
 import ../../core/log
+import ../../core/ptr_helpers
 import ../../ipc/server_chan
 import ../../kernel/event_server
 import ../../kernel/traits/event
@@ -19,7 +20,7 @@ import ../../mm/region_allocator
 
 proc abiWrite*(buf: pointer; len: int) {.nimcall.} =
   if buf == nil or len <= 0: return
-  let s = cast[ptr UncheckedArray[byte]](buf)
+  let s = toBytes(buf)
   for i in 0 ..< len:
     defaultSerial.putChar(char(s[i]))
 
@@ -158,6 +159,19 @@ proc abiProcKillPid*(pid: uint32): int {.nimcall.} =
 proc abiFsReadDir*(path: cstring; buf: pointer; len: int): int {.nimcall.} =
   ## Directory listing — not yet implemented.
   -1
+
+proc abiChanCall*(server: cstring; data: pointer; dataLen: int;
+                  replyBuf: pointer; replyBufLen: int): int {.nimcall.} =
+  ## Synchronous IPC: send to server, spin-poll reply channel.
+  let sendResult = abiChanSend(server, data, dataLen)
+  if sendResult < 0: return sendResult
+  var attempts = 0
+  const MaxAttempts = 1_000_000
+  while attempts < MaxAttempts:
+    let n = abiChanRecv(server, replyBuf, replyBufLen)
+    if n >= 0: return n
+    inc attempts
+  -1  # timeout
 
 proc abiCapSend*(name: cstring; tok: uint64; data: pointer; dataLen: int): int {.nimcall.} =
   ## Capability-gated chanSend. Returns -3 if token is invalid or lacks capIpc.

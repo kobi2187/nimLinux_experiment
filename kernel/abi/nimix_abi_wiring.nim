@@ -24,3 +24,4 @@ proc wireSharedAbi*(av: var NimixAbiVTable) =
   av.procKillPid    = abiProcKillPid
   av.fsReadDir      = abiFsReadDir
   av.capSend        = abiCapSend
+  av.chanCall       = abiChanCall

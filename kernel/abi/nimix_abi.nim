@@ -54,6 +54,11 @@ type
     capSend*: proc(name: cstring; tok: uint64; data: pointer; dataLen: int): int {.nimcall.}
       ## Like chanSend but requires a valid capIpc token. Returns -3 on permission denied.
 
+    # ── Synchronous IPC ───────────────────────────────────────────────────────
+    chanCall*: proc(server: cstring; data: pointer; dataLen: int;
+                    replyBuf: pointer; replyBufLen: int): int {.nimcall.}
+      ## Send to server and spin-wait for reply. Returns reply bytes written, or -1.
+
 var nimixAbi*: NimixAbiVTable
   ## Global ABI vtable. Set once at boot by the chosen kernel model init.
   ## Apps never call this directly — the ELF loader patches weak stubs with

@@ -46,3 +46,4 @@ __attribute__((weak)) int  nimixSchedStats(void* buf, int len)                  
 __attribute__((weak)) int  nimixProcKillPid(unsigned int pid)                      { (void)pid; return -1; }
 __attribute__((weak)) int  nimixFsReadDir(const char* path, void* buf, int len)    { (void)path; (void)buf; (void)len; return -1; }
 __attribute__((weak)) int  nimixCapSend(const char* name, unsigned long long tok, const void* data, int len) { (void)name; (void)tok; (void)data; (void)len; return -1; }
+__attribute__((weak)) int nimixChanCall(const char* server, const void* data, int dataLen, void* replyBuf, int replyBufLen) { (void)server; (void)data; (void)dataLen; (void)replyBuf; (void)replyBufLen; return -1; }
