@@ -67,7 +67,11 @@ type
 
     # ── Kernel stack (per-task, for context switching) ─────────────────────
     kstack*:     array[4096, byte]   ## 4 KB kernel stack for this task
-    rsp*:        uint64              ## saved RSP (set by contextSwitch)
+    rsp*:        uint64              ## saved RSP (set by contextSwitch/preemptiveSwitch)
+
+    # ── FPU/SSE state (512 bytes, must be 16-byte aligned for fxsave64) ────
+    fpuState*:   array[512, byte]    ## saved by fxSave, restored by fxRestore
+    fpuValid*:   bool                ## false = FPU state not yet saved (lazy)
 
   SchedulerStats* = object
     ticksPerClass*: array[3, uint64]   ## CPU quanta consumed per class
@@ -86,6 +90,14 @@ type
 # ── Global instance ───────────────────────────────────────────────────────────
 
 var procTable*: ProcessTable
+
+# ── Idle task ─────────────────────────────────────────────────────────────────
+# Runs when no other task is ready. Halts CPU to save power.
+# Compiled only in kernel context (hlt is ring-0 only).
+when defined(kernelFull):
+  import ../arch/x86_64/cpu_primitives
+  proc idleTaskProc*() {.nimcall, noreturn.} =
+    while true: hlt()
 
 # ── Name helpers ──────────────────────────────────────────────────────────────
 

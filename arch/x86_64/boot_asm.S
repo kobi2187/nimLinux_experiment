@@ -311,28 +311,60 @@ ISR_NOERR 36; ISR_NOERR 37; ISR_NOERR 38; ISR_NOERR 39
 ISR_NOERR 40; ISR_NOERR 41; ISR_NOERR 42; ISR_NOERR 43
 ISR_NOERR 44; ISR_NOERR 45; ISR_NOERR 46; ISR_NOERR 47
 
-/* Context switch stub — called from the timer ISR Nim handler.
- * Switches kernel stack from current task to next task.
+/* contextSwitch — cooperative kernel-to-kernel switch.
+ * Used when a task voluntarily yields (abiSleep, abiYield).
+ * Saves callee-saved regs + RSP, loads new task's RSP and pops its regs.
+ *
  * C/Nim ABI: contextSwitch(oldRsp: ptr uint64, newRsp: uint64)
- *   RDI = pointer to where to save current RSP
- *   RSI = new RSP to load
+ *   RDI = pointer where current RSP is saved
+ *   RSI = new task's saved RSP to load
+ *
+ * Frame on each task's kstack (low addr first, rsp points at r15):
+ *   [rsp+0]  r15  [rsp+8]  r14  [rsp+16] r13  [rsp+24] r12
+ *   [rsp+32] rbx  [rsp+40] rbp  [rsp+48] return-address
  */
 .global contextSwitch
 contextSwitch:
-    /* Save callee-saved registers onto current stack */
-    push %rbp; push %rbx
-    push %r12; push %r13; push %r14; push %r15
+    push %r15; push %r14; push %r13; push %r12
+    push %rbx; push %rbp
+    mov  %rsp, (%rdi)          /* save outgoing RSP */
+    mov  %rsi, %rsp            /* load incoming RSP */
+    pop  %rbp; pop  %rbx
+    pop  %r12; pop  %r13; pop  %r14; pop  %r15
+    ret                        /* jumps to saved return address on new stack */
 
-    /* Save current RSP into *oldRsp */
-    mov %rsp, (%rdi)
+/* preemptiveSwitch — switch tasks from inside an IRQ handler.
+ * The CPU has already pushed an iretq frame for the interrupted task.
+ * We save the interrupted task's RSP (which points at the iretq frame),
+ * load the new task's RSP, then return — iretq in isr_common_stub
+ * will resume the new task instead of the interrupted one.
+ *
+ * C/Nim ABI: preemptiveSwitch(oldRsp: ptr uint64, newRsp: uint64)
+ *   RDI = pointer where interrupted task's RSP is saved
+ *   RSI = new task's RSP (its iretq frame or cooperative kstack frame)
+ *
+ * NOTE: caller (pitIrqHandler) is inside isr_common_stub with all GPRs
+ * saved on stack.  We just swap RSP here; isr_common_stub's pop sequence
+ * and iretq will then restore the NEW task's registers and resume it.
+ */
+.global preemptiveSwitch
+preemptiveSwitch:
+    mov  %rsp, (%rdi)          /* save current (interrupted) task's RSP */
+    mov  %rsi, %rsp            /* switch to new task's saved RSP */
+    ret                        /* back into isr_common_stub of new task */
 
-    /* Switch to new stack */
-    mov %rsi, %rsp
+/* fxSave / fxRestore — save/restore x87 + SSE state (512 bytes, 16-byte aligned).
+ * fxSave(dst: pointer)   — saves to *dst
+ * fxRestore(src: pointer) — loads from *src
+ */
+.global fxSave
+fxSave:
+    fxsave64 (%rdi)
+    ret
 
-    /* Restore callee-saved registers from new stack */
-    pop %r15; pop %r14; pop %r13; pop %r12
-    pop %rbx; pop %rbp
-
+.global fxRestore
+fxRestore:
+    fxrstor64 (%rdi)
     ret
 
 /* Mark the stack as non-executable (silences linker warning) */

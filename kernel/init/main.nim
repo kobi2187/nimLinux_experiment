@@ -378,6 +378,9 @@ proc runKernel(bootInfo: ptr BootInfo) =
   serverChanRegistryInit()
   pingServerInit()
 
+  # Register idle task first (slot 0, lowest priority, always ready)
+  discard procSpawn("idle", idleTaskProc, tcApp, 0)
+
   # Register well-known kernel tasks in the process table
   discard procSpawn("shell",       nil, tcServer,   128)
   discard procSpawn("ping_server", nil, tcServer,   100)

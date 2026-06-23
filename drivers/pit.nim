@@ -52,31 +52,59 @@ when defined(kernelFull):
   import ../kern/interrupts
   import ../drivers/pic
   import ../kernel/process_table
+  import ../arch/x86_64/tss
 
-  proc contextSwitch(oldRsp: ptr uint64; newRsp: uint64) {.importc, cdecl.}
+  # Assembly helpers declared here; defined in boot_asm.S
+  proc preemptiveSwitch(oldRsp: ptr uint64; newRsp: uint64) {.importc, cdecl.}
+  proc fxSave(dst: pointer) {.importc, cdecl.}
+  proc fxRestore(src: pointer) {.importc, cdecl.}
 
   proc pitIrqHandler*(ctx: ptr ExceptionContext) {.nimcall.} =
-    ## IRQ0 interrupt handler registered with the IDT at vector 0x20 (IRQ_TIMER).
-    ## Increments the tick counter, updates scheduler stats, sends EOI,
-    ## then performs a context switch if a different task is ready.
+    ## IRQ0 — preemptive scheduler tick.
+    ## 1. Bookkeeping (tick, stats, wake expired sleepers)
+    ## 2. EOI so PIC can fire next IRQ
+    ## 3. Pick next task; if different, save FPU + swap RSP via iretq frame
     pitTick()
     procTickCurrent(procTable)
     procWakeExpired(procTable)
     picEoi(0)
-    # Pick next ready task
+
     let next = procPickNext(procTable)
-    if next >= 0 and next != procTable.current:
-      let prev = procTable.current
-      procTable.current = next
-      procTable.tasks[next].state = ptsRunning
-      inc procTable.tasks[next].switches
-      inc procTable.stats.totalSwitches
-      if prev >= 0:
-        procTable.tasks[prev].state = ptsReady
-        contextSwitch(addr procTable.tasks[prev].rsp,
-                      procTable.tasks[next].rsp)
-      # If prev == -1 (idle/boot), we cannot save the current RSP here
-      # because we're on the interrupt stack. Skip the switch in that case.
+    if next < 0 or next == procTable.current:
+      return  # no switch needed
+
+    let prev = procTable.current
+    procTable.current = next
+    procTable.tasks[next].state = ptsRunning
+    inc procTable.tasks[next].switches
+    inc procTable.stats.totalSwitches
+
+    # Save outgoing task's FPU state (lazy: only if it used FPU)
+    if prev >= 0 and procTable.tasks[prev].used:
+      procTable.tasks[prev].state = ptsReady
+      fxSave(addr procTable.tasks[prev].fpuState[0])
+      procTable.tasks[prev].fpuValid = true
+
+    # Restore incoming task's FPU state
+    if procTable.tasks[next].fpuValid:
+      fxRestore(addr procTable.tasks[next].fpuState[0])
+
+    # Update TSS rsp0 so the next IRQ while this task runs uses its kernel stack
+    globalTss.rsp0 = cast[uint64](addr procTable.tasks[next].kstack[4095])
+
+    # Preemptive RSP swap: we are inside isr_common_stub's GPR save area.
+    # ctx points at rax on the stack (= current RSP inside the ISR frame).
+    # preemptiveSwitch saves this RSP into prev.rsp and loads next.rsp.
+    # When we return from preemptiveSwitch, isr_common_stub's pop+iretq
+    # will restore the new task's saved register state and resume it.
+    if prev >= 0:
+      preemptiveSwitch(addr procTable.tasks[prev].rsp,
+                       procTable.tasks[next].rsp)
+    else:
+      # No previous task (boot/idle) — just load new task's stack.
+      # We can't save "nowhere", so just switch RSP directly.
+      preemptiveSwitch(addr procTable.tasks[next].rsp,  # dummy write target
+                       procTable.tasks[next].rsp)
 
   proc pitRegisterHandler*() =
     ## Register the PIT IRQ handler with the global interrupt manager.
