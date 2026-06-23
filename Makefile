@@ -74,7 +74,7 @@ build/apps/hello.elf: apps/nim/hello/hello.nim kernel/abi/nimix_abi.h build/nimi
 	@mkdir -p build/apps
 	$(NIM_APP) -o:$@ $<
 
-build/apps/ping_server.elf: servers/ping/ping_server_elf.nim kernel/abi/nimix_abi.h build/nimix_abi_stub.o
+build/apps/ping_server.elf: servers/ping/ping_server_elf.nim servers/ping/ping_logic.nim kernel/abi/nimix_abi.h build/nimix_abi_stub.o
 	@mkdir -p build/apps
 	$(NIM_APP) --path:$(CURDIR)/servers/ping -o:$@ $<
 
@@ -227,6 +227,7 @@ test:
 	$(NIM) c -r $(TEST_FLAGS) tests/test_server_chan.nim
 	$(NIM) c -r $(TEST_FLAGS) tests/test_capability.nim
 	$(NIM) c -r $(TEST_FLAGS) tests/test_region_allocator.nim
+	$(NIM) c -r $(TEST_FLAGS) -d:testing tests/test_osalloc.nim
 	@echo "=== All tests passed ==="
 
 # ── QEMU integration tests (serial pipe harness) ──────────────────
