@@ -12,6 +12,9 @@ import ../core/log
 import ../drivers/pit    # pitTicks()
 import cap/capability
 
+when defined(testing):
+  var mockTicks*: uint64
+
 const
   MaxTasks*    = 32
   TaskNameLen* = 32
@@ -51,6 +54,7 @@ type
     birthTick*:  uint64         ## pitTicks() at spawn
     cpuTicks*:   uint64         ## quanta consumed
     switches*:   uint64         ## times this task was scheduled
+    wakeAt*:     uint64         ## pitTicks() value at which to wake (0 = not sleeping)
 
     # ── Capability token ──────────────────────────────────────────────────
     ipcCap*:     CapToken          ## IPC capability token (NullCap = no IPC access)
@@ -141,6 +145,7 @@ proc procTableInit*() =
     procTable.tasks[i].classNext = -1
     procTable.tasks[i].classPrev = -1
     procTable.tasks[i].ipcCap    = NullCap
+    procTable.tasks[i].wakeAt    = 0
 
 # ── Spawn ─────────────────────────────────────────────────────────────────────
 
@@ -166,6 +171,7 @@ proc procSpawn*(name: cstring; entry: TaskProc;
       t.classNext  = -1
       t.classPrev  = -1
       t.ipcCap     = NullCap
+      t.wakeAt     = 0
       # Initialize RSP to top of per-task kernel stack (16-byte aligned)
       t.rsp = (cast[uint64](addr t.kstack[4095])) and not 15'u64
       procTable.tasks[i] = t
@@ -235,3 +241,27 @@ proc procFindPid*(pid: uint32): int =
     if procTable.tasks[i].used and procTable.tasks[i].pid == pid:
       return i
   -1
+
+# ── Sleep / wake ──────────────────────────────────────────────────────────────
+
+proc procSleepUntil*(slot: int; ticks: uint64) =
+  ## Block task at slot until pitTicks() >= ticks.
+  if slot < 0 or slot >= MaxTasks: return
+  if not procTable.tasks[slot].used: return
+  procTable.tasks[slot].wakeAt = ticks
+  procTable.tasks[slot].state  = ptsBlocked
+  ringRemove(procTable, int16(slot), int(procTable.tasks[slot].class))
+
+proc procWakeExpired*(pt: var ProcessTable) =
+  ## Check all blocked tasks; wake any whose wakeAt <= now.
+  ## Called every PIT tick from pitIrqHandler.
+  when defined(testing):
+    let now = mockTicks
+  else:
+    let now = pitTicks()
+  for i in 0 ..< MaxTasks:
+    if pt.tasks[i].used and pt.tasks[i].state == ptsBlocked and
+       pt.tasks[i].wakeAt > 0 and now >= pt.tasks[i].wakeAt:
+      pt.tasks[i].wakeAt = 0
+      pt.tasks[i].state  = ptsReady
+      ringInsertTail(pt, int16(i), int(pt.tasks[i].class))

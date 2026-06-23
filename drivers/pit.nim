@@ -61,6 +61,7 @@ when defined(kernelFull):
     ## then performs a context switch if a different task is ready.
     pitTick()
     procTickCurrent(procTable)
+    procWakeExpired(procTable)
     picEoi(0)
     # Pick next ready task
     let next = procPickNext(procTable)

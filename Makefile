@@ -231,6 +231,7 @@ test:
 	$(NIM) c -r $(TEST_FLAGS) -d:testing tests/test_osalloc.nim
 	$(NIM) c -r $(TEST_FLAGS) -d:testing tests/test_fd_table.nim
 	$(NIM) c -r $(TEST_FLAGS) -d:testing tests/test_sync_ipc.nim
+	$(NIM) c -r $(TEST_FLAGS) -d:testing tests/test_sleep.nim
 	@echo "=== All tests passed ==="
 
 # ── QEMU integration tests (serial pipe harness) ──────────────────
