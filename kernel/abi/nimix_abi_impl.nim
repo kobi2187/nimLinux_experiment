@@ -38,9 +38,7 @@ proc abiChanSend*(name: cstring; data: pointer; dataLen: int): int {.nimcall.} =
   if dataLen > ServerMsgMaxLen: return -3
   var msg: ServerMsg
   msg.len = uint16(dataLen)
-  let src = cast[ptr UncheckedArray[byte]](data)
-  for i in 0 ..< dataLen:
-    msg.data[i] = src[i]
+  copyBytes(addr msg.data[0], data, dataLen)
   if not serverChanPost(ch[], msg): return -2
   0
 
@@ -51,10 +49,7 @@ proc abiChanRecv*(name: cstring; buf: pointer; bufLen: int): int {.nimcall.} =
   if ch == nil: return -1
   let m = serverChanRecv(ch[])
   if not m.hasValue: return -1
-  let copyLen = if int(m.value.len) < bufLen: int(m.value.len) else: bufLen
-  let dst = cast[ptr UncheckedArray[byte]](buf)
-  for i in 0 ..< copyLen:
-    dst[i] = m.value.data[i]
+  let copyLen = copyBytesMin(buf, bufLen, addr m.value.data[0], int(m.value.len))
   copyLen
 
 # ── IPC: event pub/sub ────────────────────────────────────────────────────────
@@ -71,12 +66,7 @@ proc abiEventPoll*(token: uint32; buf: pointer; bufLen: int): int {.nimcall.} =
   let ev = eventPoll(EventToken(token))
   if ev.isNone: return -1
   let payload = ev.get().payload
-  let plen = int(payload.len)
-  let copyLen = if plen < bufLen: plen else: bufLen
-  let dst = cast[ptr UncheckedArray[byte]](buf)
-  let src = cast[ptr UncheckedArray[byte]](unsafeAddr payload.data[0])
-  for i in 0 ..< copyLen:
-    dst[i] = src[i]
+  let copyLen = copyBytesMin(buf, bufLen, unsafeAddr payload.data[0], int(payload.len))
   copyLen
 
 # ── Process management ────────────────────────────────────────────────────────

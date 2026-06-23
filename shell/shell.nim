@@ -22,6 +22,7 @@ import ../kernel/abi/nimix_abi as abiModule
 import ../kernel/abi/app_args
 import ../mm/region_allocator
 import ../kernel/process_table
+import ../core/ptr_helpers
 
 const
   ShellPrompt = "nimixos> "
@@ -176,7 +177,7 @@ proc cmdRun(filename: cstring) =
 proc buildAbiPatches(): array[14, AbiPatch] =
   ## Build the ABI patch table from the live vtable fields.
   ## Points directly at the kernel implementations — no bridge indirection.
-  proc p(name: cstring; f: pointer): AbiPatch = AbiPatch(name: name, fn: cast[uint64](f))
+  proc p(name: cstring; f: pointer): AbiPatch = AbiPatch(name: name, fn: procAddr(f))
   let v = abiModule.nimixAbi
   result[0]  = p("nimixWrite",          v.write)
   result[1]  = p("nimixExit",           v.exit)
@@ -243,8 +244,7 @@ proc cmdExec(filename: cstring; appArgs: cstring = nil) =
   if res != fOk:
     kprint("File read failed\n"); return
   let dataBuf = cast[ptr byte](addr diskFileBuf[0])
-  # e_type at ELF offset 16: 2=ET_EXEC, 3=ET_DYN
-  if cast[ptr uint16](cast[uint64](dataBuf) + 16)[] == 3:
+  if isPieElf(dataBuf):
     runPieElf(filename, dataBuf, nbytes, appArgs)
   else:
     runExecElf(dataBuf, nbytes)
