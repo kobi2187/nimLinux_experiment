@@ -200,6 +200,88 @@ This makes the kernel nearly single-threaded in its I/O handling — one request
 | `apps/nim/nimixos/net.nim` | Thin app-side network API |
 | `apps/nim/nimixos/fs.nim` | Thin app-side filesystem API |
 
+## Bulk Data Transfer — Zero-Copy Memory Regions
+
+### Problem
+
+Moving bulk data (media frames, file contents, network payloads) through IPC message buffers requires at minimum two copies: sender → channel buffer → receiver. At 60fps 4K video (≈960 MB/s) or sustained disk I/O this is unacceptable.
+
+### Solution: Capability-scoped memory regions
+
+The dispatcher routes a **capability token pointing to a shared region**, not the data itself. The control path (request/reply metadata) uses MsgPack messages. The data path uses direct pointer access — zero copies.
+
+```
+App:       send {op:"read", path:"...", offset, len}   ← MsgPack, tiny
+Dispatcher: route to fs_server
+fs_server: fill region slot with disk data
+           mint capMemRead for app's PID
+           send {token, base, len} reply              ← MsgPack, tiny
+App:       cast[ptr array[N,byte]](base)[]             ← zero copy, direct
+App:       capRevoke(token) when done
+```
+
+In SASOS this is trivially zero-copy — all processes share one virtual address space, so the pointer is immediately valid in the app. Microkernel mode will require a `grantRegion` ABI call to establish the mapping (deferred until real page tables land).
+
+### Memory capability rights
+
+Extending `CapRight` in `kernel/cap/capability.nim`:
+
+```nim
+type CapRight* = enum
+  capIpc         # send/recv on named channels
+  capFs          # file system access
+  capNet         # network access
+  capAdmin       # kill tasks, spawn servers
+  capMemRead     # read-only view of a specific region slot
+  capMemWrite    # read-write ownership of a region slot
+  capMemGrant    # can mint child caps from this region (parent only)
+```
+
+### Ownership patterns
+
+| Pattern | Who holds what | Use case |
+|---------|---------------|----------|
+| **Exclusive** | Server: `capMemWrite`. App: `capMemRead` minted by server. | Normal file read |
+| **Shared read** | Server: `capMemWrite + capMemGrant`. N apps each get `capMemRead`. Same region base. | Shared library, read-only cache |
+| **Transfer (move)** | Server mints `capMemWrite` for app, revokes its own. | App owns buffer for encode/decode |
+| **Parent-child** | Parent: `capMemWrite + capMemGrant`. Child: `capMemRead` only — cannot re-grant. | Sandboxed media decoder |
+
+### Lifetime: reference-counted regions
+
+`capMemRead` tokens can outlive the original `capMemWrite` holder. The region slot has a **ref count** (like `Arc<T>`):
+- `capGrantRegion` increments ref count
+- `capRevoke` decrements ref count
+- `regionFree` only executes when ref count reaches zero
+
+This prevents dangling pointers while allowing the server to release its own ownership without abruptly invalidating active readers.
+
+### App-side API
+
+```nim
+# nimixos/memregion.nim
+proc regionOpen*(cap: CapToken): (pointer, int)  # returns (base, len)
+proc regionClose*(cap: CapToken)                  # decrements ref count
+```
+
+Non-Nim apps use the C header `nimixos.h` which provides the same interface.
+
+### faststreams integration (future)
+
+`nim-faststreams` (github.com/status-im/nim-faststreams) provides a zero-copy streaming API (`peek`, `advance`, `readInto`) backed by our region allocator. Apps get a `seq`-like interface without any copying. This is the long-term app-facing abstraction for streaming media and network data.
+
+### What the dispatcher does (and doesn't do) in the data path
+
+- **Does**: routes the control message, brokers the cap mint, forwards the token reply
+- **Does not**: touch the data at all — the data path is entirely app ↔ region ↔ server
+
+The dispatcher is on the critical path only for control (microseconds). The data path bypasses it entirely.
+
+### Kernel role
+
+`regionAlloc/regionFree` stay as-is. New additions:
+- `capGrantRegion(slot, targetPid, rights) → CapToken` — mint a scoped memory cap
+- `regionAddRef(slot)` / `regionDecRef(slot) → bool` — ref count management, returns true when hits zero
+
 ## Open Questions
 
 - UNCONFIRMED: Exact boot sequence for disk-loaded servers — does the kernel wait for disk mount before spawning servers, or retry asynchronously?
