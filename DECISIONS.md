@@ -16,8 +16,9 @@
   - Standard (IANA-registered, cross-language) — future Nim/C/WASM apps interop cleanly
 - **Scope**: ServerChan messages, event pub/sub payloads, syscall arguments (when we have real syscalls), capability grant messages.
 - **NOT for**: raw bulk data transfers (use shared region + capability token for those).
-- **Library**: Use `msgpack4nim` (pure Nim, MIT) — no C deps, idiomatic.
-- **Dependency order**: msgpack4nim uses Nim stdlib (streams, etc.). Rather than hacking around missing stdlib, implement OS support layers in order so Nim's stdlib eventually works natively on NimixOS. Tasks are ordered accordingly in taskwarrior.
+- **Library**: `msgpack4nim` works on the **host** (tests, dev tools) only. It uses `streams` + `osalloc` which fail under both `--os:any` (kernel) and `--os:standalone` (apps).
+- **Production encoder**: `kernel/ipc/msgpack_chan.nim` — hand-rolled, 150 lines, no stdlib deps. Covers fixmap, fixstr, uint8, uint32, str8. Works under `--os:any --mm:arc` (kernel) and `--os:standalone --mm:arc` (apps). This is not a workaround — it's smaller and faster than msgpack4nim for our message shapes.
+- **Rule**: use `msgpack4nim` only in host-side test files (`tests/`). Use `kernel/ipc/msgpack_chan.nim` everywhere else.
 
 ### IPC Message Size
 - **Decision**: Variable-length messages with a leading size field (uint32 LE, bytes of MsgPack payload following).
