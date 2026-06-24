@@ -64,7 +64,8 @@ NIM_APP = $(NIM) c --skipParentCfg --skipUserCfg \
           --passC:"-I$(CURDIR)/kernel/abi" \
           --passL:"-nostdlib -pie $(CURDIR)/build/nimix_abi_stub.o" \
           --path:$(CURDIR) \
-          --path:$(CURDIR)/apps/nim
+          --path:$(CURDIR)/apps/nim \
+          --nimblePath:$(HOME)/.nimble/pkgs2
 
 nim-apps: build/apps/hello.elf build/apps/ping_server.elf \
           build/apps/ps.elf build/apps/kill.elf \
@@ -100,13 +101,13 @@ build/apps/top.elf: apps/nim/top/top.nim build/nimix_abi_stub.o
 	@mkdir -p build/apps
 	$(NIM_APP) --path:$(CURDIR)/apps/nim/top -o:$@ $<
 
-build/apps/dispatch_server.elf: servers/dispatch/dispatch_server_elf.nim servers/dispatch/dispatch_logic.nim servers/dispatch/priority_queue.nim servers/dispatch/qos_policy.nim build/nimix_abi_stub.o
+build/apps/dispatch_server.elf: servers/dispatch/dispatch_server_elf.nim servers/dispatch/dispatch_logic.nim servers/dispatch/priority_queue.nim servers/dispatch/qos_policy.nim servers/dispatch/dispatch_wire.nim build/nimix_abi_stub.o
 	@mkdir -p build/apps
 	$(NIM_APP) --path:$(CURDIR)/servers/dispatch --path:$(CURDIR)/apps/nim -d:dispatchNoCps -o:$@ $<
 
-build/apps/fs_server.elf: servers/fs/fs_server_elf.nim servers/fs/fs_logic.nim build/nimix_abi_stub.o
+build/apps/fs_server.elf: servers/fs/fs_server_elf.nim servers/fs/fs_logic.nim servers/dispatch/dispatch_wire.nim build/nimix_abi_stub.o
 	@mkdir -p build/apps
-	$(NIM_APP) --path:$(CURDIR)/servers/fs --path:$(CURDIR)/apps/nim -o:$@ $<
+	$(NIM_APP) --path:$(CURDIR)/servers/fs --path:$(CURDIR)/servers/dispatch --path:$(CURDIR)/apps/nim -o:$@ $<
 
 apps: apps/ping/ping_embedded.nim
 
@@ -254,7 +255,7 @@ test:
 	$(NIM) c -r $(TEST_FLAGS) tests/test_fs_logic.nim
 	@echo "=== All tests passed ==="
 
-TEST_FLAGS_ARC = --skipParentCfg --mm:arc --panics:on --path:$(CURDIR) -d:noSignalHandler
+TEST_FLAGS_ARC = --skipParentCfg --mm:arc --panics:on --path:$(CURDIR) --path:$(CURDIR)/apps/nim --nimblePath:$(HOME)/.nimble/pkgs2 -d:noSignalHandler
 
 test-arc:
 	@echo "=== NimixOS ARC Test Suite (dispatcher/CPS) ==="

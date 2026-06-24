@@ -8,6 +8,7 @@ import qos_policy
 
 when not defined(dispatchNoCps):
   import cps
+  import dispatch_wire
 
 # ── Injected interface (filled by kmod or server_elf variant) ────────────────
 
@@ -53,17 +54,13 @@ when not defined(dispatchNoCps):
     var buf: array[256, byte]
     while true:
       let n = ds.iface.recv(DispatchChannel, addr buf[0], buf.len)
-      if n >= 8:
-        # Minimal wire decode: first 4 bytes = op, next 4 = pid
-        let op  = uint32(buf[0]) or (uint32(buf[1]) shl 8) or
-                  (uint32(buf[2]) shl 16) or (uint32(buf[3]) shl 24)
-        let pid = uint32(buf[4]) or (uint32(buf[5]) shl 8) or
-                  (uint32(buf[6]) shl 16) or (uint32(buf[7]) shl 24)
+      if n > 0:
+        let wreq = decodeRequest(cast[string](buf.toOpenArray(0, n-1)))
         var req = DispatchRequest(
-          op:        op,
-          callerPid: pid,
-          class:     classifyRequest(op, false),
-          deadline:  assignDeadline(classifyRequest(op, false), ds.tickNow),
+          op:        wreq.op,
+          callerPid: wreq.pid,
+          class:     classifyRequest(wreq.op, false),
+          deadline:  assignDeadline(classifyRequest(wreq.op, false), ds.tickNow),
           payloadSlot: -1
         )
         discard pqPush(ds.queue, req, ds.tickNow)
@@ -82,12 +79,8 @@ when not defined(dispatchNoCps):
           of 3: "input"
           else: "log"
         # Forward the request to the target server
-        var fwd: array[8, byte]
-        fwd[0] = uint8(req.op and 0xFF); fwd[1] = uint8((req.op shr 8) and 0xFF)
-        fwd[2] = uint8((req.op shr 16) and 0xFF); fwd[3] = uint8(req.op shr 24)
-        fwd[4] = uint8(req.callerPid and 0xFF); fwd[5] = uint8((req.callerPid shr 8) and 0xFF)
-        fwd[6] = uint8((req.callerPid shr 16) and 0xFF); fwd[7] = uint8(req.callerPid shr 24)
-        discard ds.iface.send(target, addr fwd[0], fwd.len)
+        let fwd = encodeRequest(req.op, req.callerPid)
+        discard ds.iface.send(target, cast[pointer](unsafeAddr fwd[0]), fwd.len)
 
 # ── Tick (called every scheduler quantum) ────────────────────────────────────
 

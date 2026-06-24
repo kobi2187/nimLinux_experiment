@@ -5,6 +5,7 @@
 ## sends back FsReadReply as 24 bytes (token:u64 + base:u64 + len:i32 + err:i32).
 
 import fs_logic
+import dispatch_wire
 
 # ── Kernel ABI (resolved by loader at runtime via stub patching) ──────────────
 
@@ -74,18 +75,10 @@ proc appMain*() {.exportc.} =
     if n > 0:
       let path = cast[cstring](addr msgBuf[0])
       let reply = fsLogicRead(gIface, path, 0'u32, 4 * 1024 * 1024)
-      var repBuf: array[24, byte]
-      # Encode reply: token(8) + base(8) + len(4) + err(4) — little-endian
-      template w64(offset: int; v: uint64) =
-        repBuf[offset+0] = uint8(v); repBuf[offset+1] = uint8(v shr 8)
-        repBuf[offset+2] = uint8(v shr 16); repBuf[offset+3] = uint8(v shr 24)
-        repBuf[offset+4] = uint8(v shr 32); repBuf[offset+5] = uint8(v shr 40)
-        repBuf[offset+6] = uint8(v shr 48); repBuf[offset+7] = uint8(v shr 56)
-      template w32(offset: int; v: int32) =
-        repBuf[offset+0] = uint8(cast[uint32](v)); repBuf[offset+1] = uint8(cast[uint32](v) shr 8)
-        repBuf[offset+2] = uint8(cast[uint32](v) shr 16); repBuf[offset+3] = uint8(cast[uint32](v) shr 24)
-      w64(0,  reply.token)
-      w64(8,  reply.base)
-      w32(16, int32(reply.len))
-      w32(20, int32(reply.err))
-      discard nimixChanSend("fs", addr repBuf[0], repBuf.len)
+      let repData = encodeReply(WireReply(
+        token: reply.token,
+        base:  reply.base,
+        len:   int32(reply.len),
+        err:   int32(reply.err)
+      ))
+      discard nimixChanSend("fs", cast[pointer](unsafeAddr repData[0]), repData.len)
