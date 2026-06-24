@@ -30,10 +30,13 @@ type
     freeCount: int
 
 var gRegionAlloc*: RegionAllocator   ## Global instance; init by kernel boot
+var gRegionRefCount: array[MaxRegions, int]
 
 proc regionAllocInit*() =
   gRegionAlloc.nextSlot  = 0
   gRegionAlloc.freeCount = 0
+  for i in 0 ..< MaxRegions:
+    gRegionRefCount[i] = 0
 
 proc regionBase*(h: RegionHandle): uint64 =
   ## Convert a handle to the absolute base address of that slot.
@@ -76,3 +79,18 @@ proc regionValid*(h: RegionHandle): bool =
 proc regionUsedCount*(): int =
   ## Number of region slots currently in use (allocated minus freed).
   gRegionAlloc.nextSlot - gRegionAlloc.freeCount
+
+proc regionAddRef*(h: RegionHandle) =
+  if int(h) >= 0 and int(h) < MaxRegions:
+    inc gRegionRefCount[int(h)]
+
+proc regionDecRef*(h: RegionHandle): bool =
+  ## Decrement ref count. Returns true if count reached zero (caller should free).
+  if int(h) < 0 or int(h) >= MaxRegions: return false
+  if gRegionRefCount[int(h)] > 0:
+    dec gRegionRefCount[int(h)]
+  return gRegionRefCount[int(h)] == 0
+
+proc regionRefCount*(h: RegionHandle): int =
+  if int(h) < 0 or int(h) >= MaxRegions: return 0
+  gRegionRefCount[int(h)]

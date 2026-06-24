@@ -1,0 +1,22 @@
+// NimixOS FlatBuffers schemas
+// Control messages use MsgPack. Data-plane messages use FlatBuffers.
+
+namespace nimixos;
+
+enum RequestClass : uint8 { Realtime = 0, Interactive = 1, Normal = 2, Background = 3 }
+
+table DispatchMsg {
+  op:      uint32;
+  pid:     uint32;
+  class:   RequestClass;
+  region:  int32 = -1;
+}
+
+table RegionReply {
+  token:   uint64;
+  base:    uint64;
+  len:     uint32;
+  class:   RequestClass;
+}
+
+root_type DispatchMsg;
