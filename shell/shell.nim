@@ -175,7 +175,7 @@ proc cmdRun(filename: cstring) =
   if r != wasmOk:
     kprint("WASM execution failed\n")
 
-proc buildAbiPatches(): array[15, AbiPatch] =
+proc buildAbiPatches(): array[16, AbiPatch] =
   ## Build the ABI patch table from the live vtable fields.
   ## Points directly at the kernel implementations — no bridge indirection.
   proc p(name: cstring; f: pointer): AbiPatch = AbiPatch(name: name, fn: procAddr(f))
@@ -195,6 +195,7 @@ proc buildAbiPatches(): array[15, AbiPatch] =
   result[12] = p("nimixProcKillPid",    v.procKillPid)
   result[13] = p("nimixFsReadDir",      v.fsReadDir)
   result[14] = p("nimixFsRead",         v.fsRead)
+  result[15] = p("nimixFsWrite",        v.fsWrite)
 
 proc runPieElf(filename: cstring; dataBuf: ptr byte; nbytes: int; appArgs: cstring) =
   ## Load and run a PIE (ET_DYN) ELF. Allocates a region, patches ABI stubs,

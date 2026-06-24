@@ -51,6 +51,8 @@ type
       ## List directory entries as newline-separated names. Returns bytes written.
     fsRead*: proc(path: cstring; buf: pointer; len: int): int {.nimcall.}
       ## Read entire file into buf. Returns bytes read, or negative on error.
+    fsWrite*: proc(path: cstring; buf: pointer; len: int): int {.nimcall.}
+      ## Write buf to file at path. Returns 0=ok, negative=error.
 
     # ── Capability-gated IPC ──────────────────────────────────────────────────
     capSend*: proc(name: cstring; tok: uint64; data: pointer; dataLen: int): int {.nimcall.}

@@ -11,11 +11,13 @@
 const fatfsDir = "/home/kl/prog/nimLinux_experiment/vendor/fatfs"
 
 {.passC: "-I" & fatfsDir.}
-{.passC: "-ffreestanding -fno-stack-protector -mno-red-zone -mcmodel=kernel -fno-pic".}
-{.compile: "/home/kl/prog/nimLinux_experiment/vendor/fatfs/ff.c".}
-{.compile: "/home/kl/prog/nimLinux_experiment/vendor/fatfs/ffunicode.c".}
-{.compile: "/home/kl/prog/nimLinux_experiment/vendor/fatfs/ffsystem.c".}
-{.compile: "/home/kl/prog/nimLinux_experiment/vendor/fatfs/diskio.c".}
+
+when not defined(noKernelHardware):
+  {.passC: "-ffreestanding -fno-stack-protector -mno-red-zone -mcmodel=kernel -fno-pic".}
+  {.compile: "/home/kl/prog/nimLinux_experiment/vendor/fatfs/ff.c".}
+  {.compile: "/home/kl/prog/nimLinux_experiment/vendor/fatfs/ffunicode.c".}
+  {.compile: "/home/kl/prog/nimLinux_experiment/vendor/fatfs/ffsystem.c".}
+  {.compile: "/home/kl/prog/nimLinux_experiment/vendor/fatfs/diskio.c".}
 
 import ../core/log
 
@@ -23,14 +25,14 @@ import ../core/log
 
 type
   FATFS  {.importc: "FATFS",  header: "ff.h".} = object
-  FIL    {.importc: "FIL",    header: "ff.h".} = object
+  FIL*   {.importc: "FIL",    header: "ff.h".} = object
   FILINFO {.importc: "FILINFO", header: "ff.h".} = object
     fsize  {.importc: "fsize".}:  uint32
     fname  {.importc: "fname".}:  array[256, char]
 
-  FRESULT = cint   ## FR_OK=0, errors > 0
+  FRESULT* = cint   ## FR_OK=0, errors > 0
 
-const FR_OK = 0.FRESULT
+const FR_OK* = 0.FRESULT
 
 # ── FatFs C API ───────────────────────────────────────────────────────────────
 
@@ -39,13 +41,13 @@ const FR_OK = 0.FRESULT
 proc f_mount(fs: ptr FATFS, path: cstring, opt: uint8): FRESULT
   {.importc: "f_mount", header: "ff.h".}
 
-proc f_open(fp: ptr FIL, path: cstring, mode: uint8): FRESULT
+proc f_open*(fp: ptr FIL, path: cstring, mode: uint8): FRESULT
   {.importc: "f_open", header: "ff.h".}
 
 proc f_read(fp: ptr FIL, buf: pointer, btr: uint32, br: ptr uint32): FRESULT
   {.importc: "f_read", header: "ff.h".}
 
-proc f_close(fp: ptr FIL): FRESULT
+proc f_close*(fp: ptr FIL): FRESULT
   {.importc: "f_close", header: "ff.h".}
 
 proc f_size(fp: ptr FIL): uint32
@@ -55,8 +57,8 @@ proc f_stat(path: cstring, fno: ptr FILINFO): FRESULT
   {.importc: "f_stat", header: "ff.h".}
 
 const
-  FA_READ  = 0x01'u8
-  FA_WRITE = 0x02'u8
+  FA_READ*  = 0x01'u8
+  FA_WRITE* = 0x02'u8
   FA_OPEN_EXISTING = 0x00'u8
 
 # ── Global filesystem state ───────────────────────────────────────────────────

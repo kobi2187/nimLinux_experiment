@@ -255,6 +255,7 @@ test:
 	$(NIM) c -r $(TEST_FLAGS) tests/test_msgpack_chan.nim
 	$(NIM) c -r --skipParentCfg --mm:arc --panics:on --path:$(CURDIR) -d:noSignalHandler tests/test_cps_eval.nim
 	$(NIM) c -r $(TEST_FLAGS) tests/test_fs_logic.nim
+	$(NIM) c -r $(TEST_FLAGS) -d:noKernelHardware tests/test_fatfs_write.nim
 	@echo "=== All tests passed ==="
 
 TEST_FLAGS_ARC = --skipParentCfg --mm:arc --panics:on --path:$(CURDIR) --path:$(CURDIR)/apps/nim --nimblePath:$(HOME)/.nimble/pkgs2 -d:noSignalHandler
