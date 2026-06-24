@@ -30,7 +30,7 @@ import ../../kernel/traits/scheduler as schedTrait
 import ../../kernel/traits/ipc as ipcTrait
 import ../../kernel/abi/nimix_abi as abiModule
 import ../../kernel/abi/nimix_abi_wiring
-import ../../mm/region_allocator
+import ../../mm/sip_heap
 import ../../kernel/cap/capability as capMod
 import ../../kernel/process_table as ptMod
 export schedTrait
@@ -341,17 +341,15 @@ proc initSasosModel*() =
   ipcTrait.ipc.open    = sasosOpen
   ipcTrait.ipc.close   = sasosClose
 
-  # Wire app ABI vtable — SASOS: alloc from shared address space region map.
+  # Wire app ABI vtable — SASOS: bump-allocate from the current task's SIP heap.
   proc sasosAlloc(size: int): pointer {.nimcall.} =
-    let h = regionAlloc(uint64(size))
-    if not regionValid(h): return nil
-    cast[pointer](regionBase(h))
+    let slot = int(ptMod.procTable.tasks[ptMod.procTable.current].regionSlot)
+    if slot < 0: return alloc(size)  # kernel task fallback
+    sipAlloc(slot, size)
 
   proc sasosFree(p: pointer; size: int) {.nimcall.} =
-    let addr64 = cast[uint64](p)
-    if addr64 < RegionBase: return
-    let slot = int((addr64 - RegionBase) div RegionSize)
-    regionFree(RegionHandle(slot))
+    ## No-op for bump allocator — region freed when app exits.
+    discard
   var av: abiModule.NimixAbiVTable
   wireSharedAbi(av)
   av.allocRegion = sasosAlloc

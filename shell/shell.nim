@@ -21,6 +21,7 @@ import ../apps/pingpong/pingpong_embedded
 import ../kernel/abi/nimix_abi as abiModule
 import ../kernel/abi/app_args
 import ../mm/region_allocator
+import ../mm/sip_heap
 import ../kernel/process_table
 import ../core/ptr_helpers
 
@@ -212,6 +213,11 @@ proc runPieElf(filename: cstring; dataBuf: ptr byte; nbytes: int; appArgs: cstri
     kprint("PIE ELF load failed\n"); regionFree(slot); return
   if loaded.appMain == 0:
     kprint("appMain not found in PIE ELF\n"); regionFree(slot); return
+
+  # Initialise the SIP heap for this region slot, placing bump after the ELF.
+  sipHeapInit(int(slot))
+  if loaded.loadEnd > 0:
+    sipHeapSetBump(int(slot), loaded.loadEnd)
 
   kprint("Calling appMain...\n")
   let procSlot = procSpawn(filename, nil, tcApp, 128, int32(slot))
