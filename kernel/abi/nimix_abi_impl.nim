@@ -233,6 +233,13 @@ proc abiSysInfo*(buf: pointer; len: int): int {.nimcall.} =
 
 # ── Timing ────────────────────────────────────────────────────────────────────
 
+proc abiGrantRegion*(slot: int; right: uint32): uint64 {.nimcall.} =
+  ## Mint a memory cap for the current task.
+  let pid = procTable.tasks[procTable.current].pid
+  let capRight = cap.CapRight(right)
+  let tok = cap.capGrantRegion(slot, pid, capRight)
+  uint64(tok)
+
 proc abiSleep*(ticks: uint64) {.nimcall.} =
   ## Cooperative sleep: spin-wait until ticks have elapsed.
   ## Replaced with real block+wake once context switch is complete.

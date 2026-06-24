@@ -37,7 +37,7 @@ KERNEL_OUT = build/main
 ISO_OUT    = nimixos.iso
 ISO_ALL_OUT = nimixos-all-kernels.iso
 
-.PHONY: all build apps nim-apps iso iso-all qemu qemu-all qemu-gui qemu-debug run clean test test-qemu
+.PHONY: all build apps nim-apps iso iso-all qemu qemu-all qemu-gui qemu-debug run clean test test-qemu test-arc
 
 # Default target: full cycle
 all: build iso qemu
@@ -242,6 +242,13 @@ test:
 	$(NIM) c -r $(TEST_FLAGS) tests/test_flatbuffers.nim
 	$(NIM) c -r --skipParentCfg --mm:arc --panics:on --path:$(CURDIR) -d:noSignalHandler tests/test_cps_eval.nim
 	@echo "=== All tests passed ==="
+
+TEST_FLAGS_ARC = --skipParentCfg --mm:arc --panics:on --path:$(CURDIR) -d:noSignalHandler
+
+test-arc:
+	@echo "=== NimixOS ARC Test Suite (dispatcher/CPS) ==="
+	$(NIM) c -r $(TEST_FLAGS_ARC) tests/test_dispatch_logic.nim
+	@echo "=== ARC tests passed ==="
 
 # ── QEMU integration tests (serial pipe harness) ──────────────────
 test-qemu: $(ISO_OUT)

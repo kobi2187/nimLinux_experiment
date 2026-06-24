@@ -50,3 +50,4 @@ __attribute__((weak)) int nimixChanCall(const char* server, const void* data, in
 __attribute__((weak)) void nimixSleep(unsigned long long ticks) { (void)ticks; }
 __attribute__((weak)) void nimixYield(void) {}
 __attribute__((weak)) int  nimixSysInfo(void* buf, int len) { (void)buf; (void)len; return -1; }
+__attribute__((weak)) unsigned long long nimixGrantRegion(int slot, unsigned int right) { (void)slot; (void)right; return 0; }

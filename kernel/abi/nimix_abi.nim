@@ -71,6 +71,12 @@ type
     sysInfo*: proc(buf: pointer; len: int): int {.nimcall.}
       ## Serialize system snapshot as YAML into buf. Returns bytes written.
 
+    # -- Capability: memory region ------------------------------------------------
+    grantRegion*: proc(slot: int; right: uint32): uint64 {.nimcall.}
+      ## Mint a memory capability for the calling task on region `slot`.
+      ## `right`: 4=capMemRead, 5=capMemWrite, 6=capMemGrant (CapRight enum values).
+      ## Returns the CapToken as uint64, or 0 on failure.
+
 var nimixAbi*: NimixAbiVTable
   ## Global ABI vtable. Set once at boot by the chosen kernel model init.
   ## Apps never call this directly — the ELF loader patches weak stubs with
