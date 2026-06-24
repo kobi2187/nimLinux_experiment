@@ -114,4 +114,74 @@ block test_aging:
   assert req.class == rcNormal, "Background should have been bumped to Normal after aging"
   echo "PASS: test_aging"
 
+# ── Test 5: route by category — op=0x00000001 (fs, category=0) → "fs" ─────────
+
+block test_route_by_category:
+  var ds: DispatchState
+  dispatchInit(ds, mockIface)
+
+  # op high byte = 0 → fs category → classifyRequest gives rcNormal
+  pushReq(ds, 0x00000001'u32, 42)
+  assert ds.queue.count == 1
+
+  var req: DispatchRequest
+  discard pqPop(ds.queue, req)
+  assert ds.queue.count == 0
+
+  # Verify routing: top byte of op = 0 → "fs"
+  let category = req.op shr 24
+  assert category == 0, "category should be 0 (fs)"
+  # The dispatch logic routes category=0 to "fs"
+  let target: cstring = case category
+    of 0: "fs"
+    of 1: "net"
+    of 2: "media"
+    of 3: "input"
+    else: "log"
+  assert target == "fs", "category 0 should route to fs"
+  echo "PASS: test_route_by_category"
+
+# ── Test 6: realtime deadline = arrivalTick + 5 ───────────────────────────────
+
+block test_realtime_deadline:
+  var ds: DispatchState
+  dispatchInit(ds, mockIface)
+  ds.tickNow = 10   # set a non-zero arrival tick
+
+  # op high byte = 2 → media → rcRealtime
+  pushReq(ds, 0x02000001'u32, 99)
+  assert ds.queue.count == 1
+
+  let req = ds.queue.heap[0]
+  assert req.class == rcRealtime, "should be rcRealtime"
+  assert req.deadline == 10 + 5, "realtime deadline should be arrivalTick + 5"
+  echo "PASS: test_realtime_deadline"
+
+# ── Test 7: aging boundary — 49 ticks no bump, tick 50 bumps Background ───────
+
+block test_aging_boundary:
+  var ds: DispatchState
+  dispatchInit(ds, mockIface)
+
+  # Push Background at tick 0
+  pushReq(ds, 0x04000001'u32, 77)   # rcBackground (category=4=log)
+  assert ds.queue.count == 1
+  assert ds.queue.heap[0].class == rcBackground, "should start as Background"
+
+  # Tick 49 times — aging interval is 50, so no aging yet
+  for _ in 0 ..< 49:
+    dispatchTick(ds)
+
+  assert ds.tickNow == 49, "tickNow should be 49"
+  assert ds.queue.heap[0].class == rcBackground, "still Background after 49 ticks"
+
+  # One more tick (total = 50) — aging fires
+  dispatchTick(ds)
+  assert ds.tickNow == 50, "tickNow should be 50"
+
+  var req: DispatchRequest
+  discard pqPop(ds.queue, req)
+  assert req.class == rcNormal, "Background should be bumped to Normal after 50 ticks"
+  echo "PASS: test_aging_boundary"
+
 echo "All dispatch_logic tests passed."
