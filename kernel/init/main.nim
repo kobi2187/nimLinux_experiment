@@ -34,6 +34,8 @@ import ../../ipc/server_chan
 import ../../fs/fatfs
 import ../../mm/region_allocator
 import ../../kernel/process_table
+import ../../kernel/cap/capability
+import ../../kernel/cap/cap_registry
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Linker Script Symbols
@@ -385,6 +387,26 @@ proc runKernel(bootInfo: ptr BootInfo) =
   discard procSpawn("shell",       nil, tcServer,   128)
   discard procSpawn("ping_server", nil, tcServer,   100)
   discard procSpawn("event_srv",   nil, tcRealtime, 200)
+
+  # Register dispatcher server with elevated capabilities
+  var dispatchChan = serverChanCreate("dispatch")
+  serverChanRegister(dispatchChan)
+  klog(llInfo, "Dispatch channel registered")
+
+  let dispSlot = procSpawn("dispatcher", nil, tcRealtime, 250)
+  if dispSlot >= 0:
+    # Grant dispatcher admin + fs + net capabilities
+    procTable.tasks[dispSlot].ipcCap = capGrant(procTable.tasks[dispSlot].pid, capAdmin)
+    let fsCap  = capGrant(procTable.tasks[dispSlot].pid, capFs)
+    let netCap = capGrant(procTable.tasks[dispSlot].pid, capNet)
+    # Suppress unused warnings — tokens held in cap table
+    discard fsCap
+    discard netCap
+    # Register in named cap registry so servers can verify dispatcher identity
+    discard capRegister("dispatch.admin", capAdmin)
+    discard capRegister("dispatch.fs",    capFs)
+    discard capRegister("dispatch.net",   capNet)
+    klog(llInfo, "Dispatcher registered with capAdmin + capFs + capNet")
 
   # Mount filesystem (non-fatal — disk may not be present)
   discard fsMount()

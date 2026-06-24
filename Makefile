@@ -69,7 +69,8 @@ NIM_APP = $(NIM) c --skipParentCfg --skipUserCfg \
 nim-apps: build/apps/hello.elf build/apps/ping_server.elf \
           build/apps/ps.elf build/apps/kill.elf \
           build/apps/stats.elf build/apps/ls.elf \
-          build/apps/top.elf build/apps/dispatch_server.elf
+          build/apps/top.elf build/apps/dispatch_server.elf \
+          build/apps/fs_server.elf
 
 build/apps/hello.elf: apps/nim/hello/hello.nim kernel/abi/nimix_abi.h build/nimix_abi_stub.o
 	@mkdir -p build/apps
@@ -102,6 +103,10 @@ build/apps/top.elf: apps/nim/top/top.nim build/nimix_abi_stub.o
 build/apps/dispatch_server.elf: servers/dispatch/dispatch_server_elf.nim servers/dispatch/dispatch_logic.nim servers/dispatch/priority_queue.nim servers/dispatch/qos_policy.nim build/nimix_abi_stub.o
 	@mkdir -p build/apps
 	$(NIM_APP) --path:$(CURDIR)/servers/dispatch --path:$(CURDIR)/apps/nim -d:dispatchNoCps -o:$@ $<
+
+build/apps/fs_server.elf: servers/fs/fs_server_elf.nim servers/fs/fs_logic.nim build/nimix_abi_stub.o
+	@mkdir -p build/apps
+	$(NIM_APP) --path:$(CURDIR)/servers/fs --path:$(CURDIR)/apps/nim -o:$@ $<
 
 apps: apps/ping/ping_embedded.nim
 
@@ -208,7 +213,7 @@ $(DISK):
 # Add/update WASM and ELF files on the disk image (uses mtools — no sudo)
 disk-add-apps: apps/ping/ping.wasm apps/pingpong/pingpong.wasm nim-apps
 	MTOOLS_SKIP_CHECK=1 mcopy -oi $(DISK) apps/ping/ping.wasm apps/pingpong/pingpong.wasm ::
-	MTOOLS_SKIP_CHECK=1 mcopy -oi $(DISK) build/apps/hello.elf build/apps/ps.elf build/apps/kill.elf build/apps/stats.elf build/apps/ls.elf build/apps/top.elf build/apps/dispatch_server.elf ::
+	MTOOLS_SKIP_CHECK=1 mcopy -oi $(DISK) build/apps/hello.elf build/apps/ps.elf build/apps/kill.elf build/apps/stats.elf build/apps/ls.elf build/apps/top.elf build/apps/dispatch_server.elf build/apps/fs_server.elf ::
 
 # Add a single file: make disk-add FILE=myapp.wasm
 disk-add:
@@ -245,6 +250,7 @@ test:
 	$(NIM) c -r $(TEST_FLAGS) tests/test_dispatch_queue.nim
 	$(NIM) c -r $(TEST_FLAGS) tests/test_flatbuffers.nim
 	$(NIM) c -r --skipParentCfg --mm:arc --panics:on --path:$(CURDIR) -d:noSignalHandler tests/test_cps_eval.nim
+	$(NIM) c -r $(TEST_FLAGS) tests/test_fs_logic.nim
 	@echo "=== All tests passed ==="
 
 TEST_FLAGS_ARC = --skipParentCfg --mm:arc --panics:on --path:$(CURDIR) -d:noSignalHandler
