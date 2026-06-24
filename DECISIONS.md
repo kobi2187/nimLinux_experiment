@@ -90,6 +90,118 @@ This is the same model as QNX (message-passing to named servers) and BeOS (BMess
 - **Rationale**: Servers should be independently updatable. Embedding wastes kernel image space and couples server version to kernel version.
 - **Path**: Boot sequence reads known server ELFs from disk, loads via `elfLoadPie`, registers in process table. Requires disk to be mounted before server init — currently disk mount is non-fatal; needs to become required for server boot.
 
+## Dispatcher Server — Userland QoS and Concurrency Engine
+
+### Vision
+
+NimixOS targets **high performance, high concurrency, predictable latency, and operational simplicity**. The mechanism is a userland **dispatcher server** that centralises all app-to-service request routing and enforces QoS policy without requiring kernel changes.
+
+### Core design goals
+
+| Goal | How achieved |
+|------|-------------|
+| High throughput | CPS continuations — millions of in-flight requests, zero thread overhead |
+| Predictable latency | Priority queue with per-class latency budgets (media < 5ms, GUI < 16ms, background best-effort) |
+| No starvation | Aging: requests that wait too long get their priority bumped automatically |
+| Simplicity | Apps are thin — they send one IPC message and wait; all policy lives in the dispatcher |
+| Kernel stays minimal | Kernel I/O is serialised through the dispatcher; apps never call kernel directly for I/O |
+
+### Architecture
+
+```
+App (WASM/ELF)
+  │  send IPC request (MsgPack control / FlatBuffers data)
+  ▼
+dispatcher_server  ◄── policy rules (configurable)
+  │  priority queue: (class, deadline, arrival_time)
+  │  CPS continuation per in-flight request
+  ├─► fs_server      (disk I/O, serialised)
+  ├─► net_server     (network I/O)
+  ├─► media_server   (audio/video decode/playback)
+  ├─► input_server   (key/mouse events)
+  └─► event_server   (pub/sub wakeups — operates at lower level, not routed through dispatcher)
+```
+
+Apps never speak directly to `fs_server`, `net_server`, etc. They speak only to the dispatcher. The dispatcher owns the ordering.
+
+### Relationship to existing components
+
+- **ServerChan** — remains the transport. Dispatcher listens on `"dispatch"` channel.
+- **event_server** — operates independently at a lower level. It handles async wakeups (key pressed, file changed). The dispatcher handles request/reply I/O. These are complementary, not competing.
+- **capIpc tokens** — gate who can send to the dispatcher. Untrusted apps must hold a cap.
+- **`chanCall`** — apps use this for synchronous request/reply through the dispatcher.
+- **kernel `procTable` priority classes** — coarse hint only (Realtime > Server > App). Fine-grained QoS policy lives entirely in the dispatcher's priority queue.
+
+### Internal concurrency: Nim CPS
+
+The dispatcher uses **Nim CPS** (`nim-cps`) to handle thousands of concurrent requests without OS threads. Each request becomes a `Continuation` — a heap-allocated state machine. When a request suspends (waiting for disk, waiting for a reply), it yields its continuation back to the dispatcher's run loop, which picks the next highest-priority continuation.
+
+```nim
+proc handleRequest(req: Request) {.cps: Continuation.} =
+  let priority = policy.classify(req)
+  await priorityQueue.enqueue(req, priority)   # suspend; yield to run loop
+  let result = await kernelCall(req.op)        # suspend while I/O in flight
+  await reply(req.caller, result)              # suspend until sent
+```
+
+This gives goroutine-scale concurrency with deterministic scheduling — the dispatcher's run loop is the only "thread" and it never blocks.
+
+### Wire format: two planes
+
+- **Control plane** (requests, capability grants, service discovery): **MsgPack** — self-describing, inspectable on serial, schema-flexible. Used for all request/reply messages.
+- **Data plane** (media frames, bulk network I/O, large file transfers): **FlatBuffers** — zero-copy, fixed schema, pointer arithmetic into buffer. No parse cost on the hot path.
+
+This mirrors the real-world split (Protobuf control + FlatBuffers data in Google's media stack, QUIC control + raw UDP data in streaming).
+
+### QoS priority classes
+
+| Class | Examples | Latency budget | Kernel I/O budget |
+|-------|---------|---------------|-----------------|
+| Realtime | Audio output, media decode | < 5ms | Preempts all |
+| Interactive | GUI paint, key input | < 16ms (one frame) | Preempts background |
+| Normal | File open, network request | < 100ms | Fair share |
+| Background | Downloads, indexing, logging | Best-effort | Remainder |
+
+Starvation prevention: any request waiting > 500ms gets bumped one class higher until served.
+
+### App-side API
+
+Apps don't see IPC directly. They use a thin Nim library:
+
+```nim
+import nimixos/media
+media.play("file:///music.ogg")   # builds MsgPack msg, sends to dispatcher, waits for ack
+
+import nimixos/net
+net.download("https://...", dest) # enqueues in dispatcher as Background class
+```
+
+Non-Nim apps (C, WASM) use a header-only library that builds the same MsgPack messages and sends them over the `"dispatch"` channel.
+
+### Kernel role
+
+The kernel becomes a **thin hardware abstraction**:
+- Handles interrupts, context switching, memory mapping
+- Exposes `nimixAllocRegion`, `nimixSleep`, `nimixYield`, `nimixChanSend/Recv`
+- Does NOT make policy decisions about I/O ordering or scheduling priority
+- Disk/network drivers are kernel modules, but they only execute when the dispatcher says so
+
+This makes the kernel nearly single-threaded in its I/O handling — one request in flight per device at a time — which eliminates whole classes of race conditions and makes behaviour predictable and auditable.
+
+### Files to be created
+
+| File | Purpose |
+|------|---------|
+| `servers/dispatch/dispatch_logic.nim` | Pure dispatcher logic: priority queue, CPS run loop, policy engine |
+| `servers/dispatch/dispatch_kmod.nim` | Kernel module variant (monolithic) |
+| `servers/dispatch/dispatch_server_elf.nim` | PIE ELF server variant (micro/SASOS) |
+| `kernel/ipc/flatbuffers.nim` | Minimal FlatBuffers builder/reader for data-plane messages |
+| `apps/nim/nimixos/media.nim` | Thin app-side media API |
+| `apps/nim/nimixos/net.nim` | Thin app-side network API |
+| `apps/nim/nimixos/fs.nim` | Thin app-side filesystem API |
+
 ## Open Questions
 
 - UNCONFIRMED: Exact boot sequence for disk-loaded servers — does the kernel wait for disk mount before spawning servers, or retry asynchronously?
+- UNCONFIRMED: Does the dispatcher use IST (Interrupt Stack Table) entries for its realtime class, or is PIT-driven preemption sufficient?
+- UNCONFIRMED: FlatBuffers schema ownership — defined per-server or in a shared `schemas/` directory?
