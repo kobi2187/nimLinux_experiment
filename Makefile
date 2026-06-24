@@ -244,6 +244,7 @@ test:
 	$(NIM) c -r $(TEST_FLAGS) tests/test_cap_registry.nim
 	$(NIM) c -r $(TEST_FLAGS) tests/test_region_allocator.nim
 	$(NIM) c -r $(TEST_FLAGS) tests/test_zerocopy.nim
+	$(NIM) c -r $(TEST_FLAGS) tests/test_stdlib_shim.nim
 	$(NIM) c -r $(TEST_FLAGS) -d:testing tests/test_osalloc.nim
 	$(NIM) c -r $(TEST_FLAGS) -d:testing tests/test_fd_table.nim
 	$(NIM) c -r $(TEST_FLAGS) -d:testing tests/test_sync_ipc.nim
