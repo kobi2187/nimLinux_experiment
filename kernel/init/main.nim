@@ -110,93 +110,44 @@ proc initMemory(k: Kernel): bool =
   ## Initialize memory management subsystem
   klog(llInfo, "[INIT] Initializing memory management...")
 
-  # ── Debug: dump memory map ──────────────────────────────────────
-  kprintln("  Memory map dump:")
-  for i in 0..<k.bootInfo.memoryMap.count:
-    let r = k.bootInfo.memoryMap.regions[i]
-    kprint("    [")
-    kprintInt(i)
-    kprint("] base=0x")
-    defaultSerial.putHex(uint64(r.base))
-    kprint(" length=0x")
-    defaultSerial.putHex(r.length)
-    kprint(" (")
-    kprintInt(int64(r.length div (1024*1024)))
-    kprint(" MiB) type=")
-    kprintInt(int64(r.regionType.ord))
-    kprintln("")
-
-  # Calculate bitmap size based on USABLE memory only
-  # (excluding reserved MMIO regions at very high addresses)
   let highestAddr = getHighestUsableAddress(k.bootInfo[])
-  kprint("  Highest usable address: 0x")
-  kprintHex(uint64(highestAddr))
-  kprintln("")
-
   let totalFrames = (uint64(highestAddr) + FrameSize - 1) div FrameSize
-  let bitmapSize = (totalFrames + 63) div 64 * 8  # bytes
-
-  kprint("  Total usable memory: ")
-  kprintInt(int64(uint64(highestAddr) div MiB))
-  kprintln(" MiB")
-
-  kprint("  Total frames: ")
-  kprintInt(int64(totalFrames))
-  kprintln("")
-
-  kprint("  Bitmap size needed: ")
-  kprintInt(int64(bitmapSize))
-  kprintln(" bytes")
-
-  # Get kernel end address from linker script, so we know where our
-  # own code/data/BSS lives and can avoid placing the bitmap there.
+  let bitmapSize  = (totalFrames + 63) div 64 * 8
   let kernelEndAddr = getKernelEnd()
   k.bootInfo.kernelPhysEnd = PhysAddr(kernelEndAddr)
-  kprint("  Kernel end: 0x")
-  kprintHex(kernelEndAddr)
-  kprintln("")
-
-  # Place the bitmap right after the kernel image (page-aligned).
-  # The kernel BSS (including ARC heap) extends to kernel_end; memory
-  # beyond that is available for bitmap and other allocations.
   let bitmapPhysAddr = alignUp(kernelEndAddr, FrameSize)
-  let bitmapEndAddr = bitmapPhysAddr + bitmapSize
-  kprint("  Bitmap at: 0x")
-  kprintHex(bitmapPhysAddr)
-  kprint(" - 0x")
-  kprintHex(bitmapEndAddr)
-  kprintln("")
-
   let bitmapAddr = cast[pointer](bitmapPhysAddr)
 
-  # Initialize physical memory manager
+  when not defined(release):
+    kprintln("  Memory map dump:")
+    for i in 0..<k.bootInfo.memoryMap.count:
+      let r = k.bootInfo.memoryMap.regions[i]
+      kprint("    ["); kprintInt(i); kprint("] base=0x")
+      defaultSerial.putHex(uint64(r.base))
+      kprint(" length=0x"); defaultSerial.putHex(r.length)
+      kprint(" ("); kprintInt(int64(r.length div (1024*1024)))
+      kprint(" MiB) type="); kprintInt(int64(r.regionType.ord)); kprintln("")
+    kprint("  Total usable memory: ")
+    kprintInt(int64(uint64(highestAddr) div MiB)); kprintln(" MiB")
+    kprint("  Kernel end: 0x"); kprintHex(kernelEndAddr); kprintln("")
+    kprint("  Bitmap at: 0x"); kprintHex(bitmapPhysAddr)
+    kprint(" - 0x"); kprintHex(bitmapPhysAddr + bitmapSize); kprintln("")
+
   k.physMgr = PhysicalMemManager()
   k.physMgr.initFromBootInfo(k.bootInfo, bitmapAddr)
 
-  kprint("  Free memory: ")
-  kprintInt(int64(k.physMgr.freeMemory() div MiB))
-  kprintln(" MiB")
+  when not defined(release):
+    kprint("  Free memory: ")
+    kprintInt(int64(k.physMgr.freeMemory() div MiB)); kprintln(" MiB")
 
-  # Initialize virtual memory manager
-  kprintln("  Creating VirtualMemManager...")
   k.virtMgr = newVirtualMemManager(k.physMgr)
-  kprintln("  VirtualMemManager created")
-
-  kprintln("  Initializing kernel address space...")
   let initResult = k.virtMgr.initKernelSpace()
   if initResult.isErr:
     kprintln("  ERROR: Could not initialize kernel address space")
     return false
 
-  kprintln("  Virtual memory manager initialized")
-
-  # Initialize heap manager
-  kprintln("  Creating HeapManager...")
   k.heapMgr = newHeapManager(k.physMgr, k.virtMgr)
-  kprintln("  HeapManager created")
-
-  kprintln("  Heap manager initialized")
-  kprintln("[INIT] Memory management initialized")
+  klog(llInfo, "[INIT] Memory management initialized")
 
   true
 
@@ -216,30 +167,17 @@ proc initScheduler(k: Kernel): bool =
   ## Initialize scheduler subsystem
   klog(llInfo, "[INIT] Initializing scheduler...")
 
-  # Get CPU count from boot info
   let cpuCount = max(1, k.bootInfo.cpuCount)
-  kprint("  CPU count: ")
-  kprintInt(cpuCount)
-  kprintln("")
-
-  # Initialize task manager
-  k.taskMgr = newTaskManager(k.heapMgr, k.virtMgr)
-  kprintln("  Task manager initialized")
-
-  # Initialize scheduler
+  k.taskMgr  = newTaskManager(k.heapMgr, k.virtMgr)
   k.schedMgr = newSchedulerManager(k.taskMgr, cpuCount)
-  kprintln("  Scheduler manager initialized")
 
-  # Create idle task
   let idleTask = k.taskMgr.createTask("idle", idleLoop, nil, MinPriority)
   if idleTask.isErr:
     kprintln("  ERROR: Could not create idle task")
     return false
 
   k.schedMgr.idleTask = idleTask.value
-  kprintln("  Idle task created")
-
-  kprintln("[INIT] Scheduler initialized")
+  klog(llInfo, "[INIT] Scheduler initialized")
   true
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -263,20 +201,18 @@ proc initKernel*(bootInfo: ptr BootInfo): Kernel =
   # ═══════════════════════════════════════════════════════════════════════
   initSerial()
 
-  kprintln("")
-  kprintln("╔════════════════════════════════════════╗")
-  kprintln("║           NimixOS Kernel               ║")
-  kprintln("║     Dependency Graph Architecture      ║")
-  kprintln("╚════════════════════════════════════════╝")
-  kprintln("")
-
-  # Print boot info
-  kprint("Boot protocol: ")
-  var protoName: string = ""
-  for c in bootInfo.bootProtocol:
-    if c == '\0': break
-    protoName.add(c)
-  kprintln(protoName)
+  when not defined(release):
+    kprintln("")
+    kprintln("╔════════════════════════════════════════╗")
+    kprintln("║           NimixOS Kernel               ║")
+    kprintln("╚════════════════════════════════════════╝")
+    kprintln("")
+    kprint("Boot protocol: ")
+    var protoName: string = ""
+    for c in bootInfo.bootProtocol:
+      if c == '\0': break
+      protoName.add(c)
+    kprintln(protoName)
 
   # ═══════════════════════════════════════════════════════════════════════
   # LAYER 2: Memory Management
@@ -293,10 +229,6 @@ proc initKernel*(bootInfo: ptr BootInfo): Kernel =
   # ═══════════════════════════════════════════════════════════════════════
   # Initialization Complete
   # ═══════════════════════════════════════════════════════════════════════
-  kprintln("")
-  kprintln("[INIT] Kernel initialization complete")
-  kprintln("")
-
   result.initialized = true
 
 # ═══════════════════════════════════════════════════════════════════════════
