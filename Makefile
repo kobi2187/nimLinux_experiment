@@ -79,7 +79,7 @@ build/apps/hello.elf: apps/nim/hello/hello.nim kernel/abi/nimix_abi.h build/nimi
 
 build/apps/ping_server.elf: servers/ping/ping_server_elf.nim servers/ping/ping_logic.nim kernel/abi/nimix_abi.h build/nimix_abi_stub.o
 	@mkdir -p build/apps
-	$(NIM_APP) --path:$(CURDIR)/servers/ping -o:$@ $<
+	$(NIM_APP) --path:$(CURDIR)/servers/ping --path:$(CURDIR)/apps/nim -o:$@ $<
 
 build/apps/ps.elf: apps/nim/ps/ps.nim kernel/abi/nimix_abi_stub.c build/nimix_abi_stub.o
 	@mkdir -p build/apps
