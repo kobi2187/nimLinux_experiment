@@ -49,6 +49,8 @@ type
       ## Kill task by PID. Returns 0=ok, -1=not found.
     fsReadDir*:   proc(path: cstring; buf: pointer; len: int): int {.nimcall.}
       ## List directory entries as newline-separated names. Returns bytes written.
+    fsRead*: proc(path: cstring; buf: pointer; len: int): int {.nimcall.}
+      ## Read entire file into buf. Returns bytes read, or negative on error.
 
     # ── Capability-gated IPC ──────────────────────────────────────────────────
     capSend*: proc(name: cstring; tok: uint64; data: pointer; dataLen: int): int {.nimcall.}

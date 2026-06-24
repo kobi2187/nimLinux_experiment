@@ -82,6 +82,26 @@ block:
   let reply = fsLogicRead(iface, "missing.txt", 0'u32, 4 * 1024 * 1024)
   check(reply.err == -2, "err == -2 on readFile failure")
 
+# Test 4: mock readFile returns (0, 42 bytes of 'X')
+block:
+  echo "--- 42-byte read ---"
+  proc mockRead42(path: cstring; buf: pointer; len: int): (int, int) {.nimcall.} =
+    let dst = cast[ptr UncheckedArray[byte]](buf)
+    for i in 0 ..< 42:
+      dst[i] = byte('X')
+    (0, 42)
+  let iface = FsIface(
+    readFile:  mockRead42,
+    allocSlot: mockAlloc,
+    freeSlot:  mockFree,
+    slotBase:  mockBase,
+    grantCap:  mockGrant,
+  )
+  let reply = fsLogicRead(iface, "big.bin", 0'u32, 4 * 1024 * 1024)
+  check(reply.err == 0,  "err == 0")
+  check(reply.len == 42, "len == 42")
+  check(reply.token != 0, "token != 0")
+
 echo ""
 echo "=== Results: " & $passed & " passed, " & $failed & " failed ==="
 if failed > 0:

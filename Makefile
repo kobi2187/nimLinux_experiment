@@ -249,6 +249,7 @@ test:
 	$(NIM) c -r $(TEST_FLAGS) -d:testing tests/test_sleep.nim
 	$(NIM) c -r $(TEST_FLAGS) tests/test_dispatch_queue.nim
 	$(NIM) c -r $(TEST_FLAGS) tests/test_flatbuffers.nim
+	$(NIM) c -r $(TEST_FLAGS) tests/test_msgpack_chan.nim
 	$(NIM) c -r --skipParentCfg --mm:arc --panics:on --path:$(CURDIR) -d:noSignalHandler tests/test_cps_eval.nim
 	$(NIM) c -r $(TEST_FLAGS) tests/test_fs_logic.nim
 	@echo "=== All tests passed ==="

@@ -45,10 +45,12 @@ proc elfBase(slot: int): uint64 {.nimcall.} =
 proc elfGrant(slot: int; pid: uint32; right: uint32): uint64 {.nimcall.} =
   nimixGrantRegion(slot, right)
 
-# Stub readFile — ELF variant has no direct fatfs access; placeholder until
-# disk IPC is wired via a disk server channel call.
+proc nimixFsRead(path: cstring; buf: pointer; len: int): int {.importc, cdecl.}
+
 proc elfReadFile(path: cstring; buf: pointer; len: int): (int, int) {.nimcall.} =
-  (-1, 0)
+  let n = nimixFsRead(path, buf, len)
+  if n < 0: return (n, 0)
+  (0, n)
 
 # ── Module-level state ────────────────────────────────────────────────────────
 
