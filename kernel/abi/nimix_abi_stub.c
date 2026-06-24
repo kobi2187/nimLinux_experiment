@@ -5,6 +5,17 @@
  */
 
 typedef unsigned long size_t;
+typedef unsigned long long uint64_t;
+
+/* Minimal FILE/stderr stub so Nim's raiseOutOfMem doesn't need libc */
+typedef struct { int dummy; } FILE;
+static FILE _stderr_stub = {0};
+FILE* stderr = &_stderr_stub;
+int fprintf(FILE* f, const char* fmt, ...) { (void)f; (void)fmt; return 0; }
+size_t fwrite(const void* p, size_t s, size_t n, FILE* f) { (void)p;(void)s;(void)n;(void)f; return 0; }
+int fflush(FILE* f) { (void)f; return 0; }
+size_t strlen(const char* s) { size_t n=0; while(s[n]) n++; return n; }
+void exit(int code) { (void)code; while(1); }
 
 void* memset(void* s, int c, size_t n) {
   unsigned char* p = (unsigned char*)s;

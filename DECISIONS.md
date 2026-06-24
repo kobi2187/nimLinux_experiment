@@ -16,9 +16,11 @@
   - Standard (IANA-registered, cross-language) — future Nim/C/WASM apps interop cleanly
 - **Scope**: ServerChan messages, event pub/sub payloads, syscall arguments (when we have real syscalls), capability grant messages.
 - **NOT for**: raw bulk data transfers (use shared region + capability token for those).
-- **Library**: `msgpack4nim` works on the **host** (tests, dev tools) only. It uses `streams` + `osalloc` which fail under both `--os:any` (kernel) and `--os:standalone` (apps).
-- **Production encoder**: `kernel/ipc/msgpack_chan.nim` — hand-rolled, 150 lines, no stdlib deps. Covers fixmap, fixstr, uint8, uint32, str8. Works under `--os:any --mm:arc` (kernel) and `--os:standalone --mm:arc` (apps). This is not a workaround — it's smaller and faster than msgpack4nim for our message shapes.
-- **Rule**: use `msgpack4nim` only in host-side test files (`tests/`). Use `kernel/ipc/msgpack_chan.nim` everywhere else.
+- **Library split**:
+  - `--os:any` (kernel): `kernel/ipc/msgpack_chan.nim` — hand-rolled, no stdlib. msgpack4nim's `streams` module needs `osalloc` which isn't available here.
+  - `--os:standalone` (PIE ELF apps): **`msgpack4nim` works** — `nimix_abi_stub.c` provides the missing libc stubs (`stderr`, `exit`, `strlen`, `fwrite`, `fflush`) that Nim's `raiseOutOfMem` path needs.
+  - Host tests: `msgpack4nim` directly.
+- **Rule**: prefer `msgpack4nim` in apps where it works. Use `kernel/ipc/msgpack_chan.nim` only in kernel-context code (`--os:any`).
 
 ### IPC Message Size
 - **Decision**: Variable-length messages with a leading size field (uint32 LE, bytes of MsgPack payload following).
