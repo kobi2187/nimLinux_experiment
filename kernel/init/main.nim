@@ -37,6 +37,7 @@ import ../../kernel/process_table
 import ../../kernel/cap/capability
 import ../../kernel/cap/cap_registry
 import ../../drivers/pci/pci_device
+import ../../drivers/virtio/virtio_net
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Linker Script Symbols
@@ -289,6 +290,21 @@ proc runKernel(bootInfo: ptr BootInfo) =
 
   pciScan()
   klogInt(llInfo, "PCI scan: devices found: ", int64(gPciCount))
+
+  if virtioNetInit():
+    klog(llInfo, "virtio-net: initialized")
+    let netIrq = gVirtioNet.irqLine
+    picUnmask(netIrq)
+    let netVec = irqToVector(int(netIrq))
+    discard getInterruptManager().registerExceptionHandler(
+      uint32(netVec),
+      proc(ctx: ptr ExceptionContext) {.nimcall.} =
+        virtioNetIrqHandler()
+        picEoi(gVirtioNet.irqLine)
+    )
+    klogInt(llInfo, "virtio-net: IRQ wired, line=", int64(netIrq))
+  else:
+    klog(llWarn, "virtio-net: not available")
 
   # Load IDT and enable interrupts so the timer fires
   let intMgr = getInterruptManager()

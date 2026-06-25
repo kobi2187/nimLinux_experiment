@@ -25,6 +25,7 @@ import ../mm/sip_heap
 import ../kernel/process_table
 import ../core/ptr_helpers
 import ../drivers/pci/pci_device
+import ../drivers/virtio/virtio_net
 
 const
   ShellPrompt = "nimixos> "
@@ -48,6 +49,7 @@ type
     scKill          ## kill <pid> — terminate task by PID
     scStats         ## stats — scheduler stats + uptime
     scLspci         ## lspci — list PCI devices
+    scNetinfo       ## netinfo — virtio-net MAC and packet counts
 
 # ── String helpers ─────────────────────────────────────────────────────────
 
@@ -88,7 +90,8 @@ proc parseCommand*(buf: openArray[char], len: int): ShellCommand =
   if bufEq(buf, first, last, "ls"):    return scLs
   if bufEq(buf, first, last, "ps"):    return scPs
   if bufEq(buf, first, last, "stats"):  return scStats
-  if bufEq(buf, first, last, "lspci"): return scLspci
+  if bufEq(buf, first, last, "lspci"):   return scLspci
+  if bufEq(buf, first, last, "netinfo"): return scNetinfo
   # "run <file>", "exec <file>", "kill <pid>" — prefix match
   if last - first >= 3 and buf[first] == 'r' and buf[first+1] == 'u' and
      buf[first+2] == 'n' and buf[first+3] == ' ':  return scRun
@@ -116,6 +119,7 @@ proc cmdHelp() =
   kprint("  kill <pid>       - terminate task by PID\n")
   kprint("  stats            - scheduler statistics and uptime\n")
   kprint("  lspci            - list PCI devices\n")
+  kprint("  netinfo          - virtio-net MAC and packet counts\n")
 
 proc cmdVersion() =
   kprint("NimixOS v0.1.0\n")
@@ -159,6 +163,14 @@ proc printHex4(val: uint16) {.inline.} =
 
 proc printHex2(val: uint8) {.inline.} =
   defaultSerial.putHex(uint64(val), 2)
+
+proc cmdNetinfo() =
+  if not gVirtioNetReady:
+    kprint("virtio-net: not available\n")
+    return
+  var infoBuf: array[128, char]
+  let n = virtioNetInfo(addr infoBuf[0], infoBuf.len)
+  for i in 0..<n: defaultSerial.putChar(infoBuf[i])
 
 proc cmdLspci() =
   pciScan()
@@ -365,7 +377,8 @@ proc runShell*(physMgr: PhysicalMemManager) =
         extractArg(inputBuf, first, last, 5, pidBuf)
         execApp("kill.elf", cast[cstring](addr pidBuf[0]))
       of scStats:  execApp("stats.elf", "")
-      of scLspci:  cmdLspci()
+      of scLspci:   cmdLspci()
+      of scNetinfo: cmdNetinfo()
       of scEmpty:  discard
       of scUnknown: cmdUnknown(inputBuf, first, last)
       # Reset buffer
