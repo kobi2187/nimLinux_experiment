@@ -360,14 +360,34 @@ Task 51: audio_server ELF
        └─ Task 52: hello-raylib.elf demo (draw + sound = full stack proof)
 ```
 
+### "Fits like a glove" — NimixOS primitives ARE the platform layer
+
+The goal is zero impedance mismatch. Every raylib platform call maps directly to a NimixOS primitive with no translation shim:
+
+| Raylib platform call | NimixOS primitive | Notes |
+|---------------------|------------------|-------|
+| `CORE.Window.currentFbo` framebuffer ptr | `regionAlloc()` region cap → virtio-gpu display region | render target = DMA buffer, no copy |
+| `PollInputEvents()` | `nimixEventPoll("input")` → key/mouse structs | input_server publishes; raylib reads same structs |
+| `SwapScreenBuffer()` | `virtqueueKick(displayQueue)` | one write to a port, nothing else |
+| `InitAudioDevice()` | open `"audio"` ServerChan + `capGrantRegion` for audio buffer | miniaudio custom backend owns a region cap |
+| `WaitTime(seconds)` | `nimixSleep(ticks)` | maps directly to scheduler sleep |
+| `GetTime()` | `pitUptimeTicks() / 100.0` | PIT tick counter, no libc needed |
+| `TraceLog()` | `klog()` / `"log"` ServerChan | kernel log in kernel context, log_server in app context |
+
+This means: the `rcore_nimixos.c` platform backend has **no abstractions of its own** — it is just thin glue that names our primitives. If a NimixOS primitive changes, one line in the backend changes. No layers to keep in sync.
+
 ### naylib vs raw raylib C
 
-App code uses naylib (the Nim bindings). The port work happens entirely at the `rcore.c` platform layer — naylib sits on top unchanged. Apps never call C directly.
+App code uses naylib (the Nim bindings). The port work happens entirely in `rcore_nimixos.c` — naylib sits on top unchanged. Apps never touch C directly.
+
+### Input event type reuse
+
+Raylib's `KeyboardKey` and `MouseButton` enums will be adopted as NimixOS's canonical input event types (published by input_server). This means apps that use naylib get input events with no conversion — the type coming off the wire *is* the raylib enum. No `case` statement mapping one enum to another.
 
 ### Software renderer vs GPU
 
-Initially: raylib software rasterizer → virtio-gpu as dumb framebuffer device (no 3D acceleration).
-Later: when virtio-gpu virgl (3D) support lands, raylib can switch to OpenGL ES 2 via virgl. The platform backend is the only thing that changes.
+Initially: raylib software rasterizer → virtio-gpu as dumb framebuffer (no 3D acceleration needed).
+Later: when virtio-gpu virgl (3D) lands, raylib switches to OpenGL ES 2 via virgl. Only the present path in `rcore_nimixos.c` changes — app code is untouched.
 
 ## Open Questions
 
