@@ -36,6 +36,7 @@ import ../../mm/region_allocator
 import ../../kernel/process_table
 import ../../kernel/cap/capability
 import ../../kernel/cap/cap_registry
+import ../../drivers/pci/pci_device
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Linker Script Symbols
@@ -285,6 +286,9 @@ proc runKernel(bootInfo: ptr BootInfo) =
   kbdRegisterHandler()
   picUnmask(1)   # unmask IRQ1 (keyboard)
   klog(llInfo, "PS2 keyboard: IRQ1 handler registered")
+
+  pciScan()
+  klogInt(llInfo, "PCI scan: devices found: ", int64(gPciCount))
 
   # Load IDT and enable interrupts so the timer fires
   let intMgr = getInterruptManager()

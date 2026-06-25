@@ -24,6 +24,7 @@ import ../mm/region_allocator
 import ../mm/sip_heap
 import ../kernel/process_table
 import ../core/ptr_helpers
+import ../drivers/pci/pci_device
 
 const
   ShellPrompt = "nimixos> "
@@ -46,6 +47,7 @@ type
     scPs            ## ps — list all tasks with pid/class/state/cpu
     scKill          ## kill <pid> — terminate task by PID
     scStats         ## stats — scheduler stats + uptime
+    scLspci         ## lspci — list PCI devices
 
 # ── String helpers ─────────────────────────────────────────────────────────
 
@@ -85,7 +87,8 @@ proc parseCommand*(buf: openArray[char], len: int): ShellCommand =
   if bufEq(buf, first, last, "load pingpong"):  return scLoadPingpong
   if bufEq(buf, first, last, "ls"):    return scLs
   if bufEq(buf, first, last, "ps"):    return scPs
-  if bufEq(buf, first, last, "stats"): return scStats
+  if bufEq(buf, first, last, "stats"):  return scStats
+  if bufEq(buf, first, last, "lspci"): return scLspci
   # "run <file>", "exec <file>", "kill <pid>" — prefix match
   if last - first >= 3 and buf[first] == 'r' and buf[first+1] == 'u' and
      buf[first+2] == 'n' and buf[first+3] == ' ':  return scRun
@@ -112,6 +115,7 @@ proc cmdHelp() =
   kprint("  ps               - list all tasks\n")
   kprint("  kill <pid>       - terminate task by PID\n")
   kprint("  stats            - scheduler statistics and uptime\n")
+  kprint("  lspci            - list PCI devices\n")
 
 proc cmdVersion() =
   kprint("NimixOS v0.1.0\n")
@@ -149,6 +153,35 @@ proc cmdUnknown(buf: openArray[char], first, last: int) =
   kprint("Unknown command: '")
   for i in first..last: defaultSerial.putChar(buf[i])
   kprint("'\nType 'help' for available commands.\n")
+
+proc printHex4(val: uint16) {.inline.} =
+  defaultSerial.putHex(uint64(val), 4)
+
+proc printHex2(val: uint8) {.inline.} =
+  defaultSerial.putHex(uint64(val), 2)
+
+proc cmdLspci() =
+  pciScan()
+  if gPciCount == 0:
+    kprint("No PCI devices found.\n")
+    return
+  for i in 0..<gPciCount:
+    let d = gPciDevices[i]
+    kprint("[")
+    printHex2(d.bus); kprint(":")
+    printHex2(d.slot); kprint(".")
+    defaultSerial.putHex(uint64(d.fn), 1)
+    kprint("] ")
+    printHex4(d.vendorId); kprint(":")
+    printHex4(d.deviceId); kprint(" ")
+    let name = pciDeviceName(d.vendorId, d.deviceId)
+    if name != nil:
+      defaultSerial.putString(name)
+    else:
+      kprint("unknown")
+    kprint(" (class ")
+    printHex2(d.classCode); kprint(" sub ")
+    printHex2(d.subclass); kprint(")\n")
 
 
 # Static buffer for disk-loaded files (512 KB)
@@ -331,8 +364,9 @@ proc runShell*(physMgr: PhysicalMemManager) =
         var pidBuf: array[32, char]
         extractArg(inputBuf, first, last, 5, pidBuf)
         execApp("kill.elf", cast[cstring](addr pidBuf[0]))
-      of scStats: execApp("stats.elf", "")
-      of scEmpty:   discard
+      of scStats:  execApp("stats.elf", "")
+      of scLspci:  cmdLspci()
+      of scEmpty:  discard
       of scUnknown: cmdUnknown(inputBuf, first, last)
       # Reset buffer
       for i in 0..<inputLen: inputBuf[i] = '\0'
