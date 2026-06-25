@@ -12,6 +12,8 @@ bin           = @["kernel/init/main"]
 
 requires "nim >= 2.0.0"
 requires "https://github.com/kobi2187/arsenal"
+requires "msgpack4nim >= 0.4.0"
+requires "cps >= 0.11.0"
 
 # Tasks
 

@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: GPL-2.0
+# NimixOS CI — build all 3 kernel models, run host tests, run QEMU integration tests
+
+name: CI
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            qemu-system-x86 ovmf \
+            grub-pc-bin grub-efi-amd64-bin grub-common xorriso mtools \
+            gcc clang
+
+      - name: Install Nim via choosenim
+        run: |
+          curl -sSf https://nim-lang.org/choosenim/init.sh | sh -s -- -y
+          echo "$HOME/.nimble/bin" >> $GITHUB_PATH
+
+      - name: Install Nim package dependencies
+        run: nimble install -y --depsOnly
+
+      - name: Build all 3 kernel models
+        run: make build
+
+      - name: Run host unit tests
+        run: make test
+
+      - name: Build disk image with apps
+        run: make disk nim-apps disk-add-apps
+
+      - name: Build ISO
+        run: make iso
+
+      - name: Run QEMU integration tests
+        run: make test-qemu DISK=disk.img OVMF=/usr/share/ovmf/OVMF.fd
+        timeout-minutes: 5
