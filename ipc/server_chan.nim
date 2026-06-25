@@ -93,3 +93,23 @@ proc serverChanFind*(name: string): ptr ServerChan =
     if registry[i] != nil and serverChanName(registry[i][]) == name:
       return registry[i]
   nil
+
+# ── MsgPack helpers ───────────────────────────────────────────────────────────
+# Encode/decode ServerMsg payloads using the kernel MsgPack encoder.
+# Callers in --os:any context use these instead of raw byte manipulation.
+
+import ../kernel/ipc/msgpack_chan
+
+proc serverMsgFromMp*(buf: MpBuf): ServerMsg =
+  ## Pack an MpBuf into a ServerMsg (copies bytes, sets len).
+  let n = if buf.pos < ServerMsgMaxLen: buf.pos else: ServerMsgMaxLen
+  result.len = uint16(n)
+  for i in 0 ..< n:
+    result.data[i] = buf.data[i]
+
+proc serverMsgToMp*(msg: ServerMsg): MpBuf =
+  ## Unpack a ServerMsg back into an MpBuf for decoding.
+  result.pos = 0
+  let n = if int(msg.len) < 256: int(msg.len) else: 255
+  for i in 0 ..< n:
+    result.data[i] = msg.data[i]
