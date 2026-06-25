@@ -235,6 +235,7 @@ test:
 	$(NIM) c -r $(TEST_FLAGS) tests/test_traits.nim
 	$(NIM) c -r $(TEST_FLAGS) tests/test_ps2_keyboard.nim
 	$(NIM) c -r $(TEST_FLAGS) tests/test_pic.nim
+	$(NIM) c -r $(TEST_FLAGS) tests/test_pci.nim
 	$(NIM) c -r $(TEST_FLAGS) tests/test_pit.nim
 	$(NIM) c -r $(TEST_FLAGS) tests/test_event_server.nim
 	$(NIM) c -r $(TEST_FLAGS) tests/test_driver_registry.nim
@@ -266,7 +267,9 @@ test-arc:
 	@echo "=== ARC tests passed ==="
 
 # ── QEMU integration tests (serial pipe harness) ──────────────────
-test-qemu: $(ISO_OUT)
+# Rebuilds nim apps and refreshes disk before booting so exec tests see
+# up-to-date ELFs.
+test-qemu: nim-apps disk-add-apps $(ISO_OUT)
 	python3 tests/qemu_harness.py --iso $(ISO_OUT) --bios $(OVMF) \
 		$(if $(wildcard $(DISK)),--disk $(DISK),)
 

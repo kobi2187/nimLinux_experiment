@@ -285,6 +285,29 @@ The dispatcher is on the critical path only for control (microseconds). The data
 - `capGrantRegion(slot, targetPid, rights) → CapToken` — mint a scoped memory cap
 - `regionAddRef(slot)` / `regionDecRef(slot) → bool` — ref count management, returns true when hits zero
 
+## Driver Strategy
+
+### Virtio — primary driver model (near-term)
+
+- **Decision**: All drivers targeting QEMU use virtio — no real hardware drivers for now.
+- **Why**: Virtio is spec-driven (not quirk-driven), async-friendly (virtqueue maps to coroutine wakeup), and covers everything needed: net, block, GPU, input, entropy, serial.
+- **Scope**: virtio-net and virtio-gpu are the next two drivers. virtio-net unlocks the network stack; virtio-gpu unlocks framebuffer graphics.
+- **Integration point**: each virtio device is a kernel module (monolithic) or a userspace driver server (microkernel), both speaking the same virtqueue ring buffer protocol.
+
+### Rump Kernels — future real-hardware breadth
+
+- **Decision**: Do not attempt rump kernel port yet. Revisit when `irqSubscribe` and DMA-to-userspace mapping exist.
+- **Rationale**: The `rumpuser` hypercall layer is ~1000 lines of C but requires two primitives NimixOS doesn't have yet: (1) `irqSubscribe(vec, cap)` — kernel routes interrupt to a userspace coroutine; (2) DMA-safe region mapping to userspace. Building rump before these exist means building on scaffolding.
+- **Architecture**: when it lands, rump runs as a **userspace driver server** (PIE ELF process in microkernel model), not in the kernel. Kernel stays small. The boundary is a ring buffer between rump's thread world and NimixOS's coroutine world.
+- **Why rump over BSD compat shim**: rump's `rumpuser` interface is a clean 20-call hypercall boundary. A BSD compat shim would require writing 5–10k lines of glue from scratch with no clean integration point.
+- **Why not yet**: prerequisites are `irqSubscribe` + userspace DMA mapping, both of which emerge naturally from the microkernel driver server story. Build those first; rump slots in afterward.
+
+### Userspace Driver Servers — microkernel endgame
+
+- **Decision**: In the microkernel model, drivers are PIE ELF coroutine servers that own their MMIO region via cap token. Kernel routes interrupts to them via `irqSubscribe`.
+- **Missing primitive**: `irqSubscribe(irqVec: int, cap: CapToken)` — kernel registers a cap-gated wakeup: when IRQ fires, resume the cap holder's coroutine.
+- **DMA**: For a hobby OS, trust the driver server (no IOMMU). QEMU exposes `virtio-iommu` for safe experimentation later.
+
 ## Open Questions
 
 - UNCONFIRMED: Exact boot sequence for disk-loaded servers — does the kernel wait for disk mount before spawning servers, or retry asynchronously?

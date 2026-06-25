@@ -45,23 +45,22 @@ def build_tests(disk=None):
         {"name": "stats",   "cmd": "stats",       "pattern": r"Uptime",           "timeout": 10},
         {"name": "meminfo", "cmd": "meminfo",     "pattern": r"Physical memory",  "timeout": 10},
     ]
-    # exec_hello requires disk image
-    if disk and os.path.exists(disk):
-        tests.append({
-            "name": "exec_hello",
-            "cmd": "exec hello.elf",
-            "pattern": r"Hello from",
-            "timeout": 15,
-        })
-    else:
-        tests.append({
-            "name": "exec_hello",
-            "cmd": "exec hello.elf",
-            "pattern": r"Hello from",
-            "timeout": 15,
-            "skip": True,
-            "skip_reason": "disk.img not present",
-        })
+    # exec_* tests require a disk image with the ELFs present
+    disk_ok = disk and os.path.exists(disk)
+    skip_reason = "disk.img not present"
+
+    def disk_test(name, cmd, pattern, timeout=15):
+        t = {"name": name, "cmd": cmd, "pattern": pattern, "timeout": timeout}
+        if not disk_ok:
+            t["skip"] = True
+            t["skip_reason"] = skip_reason
+        return t
+
+    tests += [
+        disk_test("exec_hello", "exec hello.elf", r"Hello from"),
+        disk_test("exec_ps",    "exec ps.elf",    r"PID\s+CLASS\s+STATE"),
+        disk_test("exec_top",   "exec top.elf",   r"uptime_ticks", timeout=20),
+    ]
     return tests
 
 
