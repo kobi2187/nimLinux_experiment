@@ -308,6 +308,67 @@ The dispatcher is on the critical path only for control (microseconds). The data
 - **Missing primitive**: `irqSubscribe(irqVec: int, cap: CapToken)` — kernel registers a cap-gated wakeup: when IRQ fires, resume the cap holder's coroutine.
 - **DMA**: For a hobby OS, trust the driver server (no IOMMU). QEMU exposes `virtio-iommu` for safe experimentation later.
 
+## Graphics and Audio — Raylib + naylib
+
+### Decision: Raylib as the graphics and audio foundation
+
+NimixOS targets game-engine-quality graphics and audio. Raylib is the chosen library because:
+- Clean C codebase with a well-defined platform abstraction layer (`rcore.c`)
+- Software renderer path — no GPU driver required initially
+- miniaudio built-in for audio — one dependency covers both
+- naylib provides idiomatic Nim bindings on top, so app code stays clean
+- Raylib's `PLATFORM_CUSTOM` mode lets us replace the entire OS interface with our own
+
+### Porting strategy
+
+Raylib is not linked against a host OS — we provide a custom platform backend:
+
+```
+naylib (Nim API)
+  └─ raylib (C library, PLATFORM_CUSTOM build)
+       ├─ display → virtio-gpu framebuffer (zero-copy blit to region)
+       ├─ input   → input_server IPC (key/mouse events via MsgPack)
+       └─ audio   → audio_server IPC (miniaudio CUSTOM backend)
+```
+
+No X11, no Wayland, no OpenGL required. Raylib's software rasterizer draws into a raw `uint32*` framebuffer that maps directly onto the virtio-gpu display region.
+
+### How to make raylib fast on NimixOS
+
+The design choices that make raylib *faster* on NimixOS than on a conventional OS:
+
+| Mechanism | What we do | Why faster |
+|-----------|-----------|------------|
+| **Zero-copy framebuffer** | Raylib's render target IS the virtio-gpu DMA region — no memcpy to display | Eliminates one frame buffer copy on every present |
+| **Dedicated realtime task** | Raylib's game loop runs as a `tcRealtime` task in the scheduler | PIT preempts other tasks to keep frame timing consistent |
+| **Direct virtqueue kick** | Present = single `virtqueueKick()` call, no syscall overhead | No kernel mode switch on every frame |
+| **Zero-copy audio** | miniaudio writes directly into a region cap, audio_server reads it | No copy on audio buffer handoff |
+| **No compositor overhead** | Apps that own the full screen (games) bypass the window manager entirely, rendering directly to the framebuffer | Removes compositor blit + z-order compositing cost |
+| **Cap-gated exclusive display** | A game app holds `capMemWrite` on the display region — no contention | No lock/unlock on every frame, no shared surface management |
+| **Coroutine-friendly design** | Raylib's `BeginDrawing/EndDrawing` maps to yield points — game loop is a coroutine, not a spinning thread | Cooperative yield between frames, no wasted CPU during vsync wait |
+
+### Dependency chain
+
+```
+Task 16: virtio-gpu framebuffer init
+  └─ Task 46: raylib rcore platform backend (PLATFORM_CUSTOM → framebuffer blit)
+       ├─ Task 47: raylib software renderer
+       └─ Task 48: raylib input wiring (input_server → raylib key/mouse state)
+            └─ Task 50: naylib integration + validation
+Task 51: audio_server ELF
+  └─ Task 49: miniaudio custom backend → audio_server IPC
+       └─ Task 52: hello-raylib.elf demo (draw + sound = full stack proof)
+```
+
+### naylib vs raw raylib C
+
+App code uses naylib (the Nim bindings). The port work happens entirely at the `rcore.c` platform layer — naylib sits on top unchanged. Apps never call C directly.
+
+### Software renderer vs GPU
+
+Initially: raylib software rasterizer → virtio-gpu as dumb framebuffer device (no 3D acceleration).
+Later: when virtio-gpu virgl (3D) support lands, raylib can switch to OpenGL ES 2 via virgl. The platform backend is the only thing that changes.
+
 ## Open Questions
 
 - UNCONFIRMED: Exact boot sequence for disk-loaded servers — does the kernel wait for disk mount before spawning servers, or retry asynchronously?
