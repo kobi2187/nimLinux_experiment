@@ -71,7 +71,13 @@ nim-apps: build/apps/hello.elf build/apps/ping_server.elf \
           build/apps/ps.elf build/apps/kill.elf \
           build/apps/stats.elf build/apps/ls.elf \
           build/apps/top.elf build/apps/dispatch_server.elf \
-          build/apps/fs_server.elf
+          build/apps/fs_server.elf build/apps/user_tests.elf
+
+NIM_APP_TEST = $(NIM_APP) -d:nimixUserspace
+
+build/apps/user_tests.elf: tests/user_tests/main.nim tests/user_tests/panicoverride.nim tests/test_protocol.nim kernel/abi/nimix_abi.h build/nimix_abi_stub.o
+	@mkdir -p build/apps
+	$(NIM_APP_TEST) -o:$@ $<
 
 build/apps/hello.elf: apps/nim/hello/hello.nim kernel/abi/nimix_abi.h build/nimix_abi_stub.o
 	@mkdir -p build/apps
@@ -214,7 +220,7 @@ $(DISK):
 # Add/update WASM and ELF files on the disk image (uses mtools — no sudo)
 disk-add-apps: apps/ping/ping.wasm apps/pingpong/pingpong.wasm nim-apps
 	MTOOLS_SKIP_CHECK=1 mcopy -oi $(DISK) apps/ping/ping.wasm apps/pingpong/pingpong.wasm ::
-	MTOOLS_SKIP_CHECK=1 mcopy -oi $(DISK) build/apps/hello.elf build/apps/ps.elf build/apps/kill.elf build/apps/stats.elf build/apps/ls.elf build/apps/top.elf build/apps/dispatch_server.elf build/apps/fs_server.elf ::
+	MTOOLS_SKIP_CHECK=1 mcopy -oi $(DISK) build/apps/hello.elf build/apps/ps.elf build/apps/kill.elf build/apps/stats.elf build/apps/ls.elf build/apps/top.elf build/apps/dispatch_server.elf build/apps/fs_server.elf build/apps/user_tests.elf ::
 
 # Add a single file: make disk-add FILE=myapp.wasm
 disk-add:

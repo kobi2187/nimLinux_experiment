@@ -424,3 +424,61 @@ Later: when virtio-gpu virgl (3D) lands, raylib switches to OpenGL ES 2 via virg
 6. AP bringup sequence: BSP sends INIT+SIPI, AP runs a startup stub that sets GS base, loads its per-CPU GDT+TSS, enables interrupts, then enters the scheduler idle loop.
 
 **Resolving signal:** When APIC + SIPI AP bringup is started (adds `arch/x86_64/apic.nim` + `smp_boot.S`).
+
+## Test Infrastructure — architecture and migration plan (2026-06-26)
+
+### Current state (phase 1 — baked-in)
+
+`tests/kernel_tests/main.nim` is compiled directly into the kernel binary via
+`when defined(testMode)`. `make test-structured` builds `build/kernel-test`
+(monolithic + `-d:testMode`), boots it, and parses `TEST PASS/FAIL/DONE` lines
+from serial via `qemu_harness.py --structured`.
+
+**Why baked-in first:** zero infrastructure cost; works without disk; lets us
+build and validate the test protocol before adding loader complexity.
+
+### Phase 2 — disk-loaded separate binary (target: after boot-from-disk lands)
+
+`kernel_tests.elf` becomes a standalone PIE ELF on the disk image, loaded in
+testMode before the shell via `elfLoadPie` — same path as `fs_server.elf` and
+`dispatch_server.elf`. The `when defined(testMode)` call site in `kernelMain`
+changes from a direct proc call to a disk load + jump. Test code is unchanged.
+
+**Why:** tests become independently updatable without recompiling the kernel.
+This mirrors the driver registry pattern — tests attach at runtime like drivers
+are probed at runtime.
+
+### Phase 3 — all 3 kernel models
+
+Each model needs scaffolding to expose the same testable surface:
+
+| Test | Monolithic | Microkernel | SASOS |
+|------|-----------|-------------|-------|
+| regionAlloc/Free | direct | direct (kernel space) | direct |
+| capGrant/Check | direct | direct | direct (SIP cap) |
+| procSpawn/Kill | direct | direct | direct |
+| ServerChan send/recv | direct | double-copy via staging buffer | cap-gated direct copy |
+| Ring-3 syscall path | procSpawnRing3 → iretq | procSpawnRing3 → iretq | procSpawnRing3 → iretq (type-isolated) |
+
+Microkernel and SASOS IPC have different internal mechanics but the same
+observable ABI — the user_tests ELF (ring-3) already covers this because it
+exercises only the syscall ABI, not internal structs. The kernel_tests ELF
+may need model-specific `when IsMonolithic` / `when IsMicrokernel` branches
+for the IPC tests, or a shared adapter that maps to each model's internal API.
+
+**Scaffolding plan:** Define a `TestIpcAdapter` in `tests/kernel_tests/ipc_adapter.nim`
+with procs `testChanCreate/Post/Recv` that dispatch to the right model's
+implementation. Each model wires it in its init. Tests call the adapter — same
+test code runs on all 3 models.
+
+### Ring-3 user test ELF
+
+`tests/user_tests/main.nim` — compiled as a PIE ELF with `--os:standalone`,
+linked against `nimix_abi_stub.o`. Runs in ring 3 via `procSpawnRing3`.
+Exercises the full syscall path: trampoline → `syscall` → `syscall_entry` asm
+→ dispatch table → kernel proc → `sysretq` → ring 3.
+Works identically on all 3 kernel models because it only touches the ABI.
+Added to testMode boot sequence after kernel_tests completes.
+
+**Resolving signal for phase 2:** boot-from-disk (Milestone 1, open question #1).
+**Resolving signal for phase 3:** when microkernel and SASOS model parity is targeted.

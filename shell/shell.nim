@@ -277,6 +277,10 @@ proc runPieElf(filename: cstring; dataBuf: ptr byte; nbytes: int; appArgs: cstri
   # Shell returns immediately; app runs in parallel via the preemptive scheduler.
   # Region and task slot are freed by abiExit when the app calls nimixExit().
 
+proc launchElfBytes*(filename: cstring; dataBuf: ptr byte; nbytes: int; args: cstring = nil) =
+  ## Load and spawn a PIE ELF from an in-memory buffer. Public — used by testMode.
+  runPieElf(filename, dataBuf, nbytes, args)
+
 proc runExecElf(dataBuf: ptr byte; nbytes: int) =
   ## Load and run a non-PIE (ET_EXEC) ELF at its fixed vaddr.
   let loaded = elfLoad(dataBuf, nbytes)

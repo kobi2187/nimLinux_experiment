@@ -42,6 +42,7 @@ import ../../drivers/rtc
 
 when defined(testMode):
   import ../../tests/kernel_tests/main as kernelTests
+  const userTestsElf = staticRead("../../build/apps/user_tests.elf")
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Linker Script Symbols
@@ -371,9 +372,17 @@ proc runKernel(bootInfo: ptr BootInfo) =
   discard fsMount()
 
   when defined(testMode):
-    klog(llInfo, "testMode: running kernel tests")
+    klog(llInfo, "testMode: running kernel tests (ring 0)")
     kernelTests.kernelTestMain()
-    klog(llInfo, "testMode: kernel tests complete — halting")
+    klog(llInfo, "testMode: kernel tests done — launching user tests (ring 3)")
+    var userTestsBuf = userTestsElf  # mutable copy so we can take addr
+    launchElfBytes("user_tests.elf",
+                   cast[ptr byte](addr userTestsBuf[0]),
+                   userTestsBuf.len)
+    # Give the ring-3 user tests time to run before halting.
+    # They emit TEST DONE: when complete; harness detects it and exits.
+    procSleepUntil(int(procTable.current), pitTicks() + 500)
+    klog(llInfo, "testMode: complete — halting")
     while true: hlt()
 
   # Hand off to interactive shell — never returns.
