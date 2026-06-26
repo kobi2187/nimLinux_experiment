@@ -12,6 +12,7 @@ import ../../kernel/event_server
 import ../../kernel/traits/event
 import ../../kernel/process_table
 import ../../drivers/pit
+import ../../drivers/rtc
 import ../../kernel/cap/capability as cap
 import nimix_abi_proc
 import nimix_abi_fs
@@ -121,3 +122,37 @@ proc abiSleep*(ticks: uint64) {.nimcall.} =
   procSleepUntil(int(procTable.current), target)
   while procTable.tasks[procTable.current].state == ptsBlocked:
     discard
+
+# ── RTC / wall clock ──────────────────────────────────────────────────────────
+
+proc abiUptimeSecs*(): uint64 {.nimcall.} =
+  ## Seconds since boot, from PIT tick counter.
+  rtcUptimeSecs()
+
+proc abiWallClock*(buf: pointer; len: int): int {.nimcall.} =
+  ## Write "YYYY-MM-DD HH:MM:SS\n" into buf. Returns bytes written, or -1 if buf too small.
+  let dt = rtcReadDateTime()
+  # Format: "2026-06-26 09:15:30\n" = 20 chars
+  if len < 20: return -1
+  let p = cast[ptr array[32, char]](buf)
+  proc d2(dst: ptr array[32, char]; off: int; v: uint16) =
+    dst[off]   = char(ord('0') + int(v div 10))
+    dst[off+1] = char(ord('0') + int(v mod 10))
+  proc d4(dst: ptr array[32, char]; off: int; v: uint16) =
+    dst[off]   = char(ord('0') + int(v div 1000))
+    dst[off+1] = char(ord('0') + int((v div 100) mod 10))
+    dst[off+2] = char(ord('0') + int((v div 10) mod 10))
+    dst[off+3] = char(ord('0') + int(v mod 10))
+  d4(p, 0, dt.year)
+  p[4] = '-'
+  d2(p, 5, dt.month.uint16)
+  p[7] = '-'
+  d2(p, 8, dt.day.uint16)
+  p[10] = ' '
+  d2(p, 11, dt.hour.uint16)
+  p[13] = ':'
+  d2(p, 14, dt.minute.uint16)
+  p[16] = ':'
+  d2(p, 17, dt.second.uint16)
+  p[19] = '\n'
+  20

@@ -81,6 +81,12 @@ type
       ## `right`: 4=capMemRead, 5=capMemWrite, 6=capMemGrant (CapRight enum values).
       ## Returns the CapToken as uint64, or 0 on failure.
 
+    # ── RTC / wall clock ──────────────────────────────────────────────────────
+    uptimeSecs*:  proc(): uint64 {.nimcall.}
+      ## Seconds elapsed since kernel boot (from PIT tick counter).
+    wallClock*:   proc(buf: pointer; len: int): int {.nimcall.}
+      ## Write "YYYY-MM-DD HH:MM:SS\n" into buf. Returns bytes written, -1 if buf too small.
+
 var nimixAbi*: NimixAbiVTable
   ## Global ABI vtable. Set once at boot by the chosen kernel model init.
   ## Apps never call this directly — the ELF loader patches weak stubs with

@@ -38,6 +38,7 @@ import ../../kernel/cap/capability
 import ../../kernel/cap/cap_registry
 import ../../drivers/pci/pci_device
 import ../../drivers/virtio/virtio_net
+import ../../drivers/rtc
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Linker Script Symbols
@@ -323,6 +324,9 @@ proc runKernel(bootInfo: ptr BootInfo) =
   klog(llInfo, "Drivers probed")
   klogInt(llInfo, "  ok:   ", int64(drvOk))
   klogInt(llInfo, "  fail: ", int64(drvFail))
+
+  let bootTime = rtcReadDateTime()
+  klog(llInfo, "RTC: wall clock read")
 
   syscallGateInit()
   klog(llInfo, "Syscall gate ready (ring 0<->3)")
