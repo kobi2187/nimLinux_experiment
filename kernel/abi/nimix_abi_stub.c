@@ -71,3 +71,5 @@ __attribute__((weak)) int  nimixSysInfo(void* buf, int len) { (void)buf; (void)l
 __attribute__((weak)) unsigned long long nimixGrantRegion(int slot, unsigned int right) { (void)slot; (void)right; return 0; }
 __attribute__((weak)) int nimixFsRead(const char* path, void* buf, int len) { (void)path; (void)buf; (void)len; return -1; }
 __attribute__((weak)) int nimixFsWrite(const char* path, const void* buf, int len) { (void)path; (void)buf; (void)len; return -1; }
+__attribute__((weak)) unsigned long long nimixUptimeSecs(void) { return 0; }
+__attribute__((weak)) int nimixWallClock(void* buf, int len) { (void)buf; (void)len; return -1; }
