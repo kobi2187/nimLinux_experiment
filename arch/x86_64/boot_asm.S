@@ -367,5 +367,71 @@ fxRestore:
     fxrstor64 (%rdi)
     ret
 
+/* syscall_entry — ring-3 → ring-0 entry point via SYSCALL instruction.
+ *
+ * CPU state on entry:
+ *   RAX = syscall number (NimixSyscall ordinal)
+ *   RDI = arg0, RSI = arg1, RDX = arg2, R10 = arg3
+ *   RCX = saved user RIP  (written by CPU, needed for SYSRETQ)
+ *   R11 = saved user RFLAGS (written by CPU, needed for SYSRETQ)
+ *   RSP = still user stack (SYSCALL does NOT switch stacks)
+ *   IF  = 0 (cleared by SFMASK)
+ *
+ * We:
+ *   1. Save user RSP to syscallScratchRsp (single-CPU scratch global)
+ *   2. Load kernel RSP from globalTss.rsp0 (updated every context switch)
+ *   3. Align stack, save RCX/R11 (needed for sysretq) and caller-saved regs
+ *   4. Call syscallDispatch(nr=RAX, a0=RDI, a1=RSI, a2=RDX, a3=R10)
+ *      using System V AMD64 ABI (args in RDI,RSI,RDX,RCX)
+ *   5. Restore saved regs, user RSP, then SYSRETQ back to ring-3
+ *
+ * syscallDispatch is a Nim proc exported as C (nimcall = cdecl on x86-64).
+ * Its signature: proc(nr,a0,a1,a2,a3: uint64): uint64
+ * Return value comes back in RAX — exactly where SYSRETQ leaves it.
+ *
+ * Globals (defined in syscall_gate.nim, exported with C names):
+ *   syscallScratchRsp — uint64, saves user RSP
+ *   globalTss         — TSS struct; rsp0 is at byte offset 4
+ */
+.global syscall_entry
+syscall_entry:
+    /* 1. Save user RSP; switch to kernel stack */
+    mov  %rsp, syscallScratchRsp(%rip)
+    mov  globalTss+4(%rip), %rsp      /* load TSS.rsp0 (offset 4 in Tss) */
+
+    /* 2. Align stack to 16 bytes and make room */
+    and  $~15, %rsp
+    sub  $8,   %rsp
+
+    /* 3. Save what we need across the call:
+     *    - RCX (user RIP) and R11 (user RFLAGS) for SYSRETQ
+     *    - RAX (syscall number) until we move it to RDI
+     *    - R10 (arg3) before we clobber RCX with it */
+    push %rcx                          /* user RIP */
+    push %r11                          /* user RFLAGS */
+    push %r10                          /* arg3 (goes into RCX for call) */
+
+    /* 4. Set up args for syscallDispatch(nr, a0, a1, a2, a3):
+     *    System V AMD64: RDI=nr, RSI=a0, RDX=a1, RCX=a2, R8=a3
+     *    But our ABI is: RAX=nr, RDI=a0, RSI=a1, RDX=a2, R10=a3
+     *    Shift: RCX←R10(a3), then shuffle nr into RDI, a0 into RSI, etc. */
+    mov  %r10, %rcx                    /* a3: R10 → RCX (4th arg slot) */
+    mov  %rdx, %r8                     /* a2: RDX → R8  (5th arg slot) — wait, sig is (nr,a0,a1,a2,a3) = 5 args */
+    mov  %rsi, %rdx                    /* a1: RSI → RDX (3rd arg slot) */
+    mov  %rdi, %rsi                    /* a0: RDI → RSI (2nd arg slot) */
+    mov  %rax, %rdi                    /* nr: RAX → RDI (1st arg slot) */
+    /* rcx already = a3, r8 = a2 — but syscallDispatch takes 5 params:
+       (nr: uint64, a0,a1,a2,a3: uint64) → System V: rdi,rsi,rdx,rcx,r8 */
+
+    call syscallDispatch               /* RAX = return value */
+
+    /* 5. Restore and return to ring-3 */
+    pop  %r10                          /* restore (not needed, but balanced) */
+    pop  %r11                          /* user RFLAGS → R11 for SYSRETQ */
+    pop  %rcx                          /* user RIP   → RCX for SYSRETQ */
+
+    mov  syscallScratchRsp(%rip), %rsp /* restore user RSP */
+    sysretq                            /* → ring-3, RIP=RCX, RFLAGS=R11 */
+
 /* Mark the stack as non-executable (silences linker warning) */
 .section .note.GNU-stack, "", @progbits

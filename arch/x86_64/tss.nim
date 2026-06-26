@@ -31,6 +31,6 @@ type
     reserved3*:    uint16          ## offset 100
     ioBitmapBase*: uint16          ## offset 102 — set to sizeof(Tss) to disable
 
-var globalTss*: Tss
+var globalTss* {.exportc: "globalTss".}: Tss
   ## The single global TSS. rsp0 must be set to the kernel stack top
   ## before loading the TR register.

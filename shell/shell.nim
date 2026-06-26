@@ -18,8 +18,8 @@ import ../runtime/elf_loader
 import ../fs/fatfs
 import ../apps/ping/ping_embedded
 import ../apps/pingpong/pingpong_embedded
-import ../kernel/abi/nimix_abi as abiModule
 import ../kernel/abi/app_args
+import ../arch/x86_64/syscall_gate
 import ../mm/region_allocator
 import ../mm/sip_heap
 import ../kernel/process_table
@@ -221,28 +221,28 @@ proc cmdRun(filename: cstring) =
     kprint("WASM execution failed\n")
 
 proc buildAbiPatches(): array[18, AbiPatch] =
-  ## Build the ABI patch table from the live vtable fields.
-  ## Points directly at the kernel implementations — no bridge indirection.
-  proc p(name: cstring; f: pointer): AbiPatch = AbiPatch(name: name, fn: procAddr(f))
-  let v = abiModule.nimixAbi
-  result[0]  = p("nimixWrite",          v.write)
-  result[1]  = p("nimixExit",           v.exit)
-  result[2]  = p("nimixAllocRegion",    v.allocRegion)
-  result[3]  = p("nimixFreeRegion",     v.freeRegion)
-  result[4]  = p("nimixChanSend",       v.chanSend)
-  result[5]  = p("nimixChanRecv",       v.chanRecv)
-  result[6]  = p("nimixEventPublish",   v.eventPublish)
-  result[7]  = p("nimixEventSubscribe", v.eventSubscribe)
-  result[8]  = p("nimixEventPoll",      v.eventPoll)
-  result[9]  = p("nimixGetArgs",        v.getArgs)
-  result[10] = p("nimixProcList",       v.procList)
-  result[11] = p("nimixSchedStats",     v.schedStats)
-  result[12] = p("nimixProcKillPid",    v.procKillPid)
-  result[13] = p("nimixFsReadDir",      v.fsReadDir)
-  result[14] = p("nimixFsRead",         v.fsRead)
-  result[15] = p("nimixFsWrite",        v.fsWrite)
-  result[16] = p("nimixUptimeSecs",     v.uptimeSecs)
-  result[17] = p("nimixWallClock",      v.wallClock)
+  ## Build the ABI patch table — each entry maps a weak stub name to its
+  ## NimixSyscall ordinal. The ELF loader overwrites stubs with
+  ## `movabs rax, <nr>; syscall` so apps issue the right syscall number.
+  proc p(name: cstring; nr: uint64): AbiPatch = AbiPatch(name: name, nr: nr)
+  result[0]  = p("nimixWrite",          ord(scWrite).uint64)
+  result[1]  = p("nimixExit",           ord(scExit).uint64)
+  result[2]  = p("nimixAllocRegion",    ord(scAllocRegion).uint64)
+  result[3]  = p("nimixFreeRegion",     ord(scFreeRegion).uint64)
+  result[4]  = p("nimixChanSend",       ord(scChanSend).uint64)
+  result[5]  = p("nimixChanRecv",       ord(scChanRecv).uint64)
+  result[6]  = p("nimixEventPublish",   ord(scEventPublish).uint64)
+  result[7]  = p("nimixEventSubscribe", ord(scEventSubscribe).uint64)
+  result[8]  = p("nimixEventPoll",      ord(scEventPoll).uint64)
+  result[9]  = p("nimixGetArgs",        ord(scGetArgs).uint64)
+  result[10] = p("nimixProcList",       ord(scProcList).uint64)
+  result[11] = p("nimixSchedStats",     ord(scSchedStats).uint64)
+  result[12] = p("nimixProcKillPid",    ord(scProcKillPid).uint64)
+  result[13] = p("nimixFsReadDir",      ord(scFsReadDir).uint64)
+  result[14] = p("nimixFsRead",         ord(scFsRead).uint64)
+  result[15] = p("nimixFsWrite",        ord(scFsWrite).uint64)
+  result[16] = p("nimixUptimeSecs",     ord(scUptimeSecs).uint64)
+  result[17] = p("nimixWallClock",      ord(scWallClock).uint64)
 
 proc runPieElf(filename: cstring; dataBuf: ptr byte; nbytes: int; appArgs: cstring) =
   ## Load and run a PIE (ET_DYN) ELF. Allocates a region, patches ABI stubs,

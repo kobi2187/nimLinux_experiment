@@ -1,23 +1,105 @@
 # SPDX-License-Identifier: GPL-2.0
 ## Syscall Gate — ring 0↔3 transition
 ##
-## Configures the CPU so that `syscall` in ring 3 jumps to
-## `syscallEntry` in ring 0, saving/restoring state correctly.
+## Calling convention (NimixOS ABI):
+##   RAX = syscall number (NimixSyscall ordinal)
+##   RDI = arg0, RSI = arg1, RDX = arg2, R10 = arg3
+##   Return value in RAX.
 ##
-## MSR layout (AMD64 Vol 2, §6.1.1):
-##   STAR[63:48] = user CS base  (CPU adds 16 for user CS, 8 for user DS)
-##   STAR[47:32] = kernel CS     (CPU uses this for ring 0 on syscall)
-##   LSTAR       = 64-bit syscall entry RIP
-##   SFMASK      = RFLAGS bits to clear on syscall entry (at minimum: IF)
+## syscall_entry in boot_asm.S:
+##   saves user RSP → syscallScratchRsp global
+##   loads kernel RSP from TSS.rsp0
+##   calls syscallDispatch(nr, a0, a1, a2, a3)
+##   restores user RSP, sysretq
 ##
-## NOTE (Phase D concern): syscallEntry is currently a minimal stub that
-## returns immediately via sysretq. Full register save/restore and dispatch
-## table are deferred to Phase D when actual syscalls are implemented.
-## The swapgs + GS-based stack swap is also stubbed — a per-task kernel
-## stack from TSS.rsp0 will be used in Phase D.
+## MSR layout (AMD64 Vol 2 §6.1.1):
+##   STAR[47:32] = KernelCS  → CS on syscall entry
+##   STAR[63:48] = UserDS-8  → CS/SS on sysret
+##   LSTAR       = syscall_entry RIP
+##   SFMASK      = clears IF on entry (bit 9)
 
 import ./cpu_primitives
 import ./tss
+import ../../kernel/abi/nimix_abi as abiMod
+
+# Scratch slot: user RSP saved here on syscall entry, restored before sysretq.
+# Single-CPU only — safe as a plain global. Exported so boot_asm.S can access.
+var syscallScratchRsp* {.exportc: "syscallScratchRsp".}: uint64
+
+# ── Syscall number enum ───────────────────────────────────────────────────────
+# Ordinals MUST stay in sync with NimixAbiVTable field order and with
+# the numbers baked into app trampolines by the ELF loader.
+
+type NimixSyscall* = enum
+  scWrite          =  0
+  scExit           =  1
+  scAllocRegion    =  2
+  scFreeRegion     =  3
+  scChanSend       =  4
+  scChanRecv       =  5
+  scEventPublish   =  6
+  scEventSubscribe =  7
+  scEventPoll      =  8
+  scGetArgs        =  9
+  scProcList       = 10
+  scSchedStats     = 11
+  scProcKillPid    = 12
+  scFsReadDir      = 13
+  scFsRead         = 14
+  scFsWrite        = 15
+  scCapSend        = 16
+  scChanCall       = 17
+  scSleep          = 18
+  scYield          = 19
+  scSysInfo        = 20
+  scGrantRegion    = 21
+  scUptimeSecs     = 22
+  scWallClock      = 23
+
+const NimixSyscallCount* = 24   ## total number of syscalls
+
+# ── Dispatch table ────────────────────────────────────────────────────────────
+# Raw function pointers indexed by NimixSyscall ordinal.
+# Filled at boot by syscallTableInit(); called directly from syscall_entry asm.
+var syscallTable* {.exportc: "syscallTable".}: array[NimixSyscallCount, uint64]
+
+proc syscallTableInit*() =
+  ## Populate syscallTable from the live nimixAbi vtable.
+  ## Call after wireSharedAbi() has filled nimixAbi.
+  let v = abiMod.nimixAbi
+  syscallTable[ 0] = cast[uint64](v.write)
+  syscallTable[ 1] = cast[uint64](v.exit)
+  syscallTable[ 2] = cast[uint64](v.allocRegion)
+  syscallTable[ 3] = cast[uint64](v.freeRegion)
+  syscallTable[ 4] = cast[uint64](v.chanSend)
+  syscallTable[ 5] = cast[uint64](v.chanRecv)
+  syscallTable[ 6] = cast[uint64](v.eventPublish)
+  syscallTable[ 7] = cast[uint64](v.eventSubscribe)
+  syscallTable[ 8] = cast[uint64](v.eventPoll)
+  syscallTable[ 9] = cast[uint64](v.getArgs)
+  syscallTable[10] = cast[uint64](v.procList)
+  syscallTable[11] = cast[uint64](v.schedStats)
+  syscallTable[12] = cast[uint64](v.procKillPid)
+  syscallTable[13] = cast[uint64](v.fsReadDir)
+  syscallTable[14] = cast[uint64](v.fsRead)
+  syscallTable[15] = cast[uint64](v.fsWrite)
+  syscallTable[16] = cast[uint64](v.capSend)
+  syscallTable[17] = cast[uint64](v.chanCall)
+  syscallTable[18] = cast[uint64](v.sleep)
+  syscallTable[19] = cast[uint64](v.`yield`)
+  syscallTable[20] = cast[uint64](v.sysInfo)
+  syscallTable[21] = cast[uint64](v.grantRegion)
+  syscallTable[22] = cast[uint64](v.uptimeSecs)
+  syscallTable[23] = cast[uint64](v.wallClock)
+
+proc syscallDispatch*(nr, a0, a1, a2, a3: uint64): uint64 {.exportc: "syscallDispatch", cdecl.} =
+  ## Called from syscall_entry asm stub. Dispatches by nr through syscallTable.
+  ## Returns result in RAX (Nim cdecl convention on x86-64).
+  if nr >= NimixSyscallCount: return high(uint64)
+  let fn = syscallTable[nr]
+  if fn == 0: return high(uint64)
+  type Fn5 = proc(a0, a1, a2, a3, a4: uint64): uint64 {.cdecl.}
+  cast[Fn5](fn)(a0, a1, a2, a3, 0)
 
 # ─── GDT table (7 entries, patched at runtime for TSS descriptor) ───────────
 #
@@ -46,16 +128,8 @@ var gdtTable* {.exportc.}: array[7, uint64] = [
 # Kernel stack for syscall entry (1 page = 4096 bytes)
 var kernelSyscallStack: array[4096, byte]
 
-proc syscallEntry() {.exportc, cdecl, asmNoStackFrame.} =
-  ## Minimal syscall entry stub — Phase D will add full save/restore.
-  ## On entry: RCX=saved RIP, R11=saved RFLAGS.
-  ## We sysretq immediately; no actual syscall dispatch yet.
-  {.emit: """
-    __asm__ volatile(
-      "sysretq\n\t"
-      ::: "memory"
-    );
-  """.}
+# syscall_entry is implemented in boot_asm.S; imported here for LSTAR wiring.
+proc syscall_entry() {.importc: "syscall_entry", cdecl.}
 
 proc installTssDescriptor() =
   ## Write the 16-byte TSS descriptor into GDT slots [5] and [6].
@@ -115,9 +189,12 @@ proc syscallGateInit*() =
   #    STAR[63:48] = UserDS-8  → on sysret:  CS=base+16 (=UserCS), SS=base+8 (=UserDS)
   let star = (uint64(UserDS - 8) shl 48) or (uint64(KernelCS) shl 32)
   writeMsr(MSR_STAR,   star)
-  writeMsr(MSR_LSTAR,  cast[uint64](syscallEntry))
+  writeMsr(MSR_LSTAR,  cast[uint64](syscall_entry))
   writeMsr(MSR_SFMASK, 0x200'u64)  # clear IF on syscall entry
 
   # 6. Enable syscall/sysret in EFER
   let efer = readMsr(MSR_EFER)
   writeMsr(MSR_EFER, efer or EFER_SCE)
+
+  # 7. Populate the dispatch table from the live ABI vtable
+  syscallTableInit()

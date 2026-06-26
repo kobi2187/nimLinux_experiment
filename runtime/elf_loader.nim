@@ -139,9 +139,11 @@ proc cstrEq(a: ptr UncheckedArray[byte]; b: cstring): bool =
 
 type
   AbiPatch* = object
-    ## One ABI symbol to patch: the weak stub gets overwritten with jmp <fn>.
+    ## One ABI symbol to patch: the weak stub gets overwritten with
+    ## `movabs rax, <nr>; syscall` so the app issues a syscall with
+    ## the syscall number baked in.
     name*: cstring
-    fn*:   uint64   ## Absolute kernel function address
+    nr*:   uint64   ## NimixSyscall ordinal
 
 proc elfLoadPie*(data: ptr byte; size: int;
                  regionBase: uint64;
@@ -257,22 +259,24 @@ proc elfLoadPie*(data: ptr byte; size: int;
         # Check if this symbol matches any requested ABI patch
         for p in 0 ..< patchCount:
           if cstrEq(namePtr, patches[p].name):
-            # Write: movabs rax, <fn>   (10 bytes: 48 B8 <8-byte-addr>)
-            #        jmp rax            (2 bytes:  FF E0)
+            # Write: movabs rax, <nr>   (10 bytes: 48 B8 <8-byte-imm>)
+            #        syscall            (2 bytes:  0F 05)
+            # The syscall number is baked in; the kernel's syscall_entry
+            # dispatches through syscallTable[nr] to the right ABI proc.
             let stubAddr = bias + sym.st_value
             let stub = cast[ptr UncheckedArray[byte]](stubAddr)
             stub[0] = 0x48; stub[1] = 0xB8  # REX.W mov rax, imm64
-            let fn = patches[p].fn
-            stub[2] = uint8(fn and 0xFF)
-            stub[3] = uint8((fn shr 8)  and 0xFF)
-            stub[4] = uint8((fn shr 16) and 0xFF)
-            stub[5] = uint8((fn shr 24) and 0xFF)
-            stub[6] = uint8((fn shr 32) and 0xFF)
-            stub[7] = uint8((fn shr 40) and 0xFF)
-            stub[8] = uint8((fn shr 48) and 0xFF)
-            stub[9] = uint8((fn shr 56) and 0xFF)
-            stub[10] = 0xFF; stub[11] = 0xE0  # jmp rax
-            klog(llInfo, "ELF PIE: patched ABI stub")
+            let nr = patches[p].nr
+            stub[2] = uint8(nr and 0xFF)
+            stub[3] = uint8((nr shr 8)  and 0xFF)
+            stub[4] = uint8((nr shr 16) and 0xFF)
+            stub[5] = uint8((nr shr 24) and 0xFF)
+            stub[6] = uint8((nr shr 32) and 0xFF)
+            stub[7] = uint8((nr shr 40) and 0xFF)
+            stub[8] = uint8((nr shr 48) and 0xFF)
+            stub[9] = uint8((nr shr 56) and 0xFF)
+            stub[10] = 0x0F; stub[11] = 0x05  # syscall
+            klog(llInfo, "ELF PIE: patched ABI stub → syscall")
             break
 
         # Also capture appMain address
