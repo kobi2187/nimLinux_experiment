@@ -394,3 +394,33 @@ Later: when virtio-gpu virgl (3D) lands, raylib switches to OpenGL ES 2 via virg
 - UNCONFIRMED: Exact boot sequence for disk-loaded servers — does the kernel wait for disk mount before spawning servers, or retry asynchronously?
 - UNCONFIRMED: Does the dispatcher use IST (Interrupt Stack Table) entries for its realtime class, or is PIT-driven preemption sufficient?
 - UNCONFIRMED: FlatBuffers schema ownership — defined per-server or in a shared `schemas/` directory?
+
+## SMP — Single-CPU constraint (2026-06-26)
+
+**Current state:** Single CPU only. Two places encode this assumption:
+- `syscallScratchRsp` (`arch/x86_64/syscall_gate.nim`) — plain global, saves user RSP on syscall entry
+- `globalTss` (`arch/x86_64/tss.nim`) — single TSS, rsp0 updated on every context switch
+
+**When SMP arrives — what to do:**
+
+1. Define a `CpuLocal` struct in `arch/x86_64/cpu_local.nim`:
+   ```nim
+   type CpuLocal* {.packed.} = object
+     selfPtr*:     pointer   # points at itself (used by swapgs)
+     kernelRsp*:   uint64    # kernel stack top for this CPU (= TSS.rsp0)
+     scratchRsp*:  uint64    # replaces syscallScratchRsp
+     cpuId*:       uint32
+   ```
+2. Allocate one `CpuLocal` per CPU at AP boot; set `MSR_GS_BASE` to its address on each CPU.
+3. In `syscall_entry` (boot_asm.S): replace `mov %rsp, syscallScratchRsp(%rip)` / `mov globalTss+4(%rip), %rsp` with `swapgs` + GS-relative loads:
+   ```asm
+   swapgs
+   mov  %rsp, %gs:16     # save user RSP into CpuLocal.scratchRsp
+   mov  %gs:8,  %rsp     # load CpuLocal.kernelRsp
+   swapgs                 # restore user GS before call
+   ```
+4. Replace `globalTss` array/struct with one TSS per CPU, embedded in or adjacent to `CpuLocal`. Scheduler updates `cpuLocal[cpuId].tss.rsp0` on each context switch.
+5. `syscallTable` stays global — it is read-only after `syscallTableInit()` and safe to share across CPUs.
+6. AP bringup sequence: BSP sends INIT+SIPI, AP runs a startup stub that sets GS base, loads its per-CPU GDT+TSS, enables interrupts, then enters the scheduler idle loop.
+
+**Resolving signal:** When APIC + SIPI AP bringup is started (adds `arch/x86_64/apic.nim` + `smp_boot.S`).

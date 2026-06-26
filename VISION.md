@@ -44,3 +44,4 @@ OS with game-engine-quality graphics and a dispatcher-based concurrency engine.
 | 2 | Does dispatcher use IST entries for its Realtime class, or is PIT-driven preemption sufficient? | When dispatcher server is running under load |
 | 3 | FlatBuffers schema ownership — defined per-server or in shared `schemas/` directory? | When we write the first FlatBuffers schema (Milestone 2) |
 | 4 | OS threads for drivers (rump kernel pattern) — how does the rumpuser hypercall layer integrate with NimixOS coroutines? | After `irqSubscribe(vec, cap)` + userspace DMA mapping exist |
+| 5 | SMP — when we add AP boot, `syscallScratchRsp` and `globalTss` must become per-CPU (via GS base MSR + `CpuLocal` struct + `swapgs`); `syscallTable` stays global (read-only). What does the `CpuLocal` struct look like and where does AP init live? | When AP bringup (APIC + SIPI) is started |
