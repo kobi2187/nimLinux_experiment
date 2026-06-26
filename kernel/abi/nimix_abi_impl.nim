@@ -11,6 +11,7 @@ import ../../ipc/server_chan
 import ../../kernel/event_server
 import ../../kernel/traits/event
 import ../../kernel/process_table
+import ../../mm/region_allocator
 import ../../drivers/pit
 import ../../drivers/rtc
 import ../../kernel/cap/capability as cap
@@ -22,6 +23,27 @@ export nimix_abi_proc
 export nimix_abi_fs
 export nimix_abi_sysinfo
 
+# ── Scheduler helpers (needed before I/O procs that call them) ────────────────
+
+proc currentSlot(): int {.inline.} = procTable.current
+
+proc yieldToNext() =
+  ## Hand the CPU to the next ready task in the scheduler ring.
+  let next = procPickNext(procTable)
+  if next >= 0 and next != procTable.current:
+    let prev = procTable.current
+    procTable.tasks[prev].state = ptsReady
+    ringInsertTail(procTable, int16(prev), int(procTable.tasks[prev].class))
+    procTable.current = next
+    procTable.tasks[next].state = ptsRunning
+    inc procTable.tasks[next].switches
+    inc procTable.stats.totalSwitches
+
+proc freeCurrentRegion() =
+  ## Release the region slot owned by the current task (if any).
+  let regionSlot = procTable.tasks[currentSlot()].regionSlot
+  if regionSlot >= 0: regionFree(RegionHandle(regionSlot))
+
 # ── I/O ───────────────────────────────────────────────────────────────────────
 
 proc abiWrite*(buf: pointer; len: int) {.nimcall.} =
@@ -32,7 +54,10 @@ proc abiWrite*(buf: pointer; len: int) {.nimcall.} =
 
 proc abiExit*(code: int) {.nimcall, noreturn.} =
   klogInt(llInfo, "app exit code: ", int64(code))
-  kpanic("app exited")
+  freeCurrentRegion()
+  discard procKill(currentSlot())
+  yieldToNext()
+  while true: discard  # unreachable; satisfies noreturn
 
 # ── IPC: named channel ────────────────────────────────────────────────────────
 
@@ -96,16 +121,7 @@ proc abiEventPoll*(token: uint32; buf: pointer; bufLen: int): int {.nimcall.} =
 # ── Scheduler ─────────────────────────────────────────────────────────────────
 
 proc abiYield*() {.nimcall.} =
-  ## Cooperative yield: update scheduler bookkeeping, let next ready task run.
-  let next = procPickNext(procTable)
-  if next >= 0 and next != procTable.current:
-    let prev = procTable.current
-    procTable.tasks[prev].state = ptsReady
-    ringInsertTail(procTable, int16(prev), int(procTable.tasks[prev].class))
-    procTable.current = next
-    procTable.tasks[next].state = ptsRunning
-    inc procTable.tasks[next].switches
-    inc procTable.stats.totalSwitches
+  yieldToNext()
 
 # ── Timing ────────────────────────────────────────────────────────────────────
 

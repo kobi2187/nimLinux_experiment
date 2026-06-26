@@ -11,6 +11,7 @@
 import ../core/log
 import ../drivers/pit    # pitTicks()
 import cap/capability
+import ../arch/x86_64/tss
 
 when defined(testing):
   var mockTicks*: uint64
@@ -214,6 +215,64 @@ proc procSpawn*(name: cstring; entry: TaskProc;
       klogInt(llInfo, "procSpawn: pid=", int64(t.pid))
       return i
   klog(llError, "procSpawn: MaxTasks reached")
+  -1
+
+proc procSpawnRing3*(name: cstring; appMain: uint64; userStackTop: uint64;
+                     regionSlot: int32): int =
+  ## Spawn a ring-3 app task. Builds an iretq frame on the kernel stack so
+  ## the first time the scheduler switches to this task, isr_common_stub's
+  ## iretq drops execution into ring 3 at appMain with the user stack.
+  ##
+  ## Frame layout on kstack (low RSP → high):
+  ##   [0..119]  15 GPRs × 8 bytes  (zeroed)
+  ##   [120..127] vector_num         (0)
+  ##   [128..135] error_code         (0)
+  ##   [136..143] RIP  = appMain
+  ##   [144..151] CS   = UserCS
+  ##   [152..159] RFLAGS = 0x202 (IF=1, reserved bit 1)
+  ##   [160..167] RSP  = userStackTop
+  ##   [168..175] SS   = UserDS
+  ## Total: 176 bytes
+  for i in 0 ..< MaxTasks:
+    if not procTable.tasks[i].used:
+      var t: Task
+      t.used       = true
+      t.pid        = procTable.nextPid
+      t.setName(name)
+      t.class      = tcApp
+      t.priority   = 128
+      t.state      = ptsReady
+      t.entry      = nil
+      t.regionSlot = regionSlot
+      t.birthTick  = pitTicks()
+      t.cpuTicks   = 0
+      t.switches   = 0
+      t.classNext  = -1
+      t.classPrev  = -1
+      t.ipcCap     = capGrant(procTable.nextPid, capIpc)
+      t.wakeAt     = 0
+      procTable.tasks[i] = t
+
+      let kstackTop = (cast[uint64](addr procTable.tasks[i].kstack[4095])) and not 15'u64
+      let rsp = kstackTop - 176
+      let f = cast[ptr UncheckedArray[uint64]](rsp)
+      # 15 GPRs (indices 0..14) — all zero
+      for j in 0 .. 14: f[j] = 0
+      f[15] = 0                    # vector_num
+      f[16] = 0                    # error_code
+      f[17] = appMain              # RIP
+      f[18] = uint64(UserCS)       # CS
+      f[19] = 0x202'u64            # RFLAGS: IF=1, bit1 always set
+      f[20] = userStackTop         # RSP (user stack)
+      f[21] = uint64(UserDS)       # SS
+
+      procTable.tasks[i].rsp = rsp
+      inc procTable.nextPid
+      inc procTable.taskCount
+      ringInsertTail(procTable, int16(i), int(tcApp))
+      klogInt(llInfo, "procSpawnRing3: pid=", int64(t.pid))
+      return i
+  klog(llError, "procSpawnRing3: MaxTasks reached")
   -1
 
 # ── Kill / reclaim ────────────────────────────────────────────────────────────

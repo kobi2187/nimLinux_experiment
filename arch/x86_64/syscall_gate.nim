@@ -198,3 +198,4 @@ proc syscallGateInit*() =
 
   # 7. Populate the dispatch table from the live ABI vtable
   syscallTableInit()
+

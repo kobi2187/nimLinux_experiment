@@ -267,15 +267,15 @@ proc runPieElf(filename: cstring; dataBuf: ptr byte; nbytes: int; appArgs: cstri
   if loaded.loadEnd > 0:
     sipHeapSetBump(int(slot), loaded.loadEnd)
 
-  kprint("Calling appMain...\n")
-  let procSlot = procSpawn(filename, nil, tcApp, 128, int32(slot))
+  # User stack: top 64 KB of the 4 MB region (above ELF + heap).
+  let userStackTop = base + RegionSize - 16
   setAppArgs(int(slot), appArgs)
-  let prevCurrent = procTable.current
-  if procSlot >= 0: procTable.current = int16(procSlot)
-  cast[proc() {.nimcall.}](loaded.appMain)()
-  procTable.current = prevCurrent
-  if procSlot >= 0: discard procKill(procSlot)
-  regionFree(slot)
+  let procSlot = procSpawnRing3(filename, loaded.appMain, userStackTop, int32(slot))
+  if procSlot < 0:
+    kprint("procSpawnRing3 failed\n"); regionFree(slot); return
+  kprint("App spawned in ring 3\n")
+  # Shell returns immediately; app runs in parallel via the preemptive scheduler.
+  # Region and task slot are freed by abiExit when the app calls nimixExit().
 
 proc runExecElf(dataBuf: ptr byte; nbytes: int) =
   ## Load and run a non-PIE (ET_EXEC) ELF at its fixed vaddr.
