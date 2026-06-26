@@ -296,6 +296,71 @@ def run_tests(harness: QemuHarness, tests: list) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Structured test protocol parser
+# ---------------------------------------------------------------------------
+
+def run_structured_tests(harness: QemuHarness, timeout: float = 60) -> bool:
+    """
+    Wait for TEST PASS:/FAIL:/DONE: lines emitted by the in-kernel test runner.
+    Returns True if all suites report 100% pass rate.
+
+    Expected serial lines (from tests/test_protocol.nim):
+        TEST PASS: <name>
+        TEST FAIL: <name> reason=<reason>
+        TEST DONE: <passed>/<total> suite=<suite>
+    """
+    import time
+
+    print(f"\n{'='*60}")
+    print("NimixOS Structured Test Protocol")
+    print(f"{'='*60}")
+
+    deadline = time.monotonic() + timeout
+    passes, fails, suites = [], [], []
+    all_passed = True
+
+    while time.monotonic() < deadline:
+        with harness._buf_lock:
+            buf = harness._buf
+
+        for line in buf.splitlines():
+            line = line.strip()
+            if line.startswith("TEST PASS: "):
+                name = line[len("TEST PASS: "):]
+                if name not in passes:
+                    passes.append(name)
+                    print(f"  [PASS] {name}")
+            elif line.startswith("TEST FAIL: "):
+                rest = line[len("TEST FAIL: "):]
+                if rest not in fails:
+                    fails.append(rest)
+                    print(f"  [FAIL] {rest}")
+                    all_passed = False
+            elif line.startswith("TEST DONE: "):
+                rest = line[len("TEST DONE: "):]
+                if rest not in suites:
+                    suites.append(rest)
+                    print(f"  [DONE] {rest}")
+                    # Check if this is the last suite (suite=user_tests signals end)
+                    if "suite=user_tests" in rest:
+                        break
+
+        if suites and "suite=user_tests" in suites[-1]:
+            break
+
+        time.sleep(0.1)
+
+    print(f"{'='*60}")
+    print(f"Structured results: {len(passes)} passed, {len(fails)} failed")
+    if fails:
+        print("Failed:")
+        for f in fails:
+            print(f"  - {f}")
+    print(f"{'='*60}\n")
+    return all_passed and len(suites) > 0
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -315,8 +380,10 @@ def main():
                         help="QEMU memory in MB (default: 256)")
     parser.add_argument("--timeout", type=int, default=30,
                         help="Boot timeout in seconds (default: 30)")
-    parser.add_argument("--list",    action="store_true",
+    parser.add_argument("--list",       action="store_true",
                         help="Print all test names without running them")
+    parser.add_argument("--structured", action="store_true",
+                        help="Parse TEST PASS/FAIL/DONE lines from in-kernel test runner")
     args = parser.parse_args()
 
     tests = build_tests(disk=args.disk)
@@ -363,7 +430,10 @@ def main():
 
     print("Boot prompt received.")
 
-    passed = run_tests(harness, tests)
+    if args.structured:
+        passed = run_structured_tests(harness, timeout=args.timeout)
+    else:
+        passed = run_tests(harness, tests)
     harness.cleanup()
     sys.exit(0 if passed else 1)
 
