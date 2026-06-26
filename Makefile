@@ -276,6 +276,26 @@ test-qemu: nim-apps disk-add-apps $(ISO_OUT)
 	python3 tests/qemu_harness.py --iso $(ISO_OUT) --bios $(OVMF) \
 		$(if $(wildcard $(DISK)),--disk $(DISK),)
 
+# ── Structured in-kernel test suite ───────────────────────────────
+# Boots a testMode kernel, parses TEST PASS/FAIL/DONE from serial.
+TESTMODE_ISO = build/nimixos-test.iso
+
+$(TESTMODE_ISO): build/kernel-test
+	@mkdir -p iso/boot/grub
+	cp build/kernel-test iso/boot/kernel.elf
+	echo 'set timeout=0' > iso/boot/grub/grub.cfg
+	echo 'set default=0' >> iso/boot/grub/grub.cfg
+	echo 'menuentry "NimixOS testMode" { multiboot2 /boot/kernel.elf }' >> iso/boot/grub/grub.cfg
+	grub-mkrescue -o $(TESTMODE_ISO) iso/ 2>/dev/null
+	rm -rf iso
+
+build/kernel-test:
+	$(NIM) $(NIM_FLAGS) -d:kernelModel=monolithic -d:testMode $(KERNEL_SRC)
+	mv build/main $@
+
+test-structured: $(TESTMODE_ISO)
+	python3 tests/qemu_harness.py --iso $(TESTMODE_ISO) --bios $(OVMF) --structured --timeout 30
+
 # ── Clean ─────────────────────────────────────────────────────────
 clean:
 	rm -rf build/main build/kernel-* $(ISO_OUT) $(ISO_ALL_OUT) nimcache/ build/ iso/

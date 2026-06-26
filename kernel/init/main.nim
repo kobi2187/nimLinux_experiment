@@ -40,6 +40,9 @@ import ../../drivers/pci/pci_device
 import ../../drivers/virtio/virtio_net
 import ../../drivers/rtc
 
+when defined(testMode):
+  import ../../tests/kernel_tests/main as kernelTests
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Linker Script Symbols
 # ═══════════════════════════════════════════════════════════════════════════
@@ -366,6 +369,12 @@ proc runKernel(bootInfo: ptr BootInfo) =
 
   # Mount filesystem (non-fatal — disk may not be present)
   discard fsMount()
+
+  when defined(testMode):
+    klog(llInfo, "testMode: running kernel tests")
+    kernelTests.kernelTestMain()
+    klog(llInfo, "testMode: kernel tests complete — halting")
+    while true: hlt()
 
   # Hand off to interactive shell — never returns.
   runShell(k.physMgr)
