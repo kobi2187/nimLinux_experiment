@@ -23,17 +23,39 @@ frozen `VirtioTransport` vtable (`drivers/virtio/virtio_transport.nim`, currentl
 `stubTransport`). The MMIO-only blk driver can't talk to QEMU's virtio-blk-pci.
 Sub-project's first task: SURVEY (V1 in its BACKLOG).
 
+## Session 5 commits (all green at each step)
+a81870f gitignore + untrack build artifacts
+20b52b8 prior-session drivers + fs_server boot-wiring
+a822543 harness fix + pid_monotonic + virtio-pci spawn
+05d9544 Task 2 — ELF GLOB_DAT/JUMP_SLOT/R_X86_64_64 + PT_INTERP strip
+22002c4 Task 3 — nimixMapAnon/FreeAnon ABI (host-verified)
+0842b7b virtio-pci V1 survey + V2 structs (+ TW#24 closed)
+fa25602 virtio-pci V3–V8 transport internals
+
 ## Where to resume (parent)
 
-- **Task 1 boot-from-disk is BLOCKED** on the virtio-pci sub-project (no disk mount
-  until the PCI transport lands). Don't commit Task 1's done-check as passing yet.
-- **Plan Tasks 2 + 3 are unblocked** and disk-independent:
-  - Task 2 — ELF GLOB_DAT/JUMP_SLOT/R_X86_64_64 + strip PT_INTERP (`runtime/elf_loader.nim`)
-  - Task 3 — `nimixMapAnon`/`nimixFreeAnon` ABI (syscalls 24/25, count→26)
-- **Uncommitted:** working tree has Task-1 code + this session's fixes + unrelated
-  churn (shell.nim, fatfs.nim, elf_loader.nim). Commit the harness/test fixes and
-  spawn paperwork as one coherent commit before starting Task 2; keep Task-1 boot
-  code out of a "done" commit until virtio-pci unblocks it.
+The single highest-leverage thread is **finishing virtio-pci (V9–V10)** — it unblocks
+BOTH boot-from-disk (Task 1 / Milestone 1) AND graphics (virtio-gpu is ~complete but
+has the same MMIO-only blocker). V1–V8 done + committed; transport internals are
+host-tested in `drivers/virtio/virtio_pci.nim`.
+
+**V9 (next):** wire the transport into `virtio_blk.nim` behind the `VirtioTransport`
+vtable (`drivers/virtio/virtio_transport.nim`):
+  - build kernel adapters: a `CfgReader` over `pciConfigReadU8(bus,slot,fn,_)` and a
+    `BarBaseFn` over `pciBarDecode(...).base` for the found device.
+  - `virtioBlkInit` tries PCI (pciVirtioFind → walkVirtioCaps → capAddr for COMMON/
+    NOTIFY/ISR/DEVICE → commonNegotiate → per-queue commonQueueSetup) then MMIO.
+  - ensure the mapped CommonCfg/notify regions are uncached (volatility) — see
+    subprojects/virtio-pci/STATE.md "Note on volatility".
+**V10:** `make test-structured` (virtio-blk disk attached) shows `fs_server: starting`.
+
+**Other open threads:**
+- TW#65 — ring-3 user_tests serial truncation in testMode (Task 3 ring-3 unverified).
+- Task 1 boot-wiring code is in `kernel/init/main.nim` (committed) but its done-check
+  stays BLOCKED until V10.
+
+## Prior session content below
+---
 
 ## Prior session content below
 ---

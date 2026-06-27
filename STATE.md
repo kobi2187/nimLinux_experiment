@@ -29,11 +29,24 @@ virtio-pci sub-project (disk can't mount until the PCI transport lands).
 build, and confirmed live — testMode serial shows `PT_INTERP stripped` +
 `applied relocations, count=47` loading user_tests.elf.
 
-**Task 3 (mapAnon/freeAnon):** code complete, HOST-verified (syscall table 26/26,
-all host tests pass, 3 models build). **Ring-3 QEMU verification OPEN (TW#65):**
+**Task 3 (mapAnon/freeAnon):** DONE + committed (22002c4), HOST-verified (syscall
+table 26/26, all host tests, 3 models). **Ring-3 QEMU verification OPEN (TW#65):**
 testMode serial truncates mid-ABI-patch right after `kernel_tests 24/24 DONE`; the
-user_tests ring-3 phase (`abi_map_anon`) is never observed reaching appMain. Unknown
-whether real hang vs serial-flush/timeout artifact. Not committed yet pending this.
+user_tests ring-3 phase (`abi_map_anon`) not observed reaching appMain. Unknown
+whether real hang vs serial-flush/timeout artifact.
+
+**TW#24 (osenv stub):** CLOSED as obsolete — survey showed msgpack4nim already
+compiles + round-trips under --os:standalone, no getenv stub needed (DECISIONS).
+
+**virtio-pci sub-project (the keystone — gates BOTH boot-from-disk AND graphics,
+since virtio-blk and virtio-gpu share the MMIO-vs-PCI transport blocker):**
+- V1 survey + V2 structs committed (0842b7b); V3–V8 internals committed (fa25602).
+- DONE (host-tested, 11 assertions): cap-walk, capAddr, commonNegotiate,
+  commonQueueSetup, notifyAddr, deviceConfigRead32 — all in `drivers/virtio/virtio_pci.nim`.
+- REMAINING: V9 (wire transport into virtio_blk via VirtioTransport vtable;
+  build the pciConfigReadU8/pciBarDecode adapters; verify MMIO region mapped
+  uncached for volatility) + V10 (QEMU boot proof). See `subprojects/virtio-pci/STATE.md`.
+- After V10: migrate virtio-gpu onto the vtable → display lights up.
 
 ## Milestone status
 
