@@ -20,3 +20,8 @@ void  nimixWrite(const void* buf, int len);
 
 /* Terminate the calling app. Never returns. */
 __attribute__((noreturn)) void nimixExit(int code);
+
+/* Allocate anonymous memory from the app's region heap. Returns NULL on failure. */
+void* nimixMapAnon(int size);
+/* Release memory (no-op for bump allocator; region freed on nimixExit). */
+void  nimixFreeAnon(void* p, int size);

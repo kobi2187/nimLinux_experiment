@@ -220,7 +220,7 @@ proc cmdRun(filename: cstring) =
   if r != wasmOk:
     kprint("WASM execution failed\n")
 
-proc buildAbiPatches(): array[18, AbiPatch] =
+proc buildAbiPatches(): array[20, AbiPatch] =
   ## Build the ABI patch table — each entry maps a weak stub name to its
   ## NimixSyscall ordinal. The ELF loader overwrites stubs with
   ## `movabs rax, <nr>; syscall` so apps issue the right syscall number.
@@ -243,6 +243,8 @@ proc buildAbiPatches(): array[18, AbiPatch] =
   result[15] = p("nimixFsWrite",        ord(scFsWrite).uint64)
   result[16] = p("nimixUptimeSecs",     ord(scUptimeSecs).uint64)
   result[17] = p("nimixWallClock",      ord(scWallClock).uint64)
+  result[18] = p("nimixMapAnon",        ord(scMapAnon).uint64)
+  result[19] = p("nimixFreeAnon",       ord(scFreeAnon).uint64)
 
 proc runPieElf(filename: cstring; dataBuf: ptr byte; nbytes: int; appArgs: cstring) =
   ## Load and run a PIE (ET_DYN) ELF. Allocates a region, patches ABI stubs,

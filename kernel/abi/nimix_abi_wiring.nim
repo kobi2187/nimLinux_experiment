@@ -33,3 +33,5 @@ proc wireSharedAbi*(av: var NimixAbiVTable) =
   av.grantRegion    = abiGrantRegion
   av.uptimeSecs     = abiUptimeSecs
   av.wallClock      = abiWallClock
+  av.mapAnon        = abiMapAnon
+  av.freeAnon       = abiFreeAnon

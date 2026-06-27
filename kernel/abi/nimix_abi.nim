@@ -87,6 +87,12 @@ type
     wallClock*:   proc(buf: pointer; len: int): int {.nimcall.}
       ## Write "YYYY-MM-DD HH:MM:SS\n" into buf. Returns bytes written, -1 if buf too small.
 
+    # ── mmap-style heap growth ────────────────────────────────────────────────
+    mapAnon*:     proc(size: int): pointer {.nimcall.}
+      ## Allocate `size` bytes from the app's region heap. nil on failure.
+    freeAnon*:    proc(p: pointer; size: int) {.nimcall.}
+      ## Release memory (no-op for bump allocator; region freed on exit).
+
 var nimixAbi*: NimixAbiVTable
   ## Global ABI vtable. Set once at boot by the chosen kernel model init.
   ## Apps never call this directly — the ELF loader patches weak stubs with

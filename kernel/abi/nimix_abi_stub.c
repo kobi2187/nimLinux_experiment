@@ -73,3 +73,5 @@ __attribute__((weak)) int nimixFsRead(const char* path, void* buf, int len) { (v
 __attribute__((weak)) int nimixFsWrite(const char* path, const void* buf, int len) { (void)path; (void)buf; (void)len; return -1; }
 __attribute__((weak)) unsigned long long nimixUptimeSecs(void) { return 0; }
 __attribute__((weak)) int nimixWallClock(void* buf, int len) { (void)buf; (void)len; return -1; }
+__attribute__((weak)) void* nimixMapAnon(int size) { (void)size; return (void*)0; }
+__attribute__((weak)) void  nimixFreeAnon(void* p, int size) { (void)p; (void)size; }

@@ -33,6 +33,8 @@ proc stubSysInfo(buf: pointer; len: int): int {.nimcall.} = 0
 proc stubGrantRegion(slot: int; right: uint32): uint64 {.nimcall.} = 0
 proc stubUptimeSecs(): uint64 {.nimcall.} = 0
 proc stubWallClock(buf: pointer; len: int): int {.nimcall.} = 0
+proc stubMapAnon(size: int): pointer {.nimcall.} = nil
+proc stubFreeAnon(p: pointer; size: int) {.nimcall.} = discard
 
 proc fillStubVtable() =
   var v: abimod.NimixAbiVTable
@@ -60,6 +62,8 @@ proc fillStubVtable() =
   v.grantRegion    = stubGrantRegion
   v.uptimeSecs     = stubUptimeSecs
   v.wallClock      = stubWallClock
+  v.mapAnon        = stubMapAnon
+  v.freeAnon       = stubFreeAnon
   abimod.nimixAbi = v
 
 proc testEnumOrdinals() =
@@ -87,7 +91,9 @@ proc testEnumOrdinals() =
   assert ord(scGrantRegion)    == 21
   assert ord(scUptimeSecs)     == 22
   assert ord(scWallClock)      == 23
-  assert NimixSyscallCount == 24
+  assert ord(scMapAnon)        == 24
+  assert ord(scFreeAnon)       == 25
+  assert NimixSyscallCount == 26
   echo "PASS: syscall enum ordinals"
 
 proc testTableFilled() =
@@ -104,6 +110,8 @@ proc testTableMatchesVtable() =
   assert syscallTable[ord(scExit)]        == cast[uint64](stubExit)
   assert syscallTable[ord(scUptimeSecs)]  == cast[uint64](stubUptimeSecs)
   assert syscallTable[ord(scWallClock)]   == cast[uint64](stubWallClock)
+  assert syscallTable[ord(scMapAnon)]     == cast[uint64](stubMapAnon)
+  assert syscallTable[ord(scFreeAnon)]    == cast[uint64](stubFreeAnon)
   echo "PASS: syscallTable pointers match vtable fields"
 
 when isMainModule:

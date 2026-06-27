@@ -11,6 +11,7 @@ import ../../ipc/server_chan
 import ../../kernel/event_server
 import ../../kernel/traits/event
 import ../../kernel/process_table
+import ../../mm/sip_heap
 import ../../mm/region_allocator
 import ../../drivers/pit
 import ../../drivers/rtc
@@ -172,3 +173,17 @@ proc abiWallClock*(buf: pointer; len: int): int {.nimcall.} =
   d2(p, 17, dt.second.uint16)
   p[19] = '\n'
   20
+
+# ── mmap-style heap growth ────────────────────────────────────────────────────
+
+proc abiMapAnon*(size: int): pointer {.nimcall.} =
+  ## Allocate `size` bytes from the calling app's SIP bump heap.
+  ## Returns nil if size <= 0 or the task has no region.
+  assert size > 0, "mapAnon: size must be positive"
+  let slot = int(procTable.tasks[procTable.current].regionSlot)
+  if slot < 0: return nil
+  sipAlloc(slot, size)
+
+proc abiFreeAnon*(p: pointer; size: int) {.nimcall.} =
+  ## No-op: bump allocator; the region is freed whole on nimixExit.
+  discard

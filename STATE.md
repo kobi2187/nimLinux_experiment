@@ -24,8 +24,16 @@ a chain of issues, fixed in order:
 
 **Task 1 status:** code correct, but boot-from-disk done-check is BLOCKED on the
 virtio-pci sub-project (disk can't mount until the PCI transport lands).
-**Tasks 2 (ELF relocs) + 3 (mapAnon) of the plan:** not started — both are
-independent of the disk transport and can proceed.
+
+**Task 2 (ELF relocs):** DONE + committed (05d9544). Verified: 7 host tests, 3 models
+build, and confirmed live — testMode serial shows `PT_INTERP stripped` +
+`applied relocations, count=47` loading user_tests.elf.
+
+**Task 3 (mapAnon/freeAnon):** code complete, HOST-verified (syscall table 26/26,
+all host tests pass, 3 models build). **Ring-3 QEMU verification OPEN (TW#65):**
+testMode serial truncates mid-ABI-patch right after `kernel_tests 24/24 DONE`; the
+user_tests ring-3 phase (`abi_map_anon`) is never observed reaching appMain. Unknown
+whether real hang vs serial-flush/timeout artifact. Not committed yet pending this.
 
 ## Milestone status
 

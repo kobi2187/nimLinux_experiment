@@ -26,6 +26,8 @@ proc nimixSleep(ticks: uint64) {.importc, cdecl.}
 proc nimixYield() {.importc, cdecl.}
 proc nimixUptimeSecs(): uint64 {.importc, cdecl.}
 proc nimixGetArgs(buf: pointer; len: int): int {.importc, cdecl.}
+proc nimixMapAnon(size: int): pointer {.importc, cdecl.}
+proc nimixFreeAnon(p: pointer; size: int) {.importc, cdecl.}
 
 # ── write helper ─────────────────────────────────────────────────────────────
 
@@ -100,6 +102,19 @@ proc testYield() =
   nimixYield()
   testPass("abi_yield")
 
+# ── nimixMapAnon / nimixFreeAnon ─────────────────────────────────────────────
+
+proc testMapAnon() =
+  let p = nimixMapAnon(64)
+  check("abi_map_anon_non_null", p != nil)
+  if p == nil:
+    return
+  # Write a sentinel and read it back to prove the memory is usable.
+  cast[ptr uint64](p)[] = 0xDEADBEEF_CAFE0001'u64
+  check("abi_map_anon_writable", cast[ptr uint64](p)[] == 0xDEADBEEF_CAFE0001'u64)
+  nimixFreeAnon(p, 64)
+  testPass("abi_map_anon")
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 proc appMain() {.exportc.} =
@@ -109,6 +124,7 @@ proc appMain() {.exportc.} =
   testAllocFree()
   testUptimeSecs()
   testGetArgs()
+  testMapAnon()
   testYield()
   testEventPubSub()
   testSleepAdvancesTime()   # last — takes 2 seconds

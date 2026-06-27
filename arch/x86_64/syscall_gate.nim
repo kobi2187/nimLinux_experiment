@@ -55,8 +55,10 @@ type NimixSyscall* = enum
   scGrantRegion    = 21
   scUptimeSecs     = 22
   scWallClock      = 23
+  scMapAnon        = 24
+  scFreeAnon       = 25
 
-const NimixSyscallCount* = 24   ## total number of syscalls
+const NimixSyscallCount* = 26   ## total number of syscalls
 
 # ── Dispatch table ────────────────────────────────────────────────────────────
 # Raw function pointers indexed by NimixSyscall ordinal.
@@ -91,6 +93,8 @@ proc syscallTableInit*() =
   syscallTable[21] = cast[uint64](v.grantRegion)
   syscallTable[22] = cast[uint64](v.uptimeSecs)
   syscallTable[23] = cast[uint64](v.wallClock)
+  syscallTable[24] = cast[uint64](v.mapAnon)
+  syscallTable[25] = cast[uint64](v.freeAnon)
 
 proc syscallDispatch*(nr, a0, a1, a2, a3: uint64): uint64 {.exportc: "syscallDispatch", cdecl.} =
   ## Called from syscall_entry asm stub. Dispatches by nr through syscallTable.
