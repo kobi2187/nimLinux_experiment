@@ -36,6 +36,7 @@ proc abiProcList*(buf: pointer; len: int): int {.nimcall.} =
   template emit(s: cstring)   = bufEmit(dst, pos, len, s)
   template emitU(n: uint64)   = bufEmitUInt(dst, pos, len, n)
 
+  let totalTicks = procTable.stats.uptimeTicks
   for i in 0 ..< MaxTasks:
     let t = procTable.tasks[i]
     if not t.used: continue
@@ -49,6 +50,8 @@ proc abiProcList*(buf: pointer; len: int): int {.nimcall.} =
     of ptsRunning: emit("running ")
     of ptsBlocked: emit("blocked ")
     of ptsZombie:  emit("zombie  ")
+    let cpuPct = if totalTicks > 0: (t.cpuTicks * 100) div totalTicks else: 0
+    emitU(cpuPct); emit("% ")
     emit(cast[cstring](unsafeAddr t.name[0])); emit("\n")
 
   if pos < len: dst[pos] = '\0'

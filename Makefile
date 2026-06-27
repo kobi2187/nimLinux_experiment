@@ -266,6 +266,7 @@ test:
 	$(NIM) c -r $(TEST_FLAGS) tests/test_virtio.nim
 	$(NIM) c -r $(TEST_FLAGS) -d:noKernelHardware tests/test_rtc.nim
 	$(NIM) c -r $(TEST_FLAGS) -d:noKernelHardware tests/test_syscall_table.nim
+	$(NIM) c -r $(TEST_FLAGS) -d:noKernelHardware tests/test_elf_loader.nim
 	@echo "=== All tests passed ==="
 
 TEST_FLAGS_ARC = --skipParentCfg --mm:arc --panics:on --path:$(CURDIR) --path:$(CURDIR)/apps/nim --nimblePath:$(HOME)/.nimble/pkgs2 -d:noSignalHandler

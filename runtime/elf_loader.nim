@@ -148,11 +148,13 @@ type
 proc elfLoadPie*(data: ptr byte; size: int;
                  regionBase: uint64;
                  patches: ptr UncheckedArray[AbiPatch];
-                 patchCount: int): ElfLoadResult =
+                 patchCount: int;
+                 regionSize: uint64 = 4 * 1024 * 1024): ElfLoadResult =
   ## Load a PIE ELF (ET_DYN) into `regionBase`.
+  ## Validates each PT_LOAD segment fits within [0, regionSize) before mapping.
   ## Applies R_X86_64_RELATIVE relocations from .rela.dyn.
   ## Patches weak ABI symbols by overwriting their stub bodies with
-  ## a 64-bit absolute jmp (14 bytes: movabs rax, <fn>; jmp rax).
+  ## `movabs rax, <nr>; syscall` trampolines.
   ## Fills result.appMain with the absolute address of appMain.
 
   result.err = elfCheck(data, size)
@@ -174,6 +176,9 @@ proc elfLoadPie*(data: ptr byte; size: int;
     if ph.p_type != PT_LOAD: continue
     if ph.p_offset + ph.p_filesz > uint64(size):
       result.err = elfBadPhdr; return
+    if ph.p_vaddr + ph.p_memsz > regionSize:
+      klogInt(llError, "ELF PIE: segment overflow at vaddr=0x", int64(ph.p_vaddr))
+      result.err = elfLoadOob; return
 
     let dst = cast[ptr UncheckedArray[byte]](bias + ph.p_vaddr)
     let src = cast[ptr UncheckedArray[byte]](fileBase + ph.p_offset)
