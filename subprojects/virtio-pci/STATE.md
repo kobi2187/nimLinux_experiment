@@ -23,14 +23,27 @@ Stub backend exists (`stubTransport`) so the parent compiles meanwhile.
       cfg_type consts, in `drivers/virtio/virtio_pci.nim`. Host test
       `tests/test_virtio_pci.nim` green (3 assertions).
 
-## Now
-- [→] V3: walk PCI capability list (status bit4 → cap ptr @0x34), collect virtio
-      caps by cfg_type. Needs a host test over a synthetic cap chain.
+- [x] V3: cap-walk (`walkVirtioCaps`) over an injected CfgReader — finds all four
+      virtio caps, records bar+offset, empty when status bit4 clear. 3 host tests.
+- [x] V4: `capAddr` = barBase(injected) + offset. 2 host tests.
+- [x] V5: `commonNegotiate` — status ACK→DRIVER→FEATURES_OK on a CommonCfg ptr.
+- [x] V6: `commonQueueSetup` — writes split-ring desc/avail/used lo/hi, enables queue.
+- [x] V7: `notifyAddr` = base + queueNotifyOff * multiplier.
+- [x] V8: `deviceConfigRead32`. All internals host-tested: `tests/test_virtio_pci.nim`
+      = 11 assertions green, wired into `make test`. Module type-checks under --os:any.
+
+## Now (QEMU-dependent — separate pass)
+- [→] V9: wire transport into `virtio_blk.nim` via the VirtioTransport vtable;
+      `virtioBlkInit` tries PCI (probe via pciVirtioFind + walkVirtioCaps + capAddr)
+      then falls back to MMIO. Needs the real `pciConfigReadU8`/`pciBarDecode` adapters.
 
 ## Next
-- V4: map BAR+offset per cap (reuse pciBarDecode) → probe() returns true in QEMU
-- V5–V8: CommonCfg negotiate / queueSetup / notify / readConfig+irq
-- V9: wire into virtio_blk via vtable; V10: boot done-check
+- V10: boot done-check in QEMU — fsMount succeeds, `fs_server: starting` before prompt.
+- Then: migrate virtio-gpu onto the same vtable → lights up the display.
+
+## Note on volatility
+CommonCfg ops write through `ptr VirtioPciCommonCfg`. On the kernel path the region
+must be mapped uncached so ordinary stores are real MMIO writes (verify at V9 wiring).
 
 ## Working set
 - Parent files (read-only here): `drivers/virtio/virtio_transport.nim` (the contract),

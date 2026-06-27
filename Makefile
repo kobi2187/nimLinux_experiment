@@ -265,6 +265,7 @@ test:
 	$(NIM) c -r $(TEST_FLAGS) tests/test_fs_logic.nim
 	$(NIM) c -r $(TEST_FLAGS) -d:noKernelHardware tests/test_fatfs_write.nim
 	$(NIM) c -r $(TEST_FLAGS) tests/test_virtio.nim
+	$(NIM) c -r $(TEST_FLAGS) -d:noKernelHardware tests/test_virtio_pci.nim
 	$(NIM) c -r $(TEST_FLAGS) -d:noKernelHardware tests/test_rtc.nim
 	$(NIM) c -r $(TEST_FLAGS) -d:noKernelHardware tests/test_syscall_table.nim
 	$(NIM) c -r $(TEST_FLAGS) -d:noKernelHardware tests/test_elf_loader.nim
