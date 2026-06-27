@@ -550,3 +550,28 @@ msgpack4nim uses does not pull in `std/os`. **Decision:** close TW#24 as already
 satisfied; do not add an unnecessary stub (would be dead code against the
 stdlib-preference + complexity rules). If a future `streams`-backed path reintroduces
 the dependency, revisit then.
+
+## testMode ELF load is not interrupt-safe — cli/sti around the load (2026-06-27)
+
+**Bug:** In testMode, after kernel_tests completed, the boot hung non-deterministically
+while loading `user_tests.elf` (the hang point moved between runs — different ABI-patch
+numbers each time: 7/10/3/11). Earlier mistaken as a serial-flush/timeout artifact;
+log-growth sampling proved a real hang (output froze at a fixed point, 14s+ idle).
+
+**Root cause:** The hang point being *non-deterministic* proved it was asynchronous —
+an interrupt (PIT at 100Hz, or another IRQ) firing during `launchElfBytes`
+(ELF segment copy + relocation + ABI-stub patching + ring-3 `procSpawnRing3`). That
+path is not interrupt-safe; a handler firing mid-load hangs the system. Confirmed by
+wrapping the load in `cli()`/`sti()`: 3/3 runs then deterministically patch all 20
+stubs and reach "App spawned in ring 3".
+
+**Fix:** `cli()` / `sti()` around `launchElfBytes` in `runTestMode`
+(`kernel/init/main.nim`). Scoped to testMode; the normal boot loads servers before
+`enableInterrupts()` so it wasn't exposed. **Broader implication:** the loader/spawn
+path should be made re-entrant or run under a lock before it's used with interrupts
+live in production (e.g. shell `execApp`). Logged as a known sharp edge.
+
+**Residual (separate task):** even with the load fixed, the spawned ring-3 app does not
+execute its tests (no `suite=user_tests` output) — a scheduling/yield issue in the
+testMode two-phase boot, tracked separately. Task 3's ring-3 mapAnon verification waits
+on that.

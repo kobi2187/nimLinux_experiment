@@ -356,7 +356,11 @@ when defined(testMode):
     kernelTests.kernelTestMain()
     klog(llInfo, "testMode: kernel tests done — launching user tests (ring 3)")
     var userTestsBuf = userTestsElf
+    # ELF load + ring-3 spawn is not interrupt-safe: a PIT/IRQ firing mid-load
+    # hangs the system non-deterministically (see TW#65). Mask while loading.
+    cli()
     launchElfBytes("user_tests.elf", cast[ptr byte](addr userTestsBuf[0]), userTestsBuf.len)
+    sti()
     procSleepUntil(int(procTable.current), pitTicks() + 500)
     klog(llInfo, "testMode: complete — halting")
     while true: hlt()
