@@ -1,27 +1,44 @@
 # HANDOFF.md — Session Exit Note
 
-Last updated: 2026-06-26
+Last updated: 2026-06-27 (session 3)
 
 ## What happened this session
 
-Ran `/orient` — discovered the 5 orchestrator files (VISION, ARCHITECTURE, BACKLOG, STATE, HANDOFF) were missing. Interviewed the user to fill gaps in the docs. Created all 5 files and the project_memory/ folder with 5 memory files covering vision, architecture, build system, concurrency model, and task workflow.
+Resumed from session 2. Completed:
+- TW#73 — testMode boot flag (marked done, was already implemented)
+- TW#8  — ELF loader segment bounds check: `elfLoadOob` on overflow, tests added
+- TW#3  — CPU% in ps: `abiProcList` now emits `(cpuTicks*100)/uptimeTicks` per task
 
-Key things clarified vs. what the old docs said:
-- The "3 ISOs" are 3 separate compilations via `-d:kernelModel=X`; `make iso-all` puts them in one GRUB menu
-- Taskwarrior is the authoritative task tracker — create/complete freely
-- CPS is the dispatcher's internal model, not a kernel scheduler replacement; kernel stays preemptive
-- Rump kernel is a long-term direction, blocked on `irqSubscribe` + userspace DMA — don't touch
-- Model parity: monolithic was furthest ahead; others catching up; gaps can lag if solution unclear
-- 68 taskwarrior tasks across layers 0–9
+Also clarified TW#4 (guard pages) is FUZZY — needs per-process page tables / CR3 switching, which isn't built yet. Real guard pages deferred; software bounds check (TW#8) is the immediate win.
+
+## Key architectural facts
+
+- Apps run in ring 3 via `procSpawnRing3` (iretq frame on kstack)
+- ABI calls: trampoline `movabs rax,<nr>; syscall` → `syscall_entry` (boot_asm.S) → `syscallDispatch` → vtable
+- `abiExit`: frees region + kills task + yields (no longer panics)
+- Shell returns immediately after spawning (parallel execution)
+- testMode: `make test-structured` builds `-d:testMode` kernel, runs kernel_tests (ring 0) then user_tests.elf (ring 3)
+- `launchElfBytes(name, ptr, len)` in shell.nim — public API to spawn any PIE ELF from bytes
+- `syscallScratchRsp` / `globalTss` are single-CPU globals (SMP plan in DECISIONS.md)
 
 ## Where to resume
 
-**Layer 0 frontier — both CLEAR, no blockers:**
-- TW#48: Syscall gate — fix ring-3 transition; ABI vtable dispatch currently a no-op
-- TW#37: CI pipeline — GitHub Actions for all 3 models + tests
+**Layer 1 (CLEAR, no blockers):**
+- TW#47 — PS/2 mouse driver: decode 3/4-byte protocol, publish mouse.move/click to event_server (~100 LOC in drivers/ps2_mouse.nim)
 
-Pick one and SURVEY → EXECUTE.
+**Layer 2 (CLEAR, no blockers):**
+- TW#48 — virtio-blk: replace ATA PIO diskio.c with virtio block requests (~150 LOC, same pattern as virtio-net)
+- TW#49 — ARP: send/receive, maintain arp_cache[IP→MAC]
 
-## State of the orchestrator files
+**Blocked / deferred:**
+- TW#4 — guard pages: needs per-process page tables + CR3 switch on task switch (not built)
+- TW#70/71 — test phase 2/3: needs boot-from-disk (Milestone 1)
 
-All 5 just created. BACKLOG.md mirrors taskwarrior but adds structure. STATE.md will need updating as tasks complete — keep it in sync.
+## Build commands
+
+```
+make test              # host unit tests
+make test-structured   # QEMU in-kernel test run (kernel + user ELFs)
+make build             # all 3 kernel models
+make iso && make qemu  # boot default ISO
+```
