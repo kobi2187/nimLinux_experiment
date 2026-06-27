@@ -16,11 +16,21 @@ sub-project implements the modern virtio-pci transport behind the parent's froze
 probe / negotiate / queueSetup / notify / readConfig / irqLine.
 Stub backend exists (`stubTransport`) so the parent compiles meanwhile.
 
+## Done
+- [x] V1: SURVEY — decision BUILD minimal Nim backend; reuse pci_config + pci_bar.
+      Struct layouts verified against linux uapi virtio_pci.h. See DECISIONS V1.
+- [x] V2: struct layouts (VirtioPciCap=16B, NotifyCap=20B, CommonCfg=56B) +
+      cfg_type consts, in `drivers/virtio/virtio_pci.nim`. Host test
+      `tests/test_virtio_pci.nim` green (3 assertions).
+
 ## Now
-- [→] V1: SURVEY virtio-1.0 PCI cap layout + reference implementations
+- [→] V3: walk PCI capability list (status bit4 → cap ptr @0x34), collect virtio
+      caps by cfg_type. Needs a host test over a synthetic cap chain.
 
 ## Next
-- V2: struct layouts + host tests
+- V4: map BAR+offset per cap (reuse pciBarDecode) → probe() returns true in QEMU
+- V5–V8: CommonCfg negotiate / queueSetup / notify / readConfig+irq
+- V9: wire into virtio_blk via vtable; V10: boot done-check
 
 ## Working set
 - Parent files (read-only here): `drivers/virtio/virtio_transport.nim` (the contract),

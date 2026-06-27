@@ -538,3 +538,15 @@ struct is cross-cutting and logged in BOTH this file and the sub-project's DECIS
 ### Drift
 Block driver moves from single-file MMIO to transport-vtable + two backends. See
 ARCHITECTURE.md drift log 2026-06-27.
+
+## TW#24 osenv stub — obsolete, no work needed (2026-06-27)
+
+**Survey result:** The backlog assumed msgpack4nim fails under `--os:standalone`
+because of a missing `getenv`/`os` import, requiring an `osenv.nim` stub. Reproduced
+the actual compile in `apps/nim/` (its `nim.cfg` + `panicoverride`): msgpack4nim
+**compiles cleanly AND a full `pack`/`unpack` round-trip of an object-with-string
+links with no error** (exit 0, no `getenv`/`std/os` reference). The `MsgStream` path
+msgpack4nim uses does not pull in `std/os`. **Decision:** close TW#24 as already
+satisfied; do not add an unnecessary stub (would be dead code against the
+stdlib-preference + complexity rules). If a future `streams`-backed path reintroduces
+the dependency, revisit then.
