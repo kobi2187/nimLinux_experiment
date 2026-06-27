@@ -67,7 +67,8 @@ proc testProcSpawnKill() =
   let slot   = procSpawn("test_task", dummyEntry, tcApp, 128)
   check("spawn_succeeds",          slot >= 0)
   checkEq("task_count_up",         procTable.taskCount, before + 1)
-  check("pid_monotonic",           procTable.tasks[slot].pid > pid0)
+  check("pid_assigned",            procTable.tasks[slot].pid == pid0)
+  check("pid_monotonic",           procTable.nextPid > pid0)
   discard procKill(slot)
   checkEq("task_count_restored",   procTable.taskCount, before)
 

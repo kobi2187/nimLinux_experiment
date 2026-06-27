@@ -240,6 +240,7 @@ test:
 	$(NIM) c -r $(TEST_FLAGS) tests/test_vga_text.nim
 	$(NIM) c -r $(TEST_FLAGS) tests/test_traits.nim
 	$(NIM) c -r $(TEST_FLAGS) tests/test_ps2_keyboard.nim
+	$(NIM) c -r $(TEST_FLAGS) tests/test_ps2_mouse.nim
 	$(NIM) c -r $(TEST_FLAGS) tests/test_pic.nim
 	$(NIM) c -r $(TEST_FLAGS) tests/test_pci.nim
 	$(NIM) c -r $(TEST_FLAGS) tests/test_pit.nim
@@ -300,8 +301,10 @@ build/kernel-test:
 	$(NIM) $(NIM_FLAGS) -d:kernelModel=monolithic -d:testMode $(KERNEL_SRC)
 	mv build/main $@
 
-test-structured: $(TESTMODE_ISO)
-	python3 tests/qemu_harness.py --iso $(TESTMODE_ISO) --bios $(OVMF) --structured --timeout 30
+test-structured: $(TESTMODE_ISO) disk-add-apps
+	python3 tests/qemu_harness.py --iso $(TESTMODE_ISO) --bios $(OVMF) \
+		--structured --timeout 30 \
+		$(if $(wildcard $(DISK)),--disk $(DISK) --virtio-blk,)
 
 # ── Clean ─────────────────────────────────────────────────────────
 clean:

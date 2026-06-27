@@ -1,6 +1,31 @@
 # STATE.md — Current Position
 
-Last updated: 2026-06-26 (session 2)
+Last updated: 2026-06-27 (session 5)
+
+## Session 5 — boot-from-disk verification + virtio transport spawn
+
+Executing the `2026-06-27-fs-elf-heap.md` plan inline. Task 1 (boot fs_server
+from disk) code was already present in the tree. Verifying its done-check exposed
+a chain of issues, fixed in order:
+
+1. **Harness bug (FIXED):** `make test-structured` waited for the shell prompt,
+   which testMode never prints (it halts after tests). Now skips prompt-wait in
+   `--structured` mode → `tests/qemu_harness.py`.
+2. **Disk not attached (FIXED):** test-structured passed no disk. Added a
+   `--virtio-blk` harness flag (`-drive if=none + -device virtio-blk-pci`) and
+   wired `test-structured` to attach `disk.img` (which has fs_server.elf).
+3. **pid_monotonic test wrong (FIXED):** asserted new pid `> nextPid` (impossible —
+   new pid EQUALS captured nextPid). Corrected to `pid_assigned`(==) +
+   `pid_monotonic`(nextPid advanced). Kernel tests now **24/24**.
+4. **virtio-blk transport mismatch (SPAWNED):** driver is MMIO-only; QEMU device is
+   virtio-blk-pci → "BAR0 not MMIO". Root cause = transport mismatch, not a logic
+   bug. Spawned `subprojects/virtio-pci/` behind a frozen `VirtioTransport` vtable
+   (`drivers/virtio/virtio_transport.nim`, stubbed). See DECISIONS 2026-06-27.
+
+**Task 1 status:** code correct, but boot-from-disk done-check is BLOCKED on the
+virtio-pci sub-project (disk can't mount until the PCI transport lands).
+**Tasks 2 (ELF relocs) + 3 (mapAnon) of the plan:** not started — both are
+independent of the disk transport and can proceed.
 
 ## Milestone status
 
@@ -13,7 +38,13 @@ Last updated: 2026-06-26 (session 2)
 | 4 — Stdlib + compiler target | **PARTIAL** | fd table, write(2) shim, osalloc done; --os:nimix target not yet |
 | 5+ — GUI, network, audio | **PLANNED** | virtio-gpu driver file exists; framebuffer init incomplete |
 
-## Completed this session (session 2)
+## Completed this session (session 4)
+
+- TW#45 — PS/2 mouse driver: `drivers/ps2_mouse.nim`, IRQ12, 3-byte protocol decode, `mouse.move`/`mouse.click` events, 6 host tests
+- TW#46 — virtio-blk driver: `drivers/virtio/virtio_blk.nim`, 3-descriptor chain, sync read/write, struct layout tests
+- TW#47 — ARP: `drivers/net/arp.nim`, encode/decode, arp_cache, `arpHandleFrame`, `arpBuildRequest/Reply`, 6 host tests
+
+## Completed in prior sessions
 
 - TW#37 — CI workflow (marked done, already existed)
 - TW#50 — RTC driver: `drivers/rtc.nim`, ABI `wallClock`/`uptimeSecs`, tests
@@ -42,14 +73,13 @@ Last updated: 2026-06-26 (session 2)
 
 ## Current frontier: what's unblocked
 
-**Layer 1 (CLEAR, no blockers):**
-- TW#47 — PS/2 mouse driver (~100 LOC, decode 3/4-byte protocol, publish events)
-- TW#3  — ps/stats: show real CPU% from PIT ISR
-
 **Layer 2 (CLEAR, no blockers):**
-- TW#4  — Guard pages: unmapped page before/after each app region
-- TW#48 — virtio-blk: replace ATA PIO diskio.c with virtio block requests
-- TW#49 — ARP: send/receive, maintain arp_cache
+- TW#3  — Guard pages: needs per-process page tables + CR3 switch (FUZZY, deferred)
+- TW#5  — mmap-style ABI: `nimixMapAnon(size)` (FUZZY)
+
+**Layer 3 (CLEAR, no blockers):**
+- TW#2  — ELF GLOB_DAT + JUMP_SLOT relocations (enables dynamic linking)
+- TW#24 — stdlib shim: `osenv.nim` stub getenv/putenv
 
 **Test infrastructure remaining (layer 1/2):**
 - TW#73 — testMode boot flag (done structurally; `make test-structured` exists)

@@ -66,12 +66,13 @@ def build_tests(disk=None):
 
 class QemuHarness:
     def __init__(self, iso, disk=None, bios="/usr/share/ovmf/OVMF.fd",
-                 mem=256, timeout=30):
-        self.iso     = iso
-        self.disk    = disk
-        self.bios    = bios
-        self.mem     = mem
-        self.timeout = timeout
+                 mem=256, timeout=30, virtio_blk=False):
+        self.iso        = iso
+        self.disk       = disk
+        self.bios       = bios
+        self.mem        = mem
+        self.timeout    = timeout
+        self.virtio_blk = virtio_blk
 
         self._proc      = None
         self._out_fd    = None
@@ -108,7 +109,13 @@ class QemuHarness:
             "-no-reboot",
         ]
         if self.disk and os.path.exists(self.disk):
-            cmd += ["-hda", self.disk]
+            if self.virtio_blk:
+                cmd += [
+                    "-drive",  f"if=none,file={self.disk},format=raw,id=d0",
+                    "-device", "virtio-blk-pci,drive=d0",
+                ]
+            else:
+                cmd += ["-hda", self.disk]
 
         self._proc = subprocess.Popen(
             cmd,
@@ -384,6 +391,8 @@ def main():
                         help="Print all test names without running them")
     parser.add_argument("--structured", action="store_true",
                         help="Parse TEST PASS/FAIL/DONE lines from in-kernel test runner")
+    parser.add_argument("--virtio-blk", action="store_true",
+                        help="Attach --disk via virtio-blk-pci instead of IDE (-hda)")
     args = parser.parse_args()
 
     tests = build_tests(disk=args.disk)
@@ -413,6 +422,7 @@ def main():
         bios=args.bios,
         mem=args.mem,
         timeout=args.timeout,
+        virtio_blk=args.virtio_blk,
     )
 
     print(f"Launching QEMU: {args.iso}")
@@ -420,19 +430,20 @@ def main():
 
     harness.start()
 
-    print("Waiting for boot prompt…")
-    try:
-        harness.wait_for_prompt()
-    except TimeoutError as e:
-        print(f"FAIL: {e}", file=sys.stderr)
-        harness.cleanup()
-        sys.exit(1)
-
-    print("Boot prompt received.")
-
     if args.structured:
+        # testMode never starts the shell — it runs the in-kernel test
+        # runner and halts. Don't wait for a prompt that won't appear;
+        # go straight to parsing TEST PASS/FAIL/DONE lines.
         passed = run_structured_tests(harness, timeout=args.timeout)
     else:
+        print("Waiting for boot prompt…")
+        try:
+            harness.wait_for_prompt()
+        except TimeoutError as e:
+            print(f"FAIL: {e}", file=sys.stderr)
+            harness.cleanup()
+            sys.exit(1)
+        print("Boot prompt received.")
         passed = run_tests(harness, tests)
     harness.cleanup()
     sys.exit(0 if passed else 1)

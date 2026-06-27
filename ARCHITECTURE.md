@@ -70,7 +70,11 @@
 
 | Module | Path | Status | Notes |
 |--------|------|--------|-------|
-| virtio-net | `drivers/virtio/virtio_net.nim` | BUILT | virtqueue, Ethernet/IPv4/UDP stack |
+| virtio-net | `drivers/virtio/virtio_net.nim` | BUILT | virtqueue, Ethernet/IPv4/UDP stack (MMIO transport) |
+| virtio-blk (MMIO) | `drivers/virtio/virtio_blk.nim` | BUILT | 3-desc chain, sync r/w; **works only on virtio-MMIO transport** |
+| VirtioTransport seam | `drivers/virtio/virtio_transport.nim` | STUBBED | vtable: probe/negotiate/queueSetup/notify/readConfig/irqLine — frozen API, see DECISIONS 2026-06-27 |
+| virtio-mmio transport | `drivers/virtio/virtio_mmio.nim` | PLANNED | extract existing BAR0+magic path behind VirtioTransport |
+| virtio-pci transport | `drivers/virtio/virtio_pci.nim` | SPAWNED | modern virtio-1.0 PCI cap-walk; sub-project `subprojects/virtio-pci/` |
 | virtio-gpu | `drivers/virtio/virtio_gpu.nim` | PARTIAL | file exists, framebuffer init incomplete |
 | Driver registry | `kernel/driver_registry.nim` | BUILT | register/lookup by name |
 | PS/2 mouse | — | PLANNED | 3/4-byte protocol, mouse.move/click events |
@@ -169,6 +173,7 @@ app: regionOpen(token) → (ptr, len) → direct read → regionClose(token)
 |------|---------|--------------|
 | Syscall gate | Currently no-op — all apps run ring 0 | Task 48: real ring-3 transition, ABI vtable dispatch |
 | Boot sequence | disk mount timing vs server spawn | Milestone 1: resolve open question #1 |
+| Virtio transport | blk driver is MMIO-only; QEMU attaches virtio-blk-pci | SPAWN virtio-pci behind VirtioTransport vtable (2026-06-27); blk+net migrate to vtable |
 | virtio-gpu | driver exists partially; app_server not yet | Milestone 5 |
 | FlatBuffers schema location | per-server vs shared `schemas/` | Open question #3, resolves at Milestone 2 |
 | Rump kernel / OS threads for drivers | blocked on irqSubscribe + userspace DMA | Long-term; don't touch yet |
@@ -185,3 +190,5 @@ app: regionOpen(token) → (ptr, len) → direct read → regionClose(token)
 | 2026-06-23 | SASOS: Nim type system as isolation mechanism (no MMU rings) | DECISIONS.md §Kernel Models |
 | 2026-06 | virtio-net driver + Ethernet/IPv4/UDP stack landed | git: 3862788 |
 | 2026-06 | MsgPack wired into ServerChan (serverMsgFromMp/serverMsgToMp) | git: fdab067 |
+| 2026-06-27 | test-structured harness fixed: skip prompt-wait in --structured; attach disk via virtio-blk-pci; pid_monotonic test corrected | (uncommitted) |
+| 2026-06-27 | Virtio transport split: VirtioTransport vtable + MMIO/PCI backends; virtio-pci SPAWNED | DECISIONS.md §Virtio transport split |

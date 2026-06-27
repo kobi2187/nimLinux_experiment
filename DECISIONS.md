@@ -482,3 +482,59 @@ Added to testMode boot sequence after kernel_tests completes.
 
 **Resolving signal for phase 2:** boot-from-disk (Milestone 1, open question #1).
 **Resolving signal for phase 3:** when microkernel and SASOS model parity is targeted.
+
+## Virtio transport split — MMIO vs PCI; SPAWN virtio-pci driver (2026-06-27)
+
+### Context
+While verifying Task 1 (boot fs_server from disk), `make test-structured` was fixed
+to attach `disk.img` via `-device virtio-blk-pci`. The existing `virtio_blk.nim`
+then failed at `blkFindMmio` with "BAR0 not MMIO or missing". Root cause: the
+driver is written for the **virtio-MMIO transport** (virtio spec §4.2 — flat BAR0
+with `VirtioRegMagic`/`VirtioRegStatus` register window), but `virtio-blk-pci` is a
+**virtio-PCI transport** device (spec §4.1) — no MMIO magic register; configuration
+is discovered via PCI capabilities (CommonCfg/Notify/ISR/Device) spread across BARs.
+The two transports are incompatible at the register-access layer.
+
+### Decision
+1. **Introduce a `VirtioTransport` vtable seam** (`drivers/virtio/virtio_transport.nim`).
+   The block driver and `virtqueue.nim` become transport-agnostic and call through it.
+2. **Extract** the existing MMIO path into `virtio_mmio.nim` implementing the vtable.
+3. **Write a new** `virtio_pci.nim` implementing the modern (virtio-1.0) PCI transport
+   via the capability walk. This is the spawned sub-project (its own VISION/BACKLOG/
+   STATE/DECISIONS under `subprojects/virtio-pci/`); first task is a SURVEY for a
+   mature minimal virtio-pci reference to adapt.
+4. `virtio_blk.nim` keeps its **frozen public API** unchanged:
+   `virtioBlkInit*(): bool`, `virtioBlkRead*/Write*(sector,buf): bool`, `gVirtioBlkReady*`.
+   `virtioBlkInit` gains transport selection (try PCI-modern, fall back to MMIO).
+
+### Rejected alternatives
+- *Extend virtio_blk.nim in place* — would tangle two transports in one file, against
+  the code-size/complexity rules; the user asked for a separate modern driver.
+- *Standalone virtio_blk_pci.nim with no vtable* — duplicates read/write logic; the
+  vtable lets virtio-net adopt the same seam later.
+- *Attach the disk as virtio-mmio in QEMU to match the old driver* — works short-term
+  but virtio-pci is what real and standard QEMU targets use; worth doing properly.
+
+### Why SPAWN
+The PCI cap-walk + BAR mapping + modern queue setup is a self-contained module behind
+one clean interface (the vtable). It fits the SPAWN profile: large, self-contained,
+reachable through a single frozen API. Parent (fs boot-from-disk) proceeds against the
+stub until the sub-project satisfies the vtable.
+
+### The frozen seam (VirtioTransport)
+```nim
+# drivers/virtio/virtio_transport.nim
+type VirtioTransport* = object
+  probe*:      proc(): bool {.nimcall.}              # discover device, map regs/BARs
+  negotiate*:  proc(features: uint64): bool {.nimcall.}  # status handshake + FEATURES_OK
+  queueSetup*: proc(idx: uint16; ringPhys: uint64): bool {.nimcall.}
+  notify*:     proc(idx: uint16) {.nimcall.}         # kick a queue
+  readConfig*: proc(off: uint32): uint32 {.nimcall.} # device-specific config space
+  irqLine*:    proc(): uint8 {.nimcall.}
+```
+(Exact field set may tighten during the sub-project's first task; any change to this
+struct is cross-cutting and logged in BOTH this file and the sub-project's DECISIONS.)
+
+### Drift
+Block driver moves from single-file MMIO to transport-vtable + two backends. See
+ARCHITECTURE.md drift log 2026-06-27.
