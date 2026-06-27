@@ -26,6 +26,7 @@ import ../../drivers/pic
 import ../../drivers/pit
 import ../../kern/interrupts
 import ../../drivers/ps2_keyboard
+import ../../drivers/ps2_mouse
 import ../../drivers/vga_text
 import ../../kernel/event_server
 import ../../arch/x86_64/syscall_gate
@@ -38,6 +39,7 @@ import ../../kernel/cap/capability
 import ../../kernel/cap/cap_registry
 import ../../drivers/pci/pci_device
 import ../../drivers/virtio/virtio_net
+import ../../drivers/virtio/virtio_blk
 import ../../drivers/rtc
 
 when defined(testMode):
@@ -113,49 +115,45 @@ proc panic*(msg: string) {.noReturn.} =
 # Memory Initialization
 # ═══════════════════════════════════════════════════════════════════════════
 
-proc initMemory(k: Kernel): bool =
-  ## Initialize memory management subsystem
-  klog(llInfo, "[INIT] Initializing memory management...")
-
-  let highestAddr = getHighestUsableAddress(k.bootInfo[])
-  let totalFrames = (uint64(highestAddr) + FrameSize - 1) div FrameSize
-  let bitmapSize  = (totalFrames + 63) div 64 * 8
-  let kernelEndAddr = getKernelEnd()
-  k.bootInfo.kernelPhysEnd = PhysAddr(kernelEndAddr)
-  let bitmapPhysAddr = alignUp(kernelEndAddr, FrameSize)
-  let bitmapAddr = cast[pointer](bitmapPhysAddr)
-
+proc dumpMemoryMap(k: Kernel; highestAddr: uint64; bitmapPhysAddr, bitmapSize: uint64) =
   when not defined(release):
     kprintln("  Memory map dump:")
     for i in 0..<k.bootInfo.memoryMap.count:
       let r = k.bootInfo.memoryMap.regions[i]
-      kprint("    ["); kprintInt(i); kprint("] base=0x")
-      defaultSerial.putHex(uint64(r.base))
+      kprint("    ["); kprintInt(i); kprint("] base=0x"); defaultSerial.putHex(uint64(r.base))
       kprint(" length=0x"); defaultSerial.putHex(r.length)
-      kprint(" ("); kprintInt(int64(r.length div (1024*1024)))
-      kprint(" MiB) type="); kprintInt(int64(r.regionType.ord)); kprintln("")
-    kprint("  Total usable memory: ")
-    kprintInt(int64(uint64(highestAddr) div MiB)); kprintln(" MiB")
-    kprint("  Kernel end: 0x"); kprintHex(kernelEndAddr); kprintln("")
-    kprint("  Bitmap at: 0x"); kprintHex(bitmapPhysAddr)
-    kprint(" - 0x"); kprintHex(bitmapPhysAddr + bitmapSize); kprintln("")
+      kprint(" ("); kprintInt(int64(r.length div (1024*1024))); kprint(" MiB) type=")
+      kprintInt(int64(r.regionType.ord)); kprintln("")
+    kprint("  Total usable: "); kprintInt(int64(highestAddr div MiB)); kprintln(" MiB")
+    kprint("  Bitmap: 0x"); kprintHex(bitmapPhysAddr); kprint(" - 0x")
+    kprintHex(bitmapPhysAddr + bitmapSize); kprintln("")
 
+proc initPhysMgr(k: Kernel; bitmapAddr: pointer) =
   k.physMgr = PhysicalMemManager()
   k.physMgr.initFromBootInfo(k.bootInfo, bitmapAddr)
-
   when not defined(release):
-    kprint("  Free memory: ")
-    kprintInt(int64(k.physMgr.freeMemory() div MiB)); kprintln(" MiB")
+    kprint("  Free memory: "); kprintInt(int64(k.physMgr.freeMemory() div MiB)); kprintln(" MiB")
 
+proc initVirtHeap(k: Kernel): bool =
   k.virtMgr = newVirtualMemManager(k.physMgr)
-  let initResult = k.virtMgr.initKernelSpace()
-  if initResult.isErr:
-    kprintln("  ERROR: Could not initialize kernel address space")
-    return false
-
+  let res = k.virtMgr.initKernelSpace()
+  if res.isErr:
+    kprintln("  ERROR: Could not initialize kernel address space"); return false
   k.heapMgr = newHeapManager(k.physMgr, k.virtMgr)
-  klog(llInfo, "[INIT] Memory management initialized")
+  true
 
+proc initMemory(k: Kernel): bool =
+  klog(llInfo, "[INIT] Initializing memory management...")
+  let highestAddr    = getHighestUsableAddress(k.bootInfo[])
+  let totalFrames    = (uint64(highestAddr) + FrameSize - 1) div FrameSize
+  let bitmapSize     = (totalFrames + 63) div 64 * 8
+  let kernelEndAddr  = getKernelEnd()
+  k.bootInfo.kernelPhysEnd = PhysAddr(kernelEndAddr)
+  let bitmapPhysAddr = alignUp(kernelEndAddr, FrameSize)
+  dumpMemoryMap(k, uint64(highestAddr), bitmapPhysAddr, bitmapSize)
+  initPhysMgr(k, cast[pointer](bitmapPhysAddr))
+  if not initVirtHeap(k): return false
+  klog(llInfo, "[INIT] Memory management initialized")
   true
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -244,245 +242,206 @@ proc initKernel*(bootInfo: ptr BootInfo): Kernel =
 
 
 
-proc runKernel(bootInfo: ptr BootInfo) =
-  ## Initialize and run the kernel (internal, used by both boot paths)
-  let k = initKernel(bootInfo)
-
-  if not k.initialized:
-    panic("Kernel initialization failed")
-
-  kprintln("Starting scheduler...")
-
-  # Scheduler loop — calls schedule() in a loop to dispatch tasks.
-  # In a real kernel the idle task or timer interrupts drive this loop;
-  # here we drive it from the boot CPU until context switching lands
-  # on the idle task (which calls hlt in its own loop).
-  eventServerInit()
-  klog(llInfo, "Event server ready")
-  picInit()
-  klog(llInfo, "PIC 8259A remapped to vectors 0x20-0x2F")
-  
+proc initKernelModel() =
   klog(llInfo, "Selected kernel model: " & KernelModel)
-  
   when IsMonolithic:
-    initMonolithicModel()
-    klog(llInfo, "Monolithic kernel model initialized")
+    initMonolithicModel(); klog(llInfo, "Monolithic kernel model initialized")
   elif IsSasos:
-    initSasosModel()
-    klog(llInfo, "SASOS kernel model initialized")
+    initSasosModel();      klog(llInfo, "SASOS kernel model initialized")
   elif IsMicrokernel:
-    initMicrokernelModel()
-    klog(llInfo, "Microkernel model initialized")
+    initMicrokernelModel(); klog(llInfo, "Microkernel model initialized")
   else:
-    initMonolithicModel()
-    klog(llInfo, "Unknown kernel model, defaulting to monolithic")
-  
+    initMonolithicModel(); klog(llInfo, "Unknown model — defaulting to monolithic")
   klog(llInfo, "Kernel model ready")
 
-  # Initialize interrupt system (IDT + default exception handlers)
-  # KernelCS = 0x08 (64-bit code segment, see boot_asm.S GDT)
+proc initTimerAndInput() =
   discard initInterruptSystem(0x08'u16)
   klog(llInfo, "Interrupt system initialized")
-
-  pitInit(100)
-  pitRegisterHandler()
-  picUnmask(0)
+  pitInit(100); pitRegisterHandler(); picUnmask(0)
   klog(llInfo, "PIT timer: 100Hz, IRQ0 handler registered")
-
-  kbdRegisterHandler()
-  picUnmask(1)   # unmask IRQ1 (keyboard)
+  kbdRegisterHandler(); picUnmask(1)
   klog(llInfo, "PS2 keyboard: IRQ1 handler registered")
+  mouseRegisterHandler(); picUnmask(2); picUnmask(12)
+  klog(llInfo, "PS2 mouse: IRQ12 handler registered")
 
+proc wireVirtioNet() =
+  if not virtioNetInit():
+    klog(llWarn, "virtio-net: not available"); return
+  klog(llInfo, "virtio-net: initialized")
+  let netIrq = gVirtioNet.irqLine
+  picUnmask(netIrq)
+  discard getInterruptManager().registerExceptionHandler(
+    uint32(irqToVector(int(netIrq))),
+    proc(ctx: ptr ExceptionContext) {.nimcall.} =
+      virtioNetIrqHandler(); picEoi(gVirtioNet.irqLine))
+  klogInt(llInfo, "virtio-net: IRQ wired, line=", int64(netIrq))
+
+proc initVirtioDevices() =
   pciScan()
   klogInt(llInfo, "PCI scan: devices found: ", int64(gPciCount))
+  wireVirtioNet()
+  if virtioBlkInit(): klog(llInfo, "virtio-blk: initialized")
+  else:               klog(llWarn, "virtio-blk: not available")
 
-  if virtioNetInit():
-    klog(llInfo, "virtio-net: initialized")
-    let netIrq = gVirtioNet.irqLine
-    picUnmask(netIrq)
-    let netVec = irqToVector(int(netIrq))
-    discard getInterruptManager().registerExceptionHandler(
-      uint32(netVec),
-      proc(ctx: ptr ExceptionContext) {.nimcall.} =
-        virtioNetIrqHandler()
-        picEoi(gVirtioNet.irqLine)
-    )
-    klogInt(llInfo, "virtio-net: IRQ wired, line=", int64(netIrq))
-  else:
-    klog(llWarn, "virtio-net: not available")
-
-  # Load IDT and enable interrupts so the timer fires
+proc enableInterrupts() =
   let intMgr = getInterruptManager()
-  if intMgr != nil:
-    intMgr.loadIdt()
-    klog(llInfo, "IDT loaded")
-  sti()
-  klog(llInfo, "Interrupts enabled")
+  if intMgr != nil: intMgr.loadIdt(); klog(llInfo, "IDT loaded")
+  sti(); klog(llInfo, "Interrupts enabled")
 
-  # Register all drivers
+proc initDriverRegistry() =
   registerDriver(addr ps2KeyboardDriver)
+  registerDriver(addr ps2MouseDriver)
   registerDriver(addr vgaTextDriver)
-
-  # Probe: calls init() on each, returns counts
   let (drvOk, drvFail) = probeAllDrivers()
   klog(llInfo, "Drivers probed")
   klogInt(llInfo, "  ok:   ", int64(drvOk))
   klogInt(llInfo, "  fail: ", int64(drvFail))
 
-  let bootTime = rtcReadDateTime()
-  klog(llInfo, "RTC: wall clock read")
-
-  syscallGateInit()
-  klog(llInfo, "Syscall gate ready (ring 0<->3)")
-
-  # Start system servers
-  regionAllocInit()
-  serverChanRegistryInit()
-  pingServerInit()
-
-  # Register idle task first (slot 0, lowest priority, always ready)
-  discard procSpawn("idle", idleTaskProc, tcApp, 0)
-
-  # Register well-known kernel tasks in the process table
-  discard procSpawn("shell",       nil, tcServer,   128)
-  discard procSpawn("ping_server", nil, tcServer,   100)
-  discard procSpawn("event_srv",   nil, tcRealtime, 200)
-
-  # Register dispatcher server with elevated capabilities
+proc spawnDispatcher() =
   var dispatchChan = serverChanCreate("dispatch")
   serverChanRegister(dispatchChan)
   klog(llInfo, "Dispatch channel registered")
+  let slot = procSpawn("dispatcher", nil, tcRealtime, 250)
+  if slot < 0: return
+  procTable.tasks[slot].ipcCap = capGrant(procTable.tasks[slot].pid, capAdmin)
+  discard capGrant(procTable.tasks[slot].pid, capFs)
+  discard capGrant(procTable.tasks[slot].pid, capNet)
+  discard capRegister("dispatch.admin", capAdmin)
+  discard capRegister("dispatch.fs",    capFs)
+  discard capRegister("dispatch.net",   capNet)
+  klog(llInfo, "Dispatcher registered with capAdmin + capFs + capNet")
 
-  let dispSlot = procSpawn("dispatcher", nil, tcRealtime, 250)
-  if dispSlot >= 0:
-    # Grant dispatcher admin + fs + net capabilities
-    procTable.tasks[dispSlot].ipcCap = capGrant(procTable.tasks[dispSlot].pid, capAdmin)
-    let fsCap  = capGrant(procTable.tasks[dispSlot].pid, capFs)
-    let netCap = capGrant(procTable.tasks[dispSlot].pid, capNet)
-    # Suppress unused warnings — tokens held in cap table
-    discard fsCap
-    discard netCap
-    # Register in named cap registry so servers can verify dispatcher identity
-    discard capRegister("dispatch.admin", capAdmin)
-    discard capRegister("dispatch.fs",    capFs)
-    discard capRegister("dispatch.net",   capNet)
-    klog(llInfo, "Dispatcher registered with capAdmin + capFs + capNet")
+proc spawnInitialTasks() =
+  discard procSpawn("idle",        idleTaskProc, tcApp,      0)
+  discard procSpawn("shell",       nil,          tcServer,   128)
+  discard procSpawn("ping_server", nil,          tcServer,   100)
+  discard procSpawn("event_srv",   nil,          tcRealtime, 200)
 
-  # Mount filesystem (non-fatal — disk may not be present)
-  discard fsMount()
+var serverLoadBuf: array[512 * 1024, byte]   # 512 KB static buffer for server ELFs
 
-  when defined(testMode):
+proc mountDisk(): bool =
+  ## Mount disk; log result. Returns true on success.
+  if fsMount():
+    klog(llInfo, "boot: FAT volume mounted")
+    return true
+  klog(llWarn, "boot: disk not available — servers will not load")
+  false
+
+proc tryLoadServer(name: cstring): bool =
+  ## Read a server ELF from disk into serverLoadBuf and spawn it ring-3.
+  ## Returns true if the server was spawned successfully.
+  assert fsMounted, "disk must be mounted before loading servers"
+  let (res, nbytes) = fsReadInto(name, cast[ptr byte](addr serverLoadBuf[0]),
+                                  serverLoadBuf.len)
+  if res != fOk:
+    klog(llWarn, "boot: server ELF not found on disk")
+    return false
+  assert nbytes > 0, "fsReadInto returned fOk but nbytes == 0"
+  launchElfBytes(name, cast[ptr byte](addr serverLoadBuf[0]), nbytes)
+  klog(llInfo, "boot: server spawned")
+  true
+
+proc initServers() =
+  regionAllocInit()
+  serverChanRegistryInit()
+  pingServerInit()
+  spawnInitialTasks()
+  spawnDispatcher()
+  if mountDisk():
+    discard tryLoadServer("fs_server.elf")
+
+when defined(testMode):
+  proc runTestMode() =
     klog(llInfo, "testMode: running kernel tests (ring 0)")
     kernelTests.kernelTestMain()
     klog(llInfo, "testMode: kernel tests done — launching user tests (ring 3)")
-    var userTestsBuf = userTestsElf  # mutable copy so we can take addr
-    launchElfBytes("user_tests.elf",
-                   cast[ptr byte](addr userTestsBuf[0]),
-                   userTestsBuf.len)
-    # Give the ring-3 user tests time to run before halting.
-    # They emit TEST DONE: when complete; harness detects it and exits.
+    var userTestsBuf = userTestsElf
+    launchElfBytes("user_tests.elf", cast[ptr byte](addr userTestsBuf[0]), userTestsBuf.len)
     procSleepUntil(int(procTable.current), pitTicks() + 500)
     klog(llInfo, "testMode: complete — halting")
     while true: hlt()
 
-  # Hand off to interactive shell — never returns.
+proc runKernel(bootInfo: ptr BootInfo) =
+  let k = initKernel(bootInfo)
+  if not k.initialized: panic("Kernel initialization failed")
+  kprintln("Starting scheduler...")
+  eventServerInit(); klog(llInfo, "Event server ready")
+  picInit();         klog(llInfo, "PIC 8259A remapped to vectors 0x20-0x2F")
+  initKernelModel()
+  initTimerAndInput()
+  initVirtioDevices()
+  enableInterrupts()
+  initDriverRegistry()
+  discard rtcReadDateTime(); klog(llInfo, "RTC: wall clock read")
+  syscallGateInit();         klog(llInfo, "Syscall gate ready (ring 0<->3)")
+  initServers()
+  when defined(testMode): runTestMode()
   runShell(k.physMgr)
 
 # earlyPutChar / earlyPutString / earlyPutHex are now in core/debug.nim
 
-proc kernelMain*(magicReg: uint32, infoPtr: pointer) {.exportc.} =
-  ## Kernel entry point called by the boot stub (assembly)
-  ## - magicReg: Multiboot magic from EAX (0x2BADB002 for Multiboot1)
-  ## - infoPtr:  Pointer to bootloader info structure from EBX
+proc earlyLogMagic(magicReg: uint32) =
+  earlyPutString("[BOOT] magicReg = ");          earlyPutHex(uint64(magicReg));            earlyPutString("\n")
+  earlyPutString("[BOOT] MULTIBOOT2_MAGIC = ");  earlyPutHex(uint64(MULTIBOOT2_MAGIC));    earlyPutString("\n")
+  earlyPutString("[BOOT] MULTIBOOT1_MAGIC = ");  earlyPutHex(uint64(MULTIBOOT1_MAGIC_BOOT)); earlyPutString("\n")
 
-  # ═══════════════════════════════════════════════════════════════════
-  # PHASE 1: EARLY DEBUG — inline asm, no dependencies
-  # ═══════════════════════════════════════════════════════════════════
-  earlyPutString("\n\n\n")
-  earlyPutString("╔════════════════════════════════════════╗\n")
-  earlyPutString("║        NimixOS Kernel — EARLY DEBUG   ║\n")
-  earlyPutString("╚════════════════════════════════════════╝\n")
-  earlyPutString("\n")
-
-  # ── Magic number ──────────────────────────────────────────────────
-  earlyPutString("[BOOT] magicReg = ")
-  earlyPutHex(uint64(magicReg))
-  earlyPutString("\n")
-  earlyPutString("[BOOT] MULTIBOOT2_MAGIC = ")
-  earlyPutHex(uint64(MULTIBOOT2_MAGIC))
-  earlyPutString("\n")
-  earlyPutString("[BOOT] MULTIBOOT1_MAGIC_BOOT = ")
-  earlyPutHex(uint64(MULTIBOOT1_MAGIC_BOOT))
-  earlyPutString("\n")
-
-  # ── Detect protocol ───────────────────────────────────────────────
-  let detectedProto = detectProtocol(magicReg, infoPtr)
+proc earlyLogProtocol(proto: BootloaderProtocol) =
   earlyPutString("[BOOT] Detected protocol: ")
-  case detectedProto
+  case proto
   of bpMultiboot1: earlyPutString("Multiboot1\n")
   of bpMultiboot2: earlyPutString("Multiboot2\n")
   of bpLimine:     earlyPutString("Limine\n")
   of bpUnknown:    earlyPutString("UNKNOWN\n")
 
-  # ── Info pointer ──────────────────────────────────────────────────
-  earlyPutString("[BOOT] infoPtr = ")
-  earlyPutHex(cast[uint64](infoPtr))
-  earlyPutString("\n")
+proc earlyLogInfoPtr(infoPtr: pointer) =
+  earlyPutString("[BOOT] infoPtr = ");       earlyPutHex(cast[uint64](infoPtr)); earlyPutString("\n")
   earlyPutString("[BOOT] infoPtr & 0xFFF = ")
   earlyPutHex(uint64(cast[uint64](infoPtr) and 0xFFF))
   earlyPutString(" (should be 0 if page-aligned)\n")
 
-  # ═══════════════════════════════════════════════════════════════════
-  # PHASE 2: BOOTLOADER INFO HEADER (compact)
-  # ═══════════════════════════════════════════════════════════════════
-  # For verbose hex dumps, use earlyDumpMultiboot2Info() / earlyDumpHex()
-  # from core/debug.nim
+proc earlyLogMb2Header(infoPtr: pointer; proto: BootloaderProtocol) =
+  if proto != bpMultiboot2: return
+  let base = cast[uint64](infoPtr)
+  let totalSize = cast[ptr uint32](base)[]
+  earlyPutString("[INFO] Multiboot2: total_size="); earlyPutInt(int64(totalSize))
+  earlyPutString(" end=0x"); earlyPutHex(base + uint64(totalSize)); earlyPutString("\n")
 
-  if detectedProto == bpMultiboot2:
-    let base = cast[uint64](infoPtr)
-    let totalSize = cast[ptr uint32](base)[]
-    earlyPutString("[INFO] Multiboot2: total_size=")
-    earlyPutInt(int64(totalSize))
-    earlyPutString(" end=0x")
-    earlyPutHex(base + uint64(totalSize))
-    earlyPutString("\n")
+proc earlyDebug(magicReg: uint32; infoPtr: pointer): BootloaderProtocol =
+  earlyPutString("\n\n\n╔════════════════════════════════════════╗\n")
+  earlyPutString("║        NimixOS Kernel — EARLY DEBUG   ║\n")
+  earlyPutString("╚════════════════════════════════════════╝\n\n")
+  earlyLogMagic(magicReg)
+  let proto = detectProtocol(magicReg, infoPtr)
+  earlyLogProtocol(proto)
+  earlyLogInfoPtr(infoPtr)
+  earlyLogMb2Header(infoPtr, proto)
+  proto
 
-  # ═══════════════════════════════════════════════════════════════════
-  # PHASE 3: PARSE BOOT INFO
-  # ═══════════════════════════════════════════════════════════════════
+proc fallbackBootInfo(bi: var BootInfo) =
+  for i in 0..<32: bi.bootProtocol[i] = '\0'
+  let proto = "Fallback"
+  for i in 0..<proto.len: bi.bootProtocol[i] = proto[i]
+  bi.cpuCount = 1
+  bi.memoryMap.count = 2
+  bi.memoryMap.regions[0] = MemoryRegion(base: PhysAddr(0), length: 640 * KiB, regionType: memAvailable)
+  bi.memoryMap.regions[1] = MemoryRegion(base: PhysAddr(1 * MiB), length: 127 * MiB, regionType: memAvailable)
+
+proc parseOrFallback(magicReg: uint32; infoPtr: pointer; bi: var BootInfo) =
   earlyPutString("\n[PARSE] Calling parseBootInfo...\n")
-
-  var bootInfo: BootInfo
-
-  let parseResult = parseBootInfo(magicReg, infoPtr, bootInfo)
-
+  let res = parseBootInfo(magicReg, infoPtr, bi)
   earlyPutString("[PARSE] parseBootInfo returned\n")
-  if parseResult.isErr:
+  if res.isErr:
     earlyPutString("[PARSE] ERROR: ")
-    let errStr = bootErrorToString(parseResult.error)
-    earlyPutString(cstring(errStr))
+    earlyPutString(cstring(bootErrorToString(res.error)))
     earlyPutString("\n")
-
-    # Fall back to minimal defaults so we can still boot.
-    for i in 0..<32:
-      bootInfo.bootProtocol[i] = '\0'
-    let proto = "Fallback"
-    for i in 0..<proto.len:
-      bootInfo.bootProtocol[i] = proto[i]
-    bootInfo.cpuCount = 1
-    bootInfo.memoryMap.count = 2
-    bootInfo.memoryMap.regions[0] = MemoryRegion(
-      base: PhysAddr(0), length: 640 * KiB, regionType: memAvailable
-    )
-    bootInfo.memoryMap.regions[1] = MemoryRegion(
-      base: PhysAddr(1 * MiB), length: 127 * MiB, regionType: memAvailable
-    )
+    fallbackBootInfo(bi)
   else:
     earlyPutString("[PARSE] SUCCESS\n")
 
-  # ═══════════════════════════════════════════════════════════════════
-  # PHASE 4: PROCEED TO FULL INIT
-  # ═══════════════════════════════════════════════════════════════════
+proc kernelMain*(magicReg: uint32, infoPtr: pointer) {.exportc.} =
+  discard earlyDebug(magicReg, infoPtr)
+  var bootInfo: BootInfo
+  parseOrFallback(magicReg, infoPtr, bootInfo)
   earlyPutString("\n[BOOT] Calling runKernel...\n")
   runKernel(addr bootInfo)
 

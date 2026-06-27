@@ -17,34 +17,39 @@ when not defined(noKernelHardware):
   {.compile: "/home/kl/prog/nimLinux_experiment/vendor/fatfs/ff.c".}
   {.compile: "/home/kl/prog/nimLinux_experiment/vendor/fatfs/ffunicode.c".}
   {.compile: "/home/kl/prog/nimLinux_experiment/vendor/fatfs/ffsystem.c".}
-  {.compile: "/home/kl/prog/nimLinux_experiment/vendor/fatfs/diskio.c".}
+  {.compile: "/home/kl/prog/nimLinux_experiment/vendor/fatfs/diskio_virtio.c".}
+  import ../drivers/virtio/diskio_virtio
 
 import ../core/log
 
 # ── FatFs C types ─────────────────────────────────────────────────────────────
 
 type
-  FATFS  {.importc: "FATFS",  header: "ff.h".} = object
-  FIL*   {.importc: "FIL",    header: "ff.h".} = object
+  FATFS   {.importc: "FATFS",   header: "ff.h".} = object
+  FIL*    {.importc: "FIL",     header: "ff.h".} = object
+  FFDIR   {.importc: "DIR",     header: "ff.h".} = object
   FILINFO {.importc: "FILINFO", header: "ff.h".} = object
-    fsize  {.importc: "fsize".}:  uint32
-    fname  {.importc: "fname".}:  array[256, char]
+    fsize   {.importc: "fsize".}:   uint32
+    fattrib {.importc: "fattrib".}: uint8
+    fname   {.importc: "fname".}:   array[256, char]
 
   FRESULT* = cint   ## FR_OK=0, errors > 0
 
-const FR_OK* = 0.FRESULT
+const
+  FR_OK*   = 0.FRESULT
+  AM_DIR*  = 0x10'u8   ## fattrib bit: entry is a directory
 
 # ── FatFs C API ───────────────────────────────────────────────────────────────
 
 {.passC: "-I/home/kl/prog/nimLinux_experiment/vendor/fatfs".}
 
-proc f_mount(fs: ptr FATFS, path: cstring, opt: uint8): FRESULT
+proc f_mount(fs: ptr FATFS; path: cstring; opt: uint8): FRESULT
   {.importc: "f_mount", header: "ff.h".}
 
-proc f_open*(fp: ptr FIL, path: cstring, mode: uint8): FRESULT
+proc f_open*(fp: ptr FIL; path: cstring; mode: uint8): FRESULT
   {.importc: "f_open", header: "ff.h".}
 
-proc f_read(fp: ptr FIL, buf: pointer, btr: uint32, br: ptr uint32): FRESULT
+proc f_read(fp: ptr FIL; buf: pointer; btr: uint32; br: ptr uint32): FRESULT
   {.importc: "f_read", header: "ff.h".}
 
 proc f_close*(fp: ptr FIL): FRESULT
@@ -53,12 +58,21 @@ proc f_close*(fp: ptr FIL): FRESULT
 proc f_size(fp: ptr FIL): uint32
   {.importc: "f_size", header: "ff.h".}
 
-proc f_stat(path: cstring, fno: ptr FILINFO): FRESULT
+proc f_stat(path: cstring; fno: ptr FILINFO): FRESULT
   {.importc: "f_stat", header: "ff.h".}
 
+proc f_opendir(dp: ptr FFDIR; path: cstring): FRESULT
+  {.importc: "f_opendir", header: "ff.h".}
+
+proc f_readdir(dp: ptr FFDIR; fno: ptr FILINFO): FRESULT
+  {.importc: "f_readdir", header: "ff.h".}
+
+proc f_closedir(dp: ptr FFDIR): FRESULT
+  {.importc: "f_closedir", header: "ff.h".}
+
 const
-  FA_READ*  = 0x01'u8
-  FA_WRITE* = 0x02'u8
+  FA_READ*         = 0x01'u8
+  FA_WRITE*        = 0x02'u8
   FA_OPEN_EXISTING = 0x00'u8
 
 # ── Global filesystem state ───────────────────────────────────────────────────
@@ -117,3 +131,44 @@ proc fsReadInto*(path: cstring, buf: ptr byte, bufLen: int): tuple[res: FileResu
     return (fReadError, 0)
 
   (fOk, int(bytesRead))
+
+# ── Directory listing ─────────────────────────────────────────────────────────
+
+proc appendStr(buf: ptr UncheckedArray[char]; pos, cap: int; s: cstring): int =
+  ## Append cstring s to buf at pos; return new pos. Stops at cap.
+  var i = 0; var p = pos
+  while s[i] != '\0' and p < cap: buf[p] = s[i]; inc i; inc p
+  p
+
+proc appendEntry(buf: ptr UncheckedArray[char]; pos, cap: int;
+                 info: FILINFO): int =
+  ## Append one directory entry line: "[DIR] name\n" or "name\n".
+  var p = pos
+  if (info.fattrib and AM_DIR) != 0:
+    p = appendStr(buf, p, cap, "[DIR] ")
+  p = appendStr(buf, p, cap, cast[cstring](unsafeAddr info.fname[0]))
+  if p < cap: buf[p] = '\n'; inc p
+  p
+
+proc fsDirList*(path: cstring; buf: pointer; bufLen: int): int =
+  ## Fill buf with one "name\n" line per directory entry.
+  ## Returns bytes written, or negative on error.
+  if not fsMounted:
+    when not defined(noKernelHardware):
+      if not fsMount(): return -1
+    else:
+      return -1
+  when defined(noKernelHardware):
+    return -1   # no C layer in test mode
+  else:
+    var dir: FFDIR
+    if f_opendir(addr dir, path) != FR_OK: return -2
+    let b = cast[ptr UncheckedArray[char]](buf)
+    var pos = 0
+    var info: FILINFO
+    while true:
+      if f_readdir(addr dir, addr info) != FR_OK: break
+      if info.fname[0] == '\0': break
+      pos = appendEntry(b, pos, bufLen, info)
+    discard f_closedir(addr dir)
+    pos

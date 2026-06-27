@@ -326,82 +326,93 @@ proc execApp(name: cstring; args: cstring) =
   ## Load a PIE ELF app from disk with given args string.
   cmdExec(name, args)
 
+# ── Shell input helpers ────────────────────────────────────────────────────
+
+proc resetBuf(buf: var array[InputMax, char]; len: var int) =
+  for i in 0..<len: buf[i] = '\0'
+  len = 0
+
+proc handleBackspace(buf: var array[InputMax, char]; len: var int) =
+  if len == 0: return
+  dec len; buf[len] = '\0'
+  defaultSerial.putChar('\b'); defaultSerial.putChar(' '); defaultSerial.putChar('\b')
+
+proc handleChar(buf: var array[InputMax, char]; len: var int; c: char) =
+  if len >= InputMax - 1: return
+  buf[len] = c; inc len; defaultSerial.putChar(c)
+
+proc wasmLog(verb, label: string) =
+  kprint("[wasm] "); kprint(verb); kprint(" "); kprint(label); kprint("\n")
+
+proc runWasm(label: string; data: ptr byte; len: int) =
+  wasmLog("loading", label)
+  if wasmRun(data, len) != wasmOk: wasmLog("error running", label)
+
+proc runWasmWithCaps(label: string; data: ptr byte; len: int) =
+  wasmLog("loading", label)
+  let caps = [CapIpc, CapEvents]
+  if wasmRun(data, len, caps) != wasmOk: wasmLog("error running", label)
+
+proc execArg[N: static int](buf: openArray[char]; first, last, skip: int; app: cstring) =
+  var dst: array[N, char]
+  extractArg(buf, first, last, skip, dst)
+  execApp(app, cast[cstring](addr dst[0]))
+
+proc dispatchCmd(cmd: ShellCommand; buf: openArray[char];
+                 first, last: int; physMgr: PhysicalMemManager) =
+  case cmd
+  of scHelp:        cmdHelp()
+  of scVersion:     cmdVersion()
+  of scMeminfo:     cmdMeminfo(physMgr)
+  of scClear:       cmdClear()
+  of scModel:       cmdModel()
+  of scLoadPing:
+    runWasm("ping",    cast[ptr byte](unsafeAddr pingWasm[0]),     pingWasm.len)
+  of scLoadPingpong:
+    runWasmWithCaps("pingpong", cast[ptr byte](unsafeAddr pingpongWasm[0]), pingpongWasm.len)
+  of scLs:     execApp("ls.elf", "/")
+  of scPs:     execApp("ps.elf", "")
+  of scStats:  execApp("stats.elf", "")
+  of scLspci:  cmdLspci()
+  of scNetinfo: cmdNetinfo()
+  of scRun:
+    var fname: array[128, char]
+    extractArg(buf, first, last, 4, fname); cmdRun(cast[cstring](addr fname[0]))
+  of scExec:
+    var fname: array[128, char]
+    extractArg(buf, first, last, 5, fname); cmdExec(cast[cstring](addr fname[0]))
+  of scKill:
+    var pidBuf: array[32, char]
+    extractArg(buf, first, last, 5, pidBuf); execApp("kill.elf", cast[cstring](addr pidBuf[0]))
+  of scEmpty:   discard
+  of scUnknown: cmdUnknown(buf, first, last)
+
+proc handleEnter(buf: var array[InputMax, char]; len: var int;
+                 physMgr: PhysicalMemManager) =
+  defaultSerial.putChar('\n')
+  let cmd = parseCommand(buf, len)
+  let (first, last) = trimInput(buf, len)
+  dispatchCmd(cmd, buf, first, last, physMgr)
+  resetBuf(buf, len)
+  kprint(ShellPrompt)
+
 # ── Main shell loop ────────────────────────────────────────────────────────
 
-proc runShell*(physMgr: PhysicalMemManager) =
-  ## Enter the interactive shell loop. Never returns.
-  klog(llInfo, "Entering shell")
-  kprint("\n")
-  kprint("========================================\n")
+proc printBanner() =
+  kprint("\n========================================\n")
   kprint("  Welcome to NimixOS\n")
   kprint("  Type 'help' for available commands.\n")
   kprint("========================================\n\n")
 
+proc runShell*(physMgr: PhysicalMemManager) =
+  klog(llInfo, "Entering shell")
+  printBanner()
   var inputBuf: array[InputMax, char]
   var inputLen = 0
-
   kprint(ShellPrompt)
-
   while true:
     let c = defaultSerial.getChar()
-
     case c
-    of '\r', '\n':
-      defaultSerial.putChar('\n')
-      let cmd = parseCommand(inputBuf, inputLen)
-      let (first, last) = trimInput(inputBuf, inputLen)
-      case cmd
-      of scHelp:    cmdHelp()
-      of scVersion: cmdVersion()
-      of scMeminfo: cmdMeminfo(physMgr)
-      of scClear:   cmdClear()
-      of scModel:   cmdModel()
-      of scLoadPing:
-        kprint("[wasm] loading ping...\n")
-        let r = wasmRun(cast[ptr byte](unsafeAddr pingWasm[0]), pingWasm.len)
-        if r != wasmOk:
-          kprint("[wasm] error running ping\n")
-      of scLoadPingpong:
-        kprint("[wasm] loading pingpong...\n")
-        let caps = [CapIpc, CapEvents]
-        let r = wasmRun(cast[ptr byte](unsafeAddr pingpongWasm[0]),
-                        pingpongWasm.len, caps)
-        if r != wasmOk:
-          kprint("[wasm] error running pingpong\n")
-      of scLs:      execApp("ls.elf", "/")
-      of scRun:
-        var fname: array[128, char]
-        extractArg(inputBuf, first, last, 4, fname)
-        cmdRun(cast[cstring](addr fname[0]))
-      of scExec:
-        var fname: array[128, char]
-        extractArg(inputBuf, first, last, 5, fname)
-        cmdExec(cast[cstring](addr fname[0]))
-      of scPs:    execApp("ps.elf", "")
-      of scKill:
-        var pidBuf: array[32, char]
-        extractArg(inputBuf, first, last, 5, pidBuf)
-        execApp("kill.elf", cast[cstring](addr pidBuf[0]))
-      of scStats:  execApp("stats.elf", "")
-      of scLspci:   cmdLspci()
-      of scNetinfo: cmdNetinfo()
-      of scEmpty:  discard
-      of scUnknown: cmdUnknown(inputBuf, first, last)
-      # Reset buffer
-      for i in 0..<inputLen: inputBuf[i] = '\0'
-      inputLen = 0
-      kprint(ShellPrompt)
-
-    of '\b', char(127):
-      if inputLen > 0:
-        dec inputLen
-        inputBuf[inputLen] = '\0'
-        defaultSerial.putChar('\b')
-        defaultSerial.putChar(' ')
-        defaultSerial.putChar('\b')
-
-    else:
-      if inputLen < InputMax - 1:
-        inputBuf[inputLen] = c
-        inc inputLen
-        defaultSerial.putChar(c)
+    of '\r', '\n':       handleEnter(inputBuf, inputLen, physMgr)
+    of '\b', char(127):  handleBackspace(inputBuf, inputLen)
+    else:                handleChar(inputBuf, inputLen, c)

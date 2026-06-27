@@ -102,6 +102,25 @@ block:
   check(reply.len == 42, "len == 42")
   check(reply.token != 0, "token != 0")
 
+# Test 5: boot order invariant — alloc → read → grant call ordering
+block:
+  echo "--- boot order: alloc → read → grant ---"
+  var callOrder: seq[string]
+  proc mockReadOrder(path: cstring; buf: pointer; len: int): (int, int) {.nimcall.} =
+    callOrder.add("read"); (0, 4)
+  proc mockAllocOrder(size: uint64): int {.nimcall.} =
+    callOrder.add("alloc"); 0
+  proc mockFreeOrder(slot: int) {.nimcall.} = discard
+  proc mockBaseOrder(slot: int): uint64 {.nimcall.} = cast[uint64](addr mockBuf[0])
+  proc mockGrantOrder(slot: int; pid: uint32; right: uint32): uint64 {.nimcall.} =
+    callOrder.add("grant"); 1'u64
+  let iface = FsIface(readFile: mockReadOrder, allocSlot: mockAllocOrder,
+                      freeSlot: mockFreeOrder, slotBase: mockBaseOrder, grantCap: mockGrantOrder)
+  let r = fsLogicRead(iface, "/test.elf", 0'u32, 4096)
+  check(r.err == 0,        "fsLogicRead must succeed with mock iface")
+  check(callOrder == @["alloc", "read", "grant"], "call order must be alloc→read→grant")
+  echo "PASS: fsLogicRead call order: alloc → read → grant"
+
 echo ""
 echo "=== Results: " & $passed & " passed, " & $failed & " failed ==="
 if failed > 0:

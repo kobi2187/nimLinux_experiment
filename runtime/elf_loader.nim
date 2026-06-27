@@ -5,32 +5,26 @@
 ## For PIE: allocates a region, copies segments, applies R_X86_64_RELATIVE
 ## relocations, patches weak ABI symbols with kernel function addresses,
 ## then calls appMain().
-##
-## ELF spec: https://refspecs.linuxfoundation.org/elf/elf.pdf
-## x86_64 ABI: https://refspecs.linuxfoundation.org/elf/x86_64-abi-0.99.pdf
 
 import ../core/log
 
 # ── ELF64 structs ─────────────────────────────────────────────────────────────
 
 const
-  ElfMagic     = [0x7F'u8, ord('E'), ord('L'), ord('F')]
-  ElfClass64   = 2'u8
-  ElfDataLE    = 1'u8
-  ElfTypeExec  = 2'u16   ## Non-PIE executable
-  ElfTypeDyn   = 3'u16   ## PIE executable (ET_DYN)
-  ElfMachX64   = 0x3E'u16
-  PT_LOAD      = 1'u32
-  PT_DYNAMIC   = 2'u32
-  DT_RELA      = 7'u64   ## Address of RELA table
-  DT_RELASZ    = 8'u64   ## Total size of RELA table in bytes
-  DT_RELAENT   = 9'u64   ## Size of one RELA entry (should be 24)
+  ElfMagic          = [0x7F'u8, ord('E'), ord('L'), ord('F')]
+  ElfClass64        = 2'u8
+  ElfDataLE         = 1'u8
+  ElfTypeExec*      = 2'u16
+  ElfTypeDyn*       = 3'u16
+  ElfMachX64        = 0x3E'u16
+  PT_LOAD           = 1'u32
+  PT_DYNAMIC        = 2'u32
+  DT_RELA           = 7'u64
+  DT_RELASZ         = 8'u64
+  DT_RELAENT        = 9'u64
   R_X86_64_RELATIVE = 8'u32
-  STT_FUNC     = 2'u8
-  STB_WEAK     = 2'u8
-  SHT_SYMTAB   = 2'u32
-  SHT_STRTAB   = 3'u32
-  SHT_RELA     = 4'u32
+  STB_WEAK          = 2'u8
+  SHT_SYMTAB        = 2'u32
 
 type
   Elf64Ehdr {.packed.} = object
@@ -73,15 +67,15 @@ type
 
   Elf64Sym {.packed.} = object
     st_name:  uint32
-    st_info:  uint8    ## (binding << 4) | type
+    st_info:  uint8
     st_other: uint8
     st_shndx: uint16
     st_value: uint64
     st_size:  uint64
 
   Elf64Rela {.packed.} = object
-    r_offset: uint64   ## Address of the slot to patch
-    r_info:   uint64   ## Symbol index (high 32) | reloc type (low 32)
+    r_offset: uint64
+    r_info:   uint64
     r_addend: int64
 
   Elf64Dyn {.packed.} = object
@@ -98,235 +92,240 @@ type
     elfBad64
     elfBadEndian
     elfBadMachine
-    elfNotExec        ## Not ET_EXEC or ET_DYN
+    elfNotExec
     elfBadPhdr
     elfLoadOob
-    elfNoRegion       ## allocRegion returned nil
-    elfBadReloc       ## Unknown relocation type
+    elfNoRegion
+    elfBadReloc
 
   ElfLoadResult* = object
     err*:      ElfError
-    entry*:    uint64   ## Absolute entry point after relocation
-    loadBase*: uint64   ## Base address where the binary was placed
-    loadEnd*:  uint64   ## End of mapped region
-    appMain*:  uint64   ## Address of appMain symbol (0 if not found)
+    entry*:    uint64
+    loadBase*: uint64
+    loadEnd*:  uint64
+    appMain*:  uint64
+
+  AbiPatch* = object
+    name*: cstring
+    nr*:   uint64
+
+# ── Type aliases for readability ──────────────────────────────────────────────
+
+type
+  Bytes = ptr UncheckedArray[uint8]
+  Ehdr  = ptr Elf64Ehdr
+  Phdr  = ptr Elf64Phdr
+  Shdr  = ptr Elf64Shdr
+  Sym   = ptr Elf64Sym
+  Rela  = ptr Elf64Rela
+  Dyn   = ptr Elf64Dyn
+
+# ── Pointer arithmetic helpers ────────────────────────────────────────────────
+
+proc atOffset(base: uint64; off: uint64): uint64 {.inline.} = base + off
+proc asBytes(p: uint64): Bytes {.inline.} = cast[Bytes](p)
+proc asEhdr(p: uint64): Ehdr  {.inline.} = cast[Ehdr](p)
+proc asPhdr(p: uint64): Phdr  {.inline.} = cast[Phdr](p)
+proc asShdr(p: uint64): Shdr  {.inline.} = cast[Shdr](p)
+proc asSym(p: uint64):  Sym   {.inline.} = cast[Sym](p)
+proc asRela(p: uint64): Rela  {.inline.} = cast[Rela](p)
+proc asDyn(p: uint64):  Dyn   {.inline.} = cast[Dyn](p)
+proc asU64(p: uint64):  ptr uint64 {.inline.} = cast[ptr uint64](p)
 
 # ── Validation ────────────────────────────────────────────────────────────────
 
 proc elfCheck*(data: ptr byte; size: int): ElfError =
   if size < int(sizeof(Elf64Ehdr)): return elfTooSmall
-  let h = cast[ptr Elf64Ehdr](data)
+  let h = cast[Ehdr](data)
   if h.e_ident[0] != ElfMagic[0] or h.e_ident[1] != ElfMagic[1] or
      h.e_ident[2] != ElfMagic[2] or h.e_ident[3] != ElfMagic[3]:
     return elfBadMagic
-  if h.e_ident[4] != ElfClass64:  return elfBad64
-  if h.e_ident[5] != ElfDataLE:   return elfBadEndian
-  if h.e_machine  != ElfMachX64:  return elfBadMachine
-  if h.e_type != ElfTypeExec and h.e_type != ElfTypeDyn:
-    return elfNotExec
+  if h.e_ident[4] != ElfClass64: return elfBad64
+  if h.e_ident[5] != ElfDataLE:  return elfBadEndian
+  if h.e_machine  != ElfMachX64: return elfBadMachine
+  if h.e_type != ElfTypeExec and h.e_type != ElfTypeDyn: return elfNotExec
   elfOk
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── String helpers ────────────────────────────────────────────────────────────
 
-proc cstrEq(a: ptr UncheckedArray[byte]; b: cstring): bool =
+proc cstrEq(a: Bytes; b: cstring): bool =
   var i = 0
   while b[i] != '\0':
     if a[i] != uint8(b[i]): return false
     inc i
   a[i] == 0
 
-# ── PIE loader ────────────────────────────────────────────────────────────────
+# ── Segment mapping ───────────────────────────────────────────────────────────
 
-type
-  AbiPatch* = object
-    ## One ABI symbol to patch: the weak stub gets overwritten with
-    ## `movabs rax, <nr>; syscall` so the app issues a syscall with
-    ## the syscall number baked in.
-    name*: cstring
-    nr*:   uint64   ## NimixSyscall ordinal
+proc copySegment(dst, src: Bytes; filesz, memsz: uint64) =
+  for j in 0'u64 ..< filesz: dst[j] = src[j]
+  for j in filesz ..< memsz:  dst[j] = 0'u8
+
+proc mapLoadSegment(r: var ElfLoadResult; fileBase, bias: uint64;
+                    ph: Phdr; fileSize: int): bool =
+  if ph.p_offset + ph.p_filesz > uint64(fileSize):
+    r.err = elfBadPhdr; return false
+  if ph.p_vaddr + ph.p_memsz > uint64(4 * 1024 * 1024):
+    klogInt(llError, "ELF PIE: segment overflow at vaddr=0x", int64(ph.p_vaddr))
+    r.err = elfLoadOob; return false
+  copySegment(asBytes(bias + ph.p_vaddr),
+              asBytes(atOffset(fileBase, ph.p_offset)),
+              ph.p_filesz, ph.p_memsz)
+  if ph.p_vaddr < r.loadBase: r.loadBase = ph.p_vaddr
+  let segEnd = ph.p_vaddr + ph.p_memsz
+  if segEnd > r.loadEnd: r.loadEnd = segEnd
+  klogInt(llInfo, "ELF PIE: mapped segment at bias+0x", int64(ph.p_vaddr))
+  true
+
+proc mapAllLoadSegments(r: var ElfLoadResult; fileBase, bias: uint64;
+                        h: Ehdr; fileSize: int): bool =
+  r.loadBase = high(uint64)
+  r.loadEnd  = 0
+  for i in 0'u16 ..< h.e_phnum:
+    let phOff = h.e_phoff + uint64(i) * uint64(h.e_phentsize)
+    if phOff + uint64(sizeof(Elf64Phdr)) > uint64(fileSize):
+      r.err = elfBadPhdr; return false
+    let ph = asPhdr(atOffset(fileBase, phOff))
+    if ph.p_type != PT_LOAD: continue
+    if not mapLoadSegment(r, fileBase, bias, ph, fileSize): return false
+  r.loadBase += bias
+  r.loadEnd  += bias
+  true
+
+# ── RELA relocations ──────────────────────────────────────────────────────────
+
+proc parseDynamic(fileBase, bias: uint64; ph: Phdr;
+                  relaAddr, relaSz, relaEnt: var uint64) =
+  let dynCount = ph.p_filesz div uint64(sizeof(Elf64Dyn))
+  let dynBase  = bias + ph.p_vaddr
+  for d in 0'u64 ..< dynCount:
+    let entry = asDyn(dynBase + d * uint64(sizeof(Elf64Dyn)))
+    case entry.d_tag
+    of DT_RELA:    relaAddr = bias + entry.d_val
+    of DT_RELASZ:  relaSz   = entry.d_val
+    of DT_RELAENT: relaEnt  = entry.d_val
+    else: discard
+
+proc findDynamic(fileBase, bias: uint64; h: Ehdr;
+                 relaAddr, relaSz, relaEnt: var uint64) =
+  for i in 0'u16 ..< h.e_phnum:
+    let ph = asPhdr(atOffset(fileBase, h.e_phoff + uint64(i) * uint64(h.e_phentsize)))
+    if ph.p_type == PT_DYNAMIC:
+      parseDynamic(fileBase, bias, ph, relaAddr, relaSz, relaEnt)
+      break
+
+proc applyRelative(relaAddr, relaSz, relaEnt, bias: uint64) =
+  let count = relaSz div relaEnt
+  for i in 0'u64 ..< count:
+    let rela = asRela(relaAddr + i * relaEnt)
+    let relocType = uint32(rela.r_info and 0xFFFF_FFFF'u64)
+    if relocType == R_X86_64_RELATIVE:
+      asU64(rela.r_offset + bias)[] = bias + uint64(rela.r_addend)
+    elif relocType != 0:
+      klogInt(llWarn, "ELF PIE: unknown reloc type ", int64(relocType))
+  klogInt(llInfo, "ELF PIE: applied relocations, count=", int64(count))
+
+proc applyRelocations(fileBase, bias: uint64; h: Ehdr) =
+  var relaAddr = 0'u64
+  var relaSz   = 0'u64
+  var relaEnt  = 24'u64
+  findDynamic(fileBase, bias, h, relaAddr, relaSz, relaEnt)
+  if relaAddr != 0 and relaSz > 0:
+    applyRelative(relaAddr, relaSz, relaEnt, bias)
+
+# ── Symbol table — ABI patching ───────────────────────────────────────────────
+
+proc emitSyscallTrampoline(stubAddr, nr: uint64) =
+  let stub = asBytes(stubAddr)
+  stub[0] = 0x48; stub[1] = 0xB8        # movabs rax, imm64
+  for k in 0..<8: stub[2+k] = uint8((nr shr (k*8)) and 0xFF)
+  stub[10] = 0x0F; stub[11] = 0x05      # syscall
+
+proc patchSymbol(sym: Sym; namePtr: Bytes; bias: uint64;
+                 patches: ptr UncheckedArray[AbiPatch]; patchCount: int) =
+  if (sym.st_info shr 4) != STB_WEAK: return
+  for p in 0 ..< patchCount:
+    if cstrEq(namePtr, patches[p].name):
+      emitSyscallTrampoline(bias + sym.st_value, patches[p].nr)
+      klog(llInfo, "ELF PIE: patched ABI stub → syscall")
+      break
+
+proc findAppMain(sym: Sym; namePtr: Bytes; bias: uint64): uint64 =
+  if cstrEq(namePtr, "appMain"): bias + sym.st_value else: 0
+
+proc walkSymtab(fileBase, bias: uint64; symSh, strSh: Shdr;
+                patches: ptr UncheckedArray[AbiPatch]; patchCount: int;
+                appMainAddr: var uint64) =
+  let symBase  = atOffset(fileBase, symSh.sh_offset)
+  let strBase  = asBytes(atOffset(fileBase, strSh.sh_offset))
+  let symCount = symSh.sh_size div uint64(sizeof(Elf64Sym))
+  for i in 0'u64 ..< symCount:
+    let sym = asSym(symBase + i * uint64(sizeof(Elf64Sym)))
+    if sym.st_value == 0: continue
+    let namePtr = asBytes(cast[uint64](addr strBase[sym.st_name]))
+    patchSymbol(sym, namePtr, bias, patches, patchCount)
+    let m = findAppMain(sym, namePtr, bias)
+    if m != 0: appMainAddr = m
+
+proc findSymtab(fileBase: uint64; h: Ehdr): tuple[sym, str: Shdr] =
+  let shBase = atOffset(fileBase, h.e_shoff)
+  for i in 0 ..< int(h.e_shnum):
+    let sh = asShdr(shBase + uint64(i) * uint64(h.e_shentsize))
+    if sh.sh_type == SHT_SYMTAB:
+      return (sh, asShdr(shBase + uint64(sh.sh_link) * uint64(h.e_shentsize)))
+  (nil, nil)
+
+proc patchAbiSymbols(fileBase, bias: uint64; h: Ehdr;
+                     patches: ptr UncheckedArray[AbiPatch]; patchCount: int;
+                     appMainAddr: var uint64) =
+  if h.e_shoff == 0 or h.e_shnum == 0: return
+  let (symSh, strSh) = findSymtab(fileBase, h)
+  if symSh == nil: return
+  walkSymtab(fileBase, bias, symSh, strSh, patches, patchCount, appMainAddr)
+
+# ── PIE loader ────────────────────────────────────────────────────────────────
 
 proc elfLoadPie*(data: ptr byte; size: int;
                  regionBase: uint64;
                  patches: ptr UncheckedArray[AbiPatch];
                  patchCount: int;
                  regionSize: uint64 = 4 * 1024 * 1024): ElfLoadResult =
-  ## Load a PIE ELF (ET_DYN) into `regionBase`.
-  ## Validates each PT_LOAD segment fits within [0, regionSize) before mapping.
-  ## Applies R_X86_64_RELATIVE relocations from .rela.dyn.
-  ## Patches weak ABI symbols by overwriting their stub bodies with
-  ## `movabs rax, <nr>; syscall` trampolines.
-  ## Fills result.appMain with the absolute address of appMain.
-
   result.err = elfCheck(data, size)
   if result.err != elfOk: return
-
   let fileBase = cast[uint64](data)
-  let hdr      = cast[ptr Elf64Ehdr](data)
-  let bias     = regionBase  ## relocation bias: add to all relative addrs
-
-  # ── 1. Map PT_LOAD segments ────────────────────────────────────────────────
-  result.loadBase = high(uint64)
-  result.loadEnd  = 0
-
-  for i in 0'u16 ..< hdr.e_phnum:
-    let phOff = hdr.e_phoff + uint64(i) * uint64(hdr.e_phentsize)
-    if phOff + uint64(sizeof(Elf64Phdr)) > uint64(size):
-      result.err = elfBadPhdr; return
-    let ph = cast[ptr Elf64Phdr](fileBase + phOff)
-    if ph.p_type != PT_LOAD: continue
-    if ph.p_offset + ph.p_filesz > uint64(size):
-      result.err = elfBadPhdr; return
-    if ph.p_vaddr + ph.p_memsz > regionSize:
-      klogInt(llError, "ELF PIE: segment overflow at vaddr=0x", int64(ph.p_vaddr))
-      result.err = elfLoadOob; return
-
-    let dst = cast[ptr UncheckedArray[byte]](bias + ph.p_vaddr)
-    let src = cast[ptr UncheckedArray[byte]](fileBase + ph.p_offset)
-    for j in 0'u64 ..< ph.p_filesz:
-      dst[j] = src[j]
-    for j in ph.p_filesz ..< ph.p_memsz:
-      dst[j] = 0'u8
-
-    if ph.p_vaddr < result.loadBase: result.loadBase = ph.p_vaddr
-    let segEnd = ph.p_vaddr + ph.p_memsz
-    if segEnd > result.loadEnd: result.loadEnd = segEnd
-    klogInt(llInfo, "ELF PIE: mapped segment at bias+0x", int64(ph.p_vaddr))
-
-  result.loadBase += bias
-  result.loadEnd  += bias
-  result.entry     = bias + hdr.e_entry
-
-  # ── 2. Apply R_X86_64_RELATIVE from .rela.dyn (via PT_DYNAMIC) ────────────
-  var relaAddr  = 0'u64
-  var relaSz    = 0'u64
-  var relaEnt   = 24'u64  ## default RELA entry size
-
-  for i in 0'u16 ..< hdr.e_phnum:
-    let phOff = hdr.e_phoff + uint64(i) * uint64(hdr.e_phentsize)
-    let ph = cast[ptr Elf64Phdr](fileBase + phOff)
-    if ph.p_type != PT_DYNAMIC: continue
-    let dynCount = ph.p_filesz div uint64(sizeof(Elf64Dyn))
-    let dynBase  = bias + ph.p_vaddr
-    for d in 0'u64 ..< dynCount:
-      let entry = cast[ptr Elf64Dyn](dynBase + d * uint64(sizeof(Elf64Dyn)))
-      case entry.d_tag
-      of DT_RELA:    relaAddr = bias + entry.d_val
-      of DT_RELASZ:  relaSz   = entry.d_val
-      of DT_RELAENT: relaEnt  = entry.d_val
-      else: discard
-    break
-
-  if relaAddr != 0 and relaSz > 0:
-    let count = relaSz div relaEnt
-    for i in 0'u64 ..< count:
-      let rela = cast[ptr Elf64Rela](relaAddr + i * relaEnt)
-      let relocType = uint32(rela.r_info and 0xFFFF_FFFF'u64)
-      if relocType == R_X86_64_RELATIVE:
-        # *slot = bias + addend
-        let slot = cast[ptr uint64](rela.r_offset + bias)
-        slot[] = bias + uint64(rela.r_addend)
-      elif relocType == 0:
-        discard  # R_X86_64_NONE — skip
-      else:
-        klogInt(llWarn, "ELF PIE: unknown reloc type ", int64(relocType))
-    klogInt(llInfo, "ELF PIE: applied relocations, count=", int64(count))
-
-  # ── 3. Patch weak ABI stubs via .symtab ───────────────────────────────────
-  # Walk section headers to find .symtab and its associated .strtab.
-  if hdr.e_shoff == 0 or hdr.e_shnum == 0: discard  # no sections, skip
-  else:
-    let shBase = fileBase + hdr.e_shoff
-    var symtabIdx = -1
-    var strtabIdx = -1
-
-    for i in 0 ..< int(hdr.e_shnum):
-      let sh = cast[ptr Elf64Shdr](shBase + uint64(i) * uint64(hdr.e_shentsize))
-      if sh.sh_type == SHT_SYMTAB:
-        symtabIdx = i
-        strtabIdx = int(sh.sh_link)
-        break
-
-    if symtabIdx >= 0 and strtabIdx >= 0:
-      let symSh = cast[ptr Elf64Shdr](shBase + uint64(symtabIdx) * uint64(hdr.e_shentsize))
-      let strSh = cast[ptr Elf64Shdr](shBase + uint64(strtabIdx) * uint64(hdr.e_shentsize))
-      let symBase = fileBase + symSh.sh_offset
-      let strBase = cast[ptr UncheckedArray[byte]](fileBase + strSh.sh_offset)
-      let symCount = symSh.sh_size div uint64(sizeof(Elf64Sym))
-
-      for i in 0'u64 ..< symCount:
-        let sym = cast[ptr Elf64Sym](symBase + i * uint64(sizeof(Elf64Sym)))
-        if sym.st_value == 0: continue
-        let binding = sym.st_info shr 4
-        if binding != STB_WEAK: continue  # only patch weak stubs
-
-        let namePtr = cast[ptr UncheckedArray[byte]](addr strBase[sym.st_name])
-
-        # Check if this symbol matches any requested ABI patch
-        for p in 0 ..< patchCount:
-          if cstrEq(namePtr, patches[p].name):
-            # Write: movabs rax, <nr>   (10 bytes: 48 B8 <8-byte-imm>)
-            #        syscall            (2 bytes:  0F 05)
-            # The syscall number is baked in; the kernel's syscall_entry
-            # dispatches through syscallTable[nr] to the right ABI proc.
-            let stubAddr = bias + sym.st_value
-            let stub = cast[ptr UncheckedArray[byte]](stubAddr)
-            stub[0] = 0x48; stub[1] = 0xB8  # REX.W mov rax, imm64
-            let nr = patches[p].nr
-            stub[2] = uint8(nr and 0xFF)
-            stub[3] = uint8((nr shr 8)  and 0xFF)
-            stub[4] = uint8((nr shr 16) and 0xFF)
-            stub[5] = uint8((nr shr 24) and 0xFF)
-            stub[6] = uint8((nr shr 32) and 0xFF)
-            stub[7] = uint8((nr shr 40) and 0xFF)
-            stub[8] = uint8((nr shr 48) and 0xFF)
-            stub[9] = uint8((nr shr 56) and 0xFF)
-            stub[10] = 0x0F; stub[11] = 0x05  # syscall
-            klog(llInfo, "ELF PIE: patched ABI stub → syscall")
-            break
-
-        # Also capture appMain address
-        if cstrEq(namePtr, "appMain"):
-          result.appMain = bias + sym.st_value
-
-      # appMain may be a global (non-weak) symbol — scan all
-      for i in 0'u64 ..< symCount:
-        let sym = cast[ptr Elf64Sym](symBase + i * uint64(sizeof(Elf64Sym)))
-        if sym.st_value == 0: continue
-        let namePtr = cast[ptr UncheckedArray[byte]](addr strBase[sym.st_name])
-        if cstrEq(namePtr, "appMain"):
-          result.appMain = bias + sym.st_value
-          break
-
+  let h        = asEhdr(fileBase)
+  let bias     = regionBase
+  if not mapAllLoadSegments(result, fileBase, bias, h, size): return
+  result.entry = bias + h.e_entry
+  applyRelocations(fileBase, bias, h)
+  patchAbiSymbols(fileBase, bias, h, patches, patchCount, result.appMain)
   klogInt(llInfo, "ELF PIE: appMain at 0x", int64(result.appMain))
   result.err = elfOk
 
-# ── Non-PIE loader (kept for ET_EXEC binaries) ────────────────────────────────
+# ── Non-PIE loader ────────────────────────────────────────────────────────────
 
 proc elfLoad*(data: ptr byte; size: int): ElfLoadResult =
   result.err = elfCheck(data, size)
   if result.err != elfOk:
-    klogInt(llError, "ELF check failed: ", int64(ord(result.err)))
-    return
-  let hdr  = cast[ptr Elf64Ehdr](data)
+    klogInt(llError, "ELF check failed: ", int64(ord(result.err))); return
+  let h    = cast[Ehdr](data)
   let base = cast[uint64](data)
-  result.entry    = hdr.e_entry
+  result.entry    = h.e_entry
   result.loadBase = high(uint64)
   result.loadEnd  = 0
-  for i in 0'u16 ..< hdr.e_phnum:
-    let phOff = hdr.e_phoff + uint64(i) * uint64(hdr.e_phentsize)
+  for i in 0'u16 ..< h.e_phnum:
+    let phOff = h.e_phoff + uint64(i) * uint64(h.e_phentsize)
     if phOff + uint64(sizeof(Elf64Phdr)) > uint64(size):
       result.err = elfBadPhdr; return
-    let ph = cast[ptr Elf64Phdr](base + phOff)
+    let ph = asPhdr(atOffset(base, phOff))
     if ph.p_type != PT_LOAD: continue
     if ph.p_offset + ph.p_filesz > uint64(size):
       result.err = elfBadPhdr; return
-    let dst = cast[ptr UncheckedArray[byte]](ph.p_vaddr)
-    let src = cast[ptr UncheckedArray[byte]](base + ph.p_offset)
-    for j in 0'u64 ..< ph.p_filesz: dst[j] = src[j]
-    for j in ph.p_filesz ..< ph.p_memsz: dst[j] = 0'u8
+    copySegment(asBytes(ph.p_vaddr), asBytes(atOffset(base, ph.p_offset)),
+                ph.p_filesz, ph.p_memsz)
     if ph.p_vaddr < result.loadBase: result.loadBase = ph.p_vaddr
     let segEnd = ph.p_vaddr + ph.p_memsz
     if segEnd > result.loadEnd: result.loadEnd = segEnd
     klogInt(llInfo, "ELF: loaded segment at 0x", int64(ph.p_vaddr))
-  klogInt(llInfo, "ELF: entry point 0x", int64(hdr.e_entry))
+  klogInt(llInfo, "ELF: entry point 0x", int64(h.e_entry))
   result.err = elfOk

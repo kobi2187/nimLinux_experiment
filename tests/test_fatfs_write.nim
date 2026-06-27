@@ -41,9 +41,25 @@ proc testMkdirMockMount() =
   assert r == wMountError or r == wMkdirError
   echo "PASS: fsMkdir returns error when not mounted"
 
+proc testDirListNotMounted() =
+  fsMounted = false
+  var buf: array[256, char]
+  let r = fsDirList("/", addr buf[0], buf.len)
+  assert r < 0, "fsDirList must return negative when not mounted"
+  echo "PASS: fsDirList returns error when not mounted"
+
+proc testFsConstants() =
+  assert FA_READ  == 0x01'u8
+  assert FA_WRITE == 0x02'u8
+  assert AM_DIR   == 0x10'u8
+  assert FR_OK    == 0.FRESULT
+  echo "PASS: fs constants correct"
+
 testWriteResultEnum()
 testWriteFileMockMount()
 testAppendFileMockMount()
 testDeleteFileMockMount()
 testMkdirMockMount()
+testDirListNotMounted()
+testFsConstants()
 echo "All fatfs_write tests passed."

@@ -15,8 +15,11 @@ proc abiFsWrite*(path: cstring; buf: pointer; len: int): int {.nimcall.} =
     -1
 
 proc abiFsReadDir*(path: cstring; buf: pointer; len: int): int {.nimcall.} =
-  ## Directory listing — not yet implemented.
-  -1
+  ## List directory at path into buf. Returns bytes written or negative on error.
+  when defined(kernelFull):
+    fsDirList(path, buf, len)
+  else:
+    -1
 
 proc abiFsRead*(path: cstring; buf: pointer; len: int): int {.nimcall.} =
   ## Read entire file into buf via fatfs. Returns bytes read, or negative on error.
