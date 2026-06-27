@@ -19,10 +19,16 @@ const
   ElfMachX64        = 0x3E'u16
   PT_LOAD           = 1'u32
   PT_DYNAMIC        = 2'u32
+  PT_INTERP*        = 3'u32
   DT_RELA           = 7'u64
   DT_RELASZ         = 8'u64
   DT_RELAENT        = 9'u64
-  R_X86_64_RELATIVE = 8'u32
+  DT_SYMTAB         = 6'u64
+  DT_SYMENT         = 11'u64
+  R_X86_64_64*        = 1'u32
+  R_X86_64_RELATIVE   = 8'u32
+  R_X86_64_GLOB_DAT*  = 6'u32
+  R_X86_64_JUMP_SLOT* = 7'u32
   STB_WEAK          = 2'u8
   SHT_SYMTAB        = 2'u32
 
@@ -65,7 +71,7 @@ type
     sh_addralign: uint64
     sh_entsize:   uint64
 
-  Elf64Sym {.packed.} = object
+  Elf64Sym* {.packed.} = object
     st_name:  uint32
     st_info:  uint8
     st_other: uint8
@@ -73,10 +79,10 @@ type
     st_value: uint64
     st_size:  uint64
 
-  Elf64Rela {.packed.} = object
-    r_offset: uint64
-    r_info:   uint64
-    r_addend: int64
+  Elf64Rela* {.packed.} = object
+    r_offset*: uint64
+    r_info*:   uint64
+    r_addend*: int64
 
   Elf64Dyn {.packed.} = object
     d_tag: uint64
@@ -186,6 +192,7 @@ proc mapAllLoadSegments(r: var ElfLoadResult; fileBase, bias: uint64;
     if phOff + uint64(sizeof(Elf64Phdr)) > uint64(fileSize):
       r.err = elfBadPhdr; return false
     let ph = asPhdr(atOffset(fileBase, phOff))
+    if ph.p_type == PT_INTERP: klog(llInfo, "ELF PIE: PT_INTERP stripped"); continue
     if ph.p_type != PT_LOAD: continue
     if not mapLoadSegment(r, fileBase, bias, ph, fileSize): return false
   r.loadBase += bias
@@ -194,44 +201,58 @@ proc mapAllLoadSegments(r: var ElfLoadResult; fileBase, bias: uint64;
 
 # ── RELA relocations ──────────────────────────────────────────────────────────
 
-proc parseDynamic(fileBase, bias: uint64; ph: Phdr;
-                  relaAddr, relaSz, relaEnt: var uint64) =
+type DynInfo = object
+  relaAddr, relaSz, relaEnt: uint64
+  symtabAddr, syment:        uint64
+
+proc parseDynamic(bias: uint64; ph: Phdr; di: var DynInfo) =
   let dynCount = ph.p_filesz div uint64(sizeof(Elf64Dyn))
   let dynBase  = bias + ph.p_vaddr
   for d in 0'u64 ..< dynCount:
     let entry = asDyn(dynBase + d * uint64(sizeof(Elf64Dyn)))
     case entry.d_tag
-    of DT_RELA:    relaAddr = bias + entry.d_val
-    of DT_RELASZ:  relaSz   = entry.d_val
-    of DT_RELAENT: relaEnt  = entry.d_val
+    of DT_RELA:    di.relaAddr   = bias + entry.d_val
+    of DT_RELASZ:  di.relaSz     = entry.d_val
+    of DT_RELAENT: di.relaEnt    = entry.d_val
+    of DT_SYMTAB:  di.symtabAddr = bias + entry.d_val
+    of DT_SYMENT:  di.syment     = entry.d_val
     else: discard
 
-proc findDynamic(fileBase, bias: uint64; h: Ehdr;
-                 relaAddr, relaSz, relaEnt: var uint64) =
+proc findDynamic(fileBase, bias: uint64; h: Ehdr; di: var DynInfo) =
   for i in 0'u16 ..< h.e_phnum:
     let ph = asPhdr(atOffset(fileBase, h.e_phoff + uint64(i) * uint64(h.e_phentsize)))
     if ph.p_type == PT_DYNAMIC:
-      parseDynamic(fileBase, bias, ph, relaAddr, relaSz, relaEnt)
+      parseDynamic(bias, ph, di)
       break
 
-proc applyRelative(relaAddr, relaSz, relaEnt, bias: uint64) =
-  let count = relaSz div relaEnt
+proc symValue(di: DynInfo; symIdx, bias: uint64): uint64 =
+  ## Look up st_value for symbol index in .dynsym, add bias.
+  if di.symtabAddr == 0 or symIdx == 0: return 0
+  bias + asSym(di.symtabAddr + symIdx * di.syment).st_value
+
+proc applyOneReloc(rela: Rela; di: DynInfo; bias: uint64) =
+  let relocType = uint32(rela.r_info and 0xFFFF_FFFF'u64)
+  let symIdx    = rela.r_info shr 32
+  let slot      = asU64(rela.r_offset + bias)
+  case relocType
+  of R_X86_64_RELATIVE:  slot[] = bias + uint64(rela.r_addend)
+  of R_X86_64_64:        slot[] = symValue(di, symIdx, bias) + uint64(rela.r_addend)
+  of R_X86_64_GLOB_DAT:  slot[] = symValue(di, symIdx, bias) + uint64(rela.r_addend)
+  of R_X86_64_JUMP_SLOT: slot[] = symValue(di, symIdx, 0'u64)  # no bias for PLT
+  of 0'u32: discard  # R_X86_64_NONE
+  else: klogInt(llWarn, "ELF PIE: unknown reloc type ", int64(relocType))
+
+proc applyAllRelocs(di: DynInfo; bias: uint64) =
+  let count = di.relaSz div di.relaEnt
   for i in 0'u64 ..< count:
-    let rela = asRela(relaAddr + i * relaEnt)
-    let relocType = uint32(rela.r_info and 0xFFFF_FFFF'u64)
-    if relocType == R_X86_64_RELATIVE:
-      asU64(rela.r_offset + bias)[] = bias + uint64(rela.r_addend)
-    elif relocType != 0:
-      klogInt(llWarn, "ELF PIE: unknown reloc type ", int64(relocType))
+    applyOneReloc(asRela(di.relaAddr + i * di.relaEnt), di, bias)
   klogInt(llInfo, "ELF PIE: applied relocations, count=", int64(count))
 
 proc applyRelocations(fileBase, bias: uint64; h: Ehdr) =
-  var relaAddr = 0'u64
-  var relaSz   = 0'u64
-  var relaEnt  = 24'u64
-  findDynamic(fileBase, bias, h, relaAddr, relaSz, relaEnt)
-  if relaAddr != 0 and relaSz > 0:
-    applyRelative(relaAddr, relaSz, relaEnt, bias)
+  var di = DynInfo(relaEnt: 24'u64, syment: 24'u64)
+  findDynamic(fileBase, bias, h, di)
+  if di.relaAddr != 0 and di.relaSz > 0:
+    applyAllRelocs(di, bias)
 
 # ── Symbol table — ABI patching ───────────────────────────────────────────────
 
