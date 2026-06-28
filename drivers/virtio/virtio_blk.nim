@@ -8,10 +8,14 @@
 
 import virtio_regs
 import virtqueue
+import virtio_transport
+import virtio_pci_transport
 import ../pci/pci_bar
 import ../pci/pci_config
 import ../../core/log
+import ../../core/types
 import ../../mm/region_allocator
+import ../../mm/device_mmio
 
 const
   VirtioBlkDevice* = 0x1001'u16
@@ -42,6 +46,8 @@ type
     queueMem*:  pointer
     irqLine*:   uint8
     numSectors*: uint64
+    transport*: VirtioTransport   ## set when the device speaks virtio-pci
+    usePci*:    bool              ## true → kick via transport, not MMIO
 
 var gVirtioBlk*:      VirtioBlk
 var gVirtioBlkReady*: bool
@@ -122,7 +128,7 @@ proc blkReadCap(base: uint64): uint64 =
 
 proc blkSpinUsed(vq: var Virtqueue): bool =
   var i = 0
-  while vq.lastUsed == vq.used.idx:
+  while vq.lastUsed == usedIdx(vq):
     inc i
     if i >= SpinMaxIter: return false
   true
@@ -133,6 +139,11 @@ proc blkConsumeUsed(vq: ptr Virtqueue): bool =
     return false
   vq.lastUsed = vq.lastUsed + 1
   true
+
+proc blkKick() =
+  ## Notify the device of new buffers — via the PCI transport or legacy MMIO.
+  if gVirtioBlk.usePci: gVirtioBlk.transport.notify(0'u16)
+  else:                 virtqueueKick(gVirtioBlk.queue)
 
 # ── Device negotiation ────────────────────────────────────────────────────────
 
@@ -145,8 +156,9 @@ proc blkFindMmio(): tuple[ok: bool; base: uint64; irq: uint8] =
   if bar.kind != barMmio or bar.base == 0:
     klog(llError, "virtio-blk: BAR0 not MMIO or missing")
     return (false, 0, 0)
+  let base = uint64(mapDeviceMmio(PhysAddr(bar.base), bar.size))   # uncached
   let irq = pciConfigReadU8(found.bus, found.slot, found.fn, PciRegIrqLineBlk)
-  (true, bar.base, irq)
+  (true, base, irq)
 
 proc blkNegotiate(base: uint64): bool =
   if mmioRead32(base, VirtioRegMagic) != VirtioMagic:
@@ -174,9 +186,33 @@ proc blkFinaliseStatus(base: uint64) =
   mmioWrite32(base, VirtioRegStatus,
     VirtioStatusAck or VirtioStatusDriver or VirtioStatusFeatOk or VirtioStatusOk)
 
+# ── PCI (modern virtio-1.0) init path ─────────────────────────────────────────
+
+proc blkPciCapacity(t: VirtioTransport): uint64 =
+  ## virtio-blk device-config: capacity (sectors) is a u64 at offset 0.
+  uint64(t.readConfig(0)) or (uint64(t.readConfig(4)) shl 32)
+
+proc blkPciReady(t: VirtioTransport): bool =
+  ## probe → negotiate; false if the device is absent or rejects features.
+  t.probe() and t.negotiate(0'u64)
+
+proc virtioBlkInitPci(): bool =
+  var t = pciTransport(VirtioVendorBlk, VirtioBlkDevice)
+  if not blkPciReady(t): return false
+  let mem = blkAllocQueue()
+  if mem == nil: return false
+  let q = virtqueueInitNoWire(0, mem)
+  if not t.queueSetup(0'u16, cast[uint64](mem)): return false
+  gVirtioBlk = VirtioBlk(transport: t, usePci: true, queueMem: mem,
+                          irqLine: t.irqLine(), queue: q,
+                          numSectors: blkPciCapacity(t))
+  gVirtioBlkReady = true
+  klogInt(llInfo, "virtio-blk(pci): ready, sectors=", int64(gVirtioBlk.numSectors))
+  true
+
 # ── Public init ───────────────────────────────────────────────────────────────
 
-proc virtioBlkInit*(): bool =
+proc virtioBlkInitMmio(): bool =
   let (ok, base, irq) = blkFindMmio()
   if not ok: return false
   if not blkNegotiate(base): return false
@@ -190,6 +226,10 @@ proc virtioBlkInit*(): bool =
   klogInt(llInfo, "virtio-blk: ready, sectors=", int64(gVirtioBlk.numSectors))
   true
 
+proc virtioBlkInit*(): bool =
+  ## Try the modern virtio-pci transport first, then fall back to legacy MMIO.
+  virtioBlkInitPci() or virtioBlkInitMmio()
+
 # ── Read / Write ──────────────────────────────────────────────────────────────
 
 proc virtioBlkRW(sector: uint64; buf: pointer; write: bool): bool =
@@ -202,7 +242,13 @@ proc virtioBlkRW(sector: uint64; buf: pointer; write: bool): bool =
   blkDescData(vq, b, write)
   blkDescStat(vq, b)
   blkPostChain(vq, head)
-  virtqueueKick(gVirtioBlk.queue)
+  when defined(virtioDebug):
+    klogHex(llInfo, "vblk: avail.idx=", uint64(vq.avail.idx))
+    klogHex(llInfo, "vblk: used.idx(pre)=", uint64(vq.used.idx))
+    klogHex(llInfo, "vblk: descAddr=", cast[uint64](vq.desc))
+  blkKick()
+  when defined(virtioDebug):
+    klogHex(llInfo, "vblk: used.idx(post)=", uint64(vq.used.idx))
   if not blkConsumeUsed(vq): return false
   if b.stat[] != BlkStatusOk:
     klogInt(llError, "virtio-blk: device error, status=", int64(b.stat[]))

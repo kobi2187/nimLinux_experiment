@@ -10,6 +10,9 @@
 ## Struct layouts verified against linux/include/uapi/linux/virtio_pci.h
 ## (see subprojects/virtio-pci/DECISIONS.md V1 survey).
 
+when defined(virtioDebug):
+  import ../../core/log
+
 # ── Capability cfg_type values (spec §4.1.4) ──────────────────────────────────
 
 const
@@ -129,19 +132,26 @@ const
   StatusAck    = 1'u8
   StatusDriver = 2'u8
   StatusFeatOk = 8'u8
+  VirtioFVersion1* = 1'u64 shl 32   ## bit 32: modern (virtio-1.0) device
 
 proc lo32(v: uint64): uint32 {.inline.} = uint32(v and 0xFFFFFFFF'u64)
 proc hi32(v: uint64): uint32 {.inline.} = uint32(v shr 32)
 
+proc writeGuestFeatures(cfg: ptr VirtioPciCommonCfg; features: uint64) =
+  ## Publish both 32-bit feature words (select 0 = low, select 1 = high).
+  cfg.guestFeatureSelect = 0; cfg.guestFeature = lo32(features)
+  cfg.guestFeatureSelect = 1; cfg.guestFeature = hi32(features)
+
 proc commonNegotiate*(cfg: ptr VirtioPciCommonCfg; features: uint64): bool =
   ## Status handshake: ACK → DRIVER → (accept features) → FEATURES_OK.
+  ## VIRTIO_F_VERSION_1 (bit 32) is always offered: a modern device only runs
+  ## its virtqueues in 1.0 mode once the driver acks it (spec §3.1.1).
   ## Returns false if the device clears FEATURES_OK (features rejected).
   assert cfg != nil, "negotiate: cfg must be non-nil"
   cfg.deviceStatus = 0
   cfg.deviceStatus = cfg.deviceStatus or StatusAck
   cfg.deviceStatus = cfg.deviceStatus or StatusDriver
-  cfg.guestFeatureSelect = 0
-  cfg.guestFeature       = lo32(features)
+  writeGuestFeatures(cfg, features or VirtioFVersion1)
   cfg.deviceStatus = cfg.deviceStatus or StatusFeatOk
   (cfg.deviceStatus and StatusFeatOk) != 0
 
@@ -154,6 +164,12 @@ proc commonQueueSetup*(cfg: ptr VirtioPciCommonCfg; idx: uint16;
   cfg.queueAvailLo = lo32(availPhys); cfg.queueAvailHi = hi32(availPhys)
   cfg.queueUsedLo  = lo32(usedPhys);  cfg.queueUsedHi  = hi32(usedPhys)
   cfg.queueEnable  = 1
+  when defined(virtioDebug):
+    klogHex(llInfo, "vblk: numQueues=", uint64(cfg.numQueues))
+    klogHex(llInfo, "vblk: queueSize=", uint64(cfg.queueSize))
+    klogHex(llInfo, "vblk: queueEnable=", uint64(cfg.queueEnable))
+    klogHex(llInfo, "vblk: descPhysWritten=", descPhys)
+    klogHex(llInfo, "vblk: status=", uint64(cfg.deviceStatus))
   true
 
 # ── Notify + device-config access ─────────────────────────────────────────────

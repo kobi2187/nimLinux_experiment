@@ -5,6 +5,7 @@
 {.define: noKernelHardware.}
 
 import ../drivers/virtio/virtio_pci
+import ../drivers/virtio/virtqueue
 
 # ── Struct layout (virtio spec §4.1.4) ────────────────────────────────────────
 
@@ -146,6 +147,47 @@ proc testNotifyAddr() =
     "multiplier 0 collapses to base"
   echo "PASS: notifyAddr = base + off * multiplier"
 
+# ── Used-ring completion read (V10 regression) ────────────────────────────────
+# Root cause of the V10 disk-read timeout: the spin loop read `vq.used.idx` with
+# an ordinary load, which the kernel's -d:danger optimizer hoisted out of the
+# loop — so the device's DMA'd completion was never observed. The actual hoist is
+# only reproducible against the real device/optimizer (proven by the QEMU boot).
+# These host tests guard the *contract that prevents it*: the completion read
+# goes through usedIdx(), an acquire load that re-reads memory every call. If
+# usedIdx ever reverts to a cached/stale read, testUsedIdxObservesDeviceWrite
+# fails (verified by sabotaging usedIdx to cache its first read).
+
+proc bindUsed(vq: var Virtqueue; u: ptr VirtqUsed) =
+  ## Point the queue at a caller-owned used ring (no DMA region needed on host).
+  vq.used = u
+  vq.lastUsed = 0
+
+proc testUsedIdxObservesDeviceWrite() =
+  ## usedIdx must reflect a value written to the ring AFTER a prior read of it —
+  ## i.e. it re-reads memory, modelling the device's DMA completion.
+  var u: VirtqUsed
+  var vq: Virtqueue
+  bindUsed(vq, addr u)
+  u.idx = 0
+  assert usedIdx(vq) == 0, "initial used idx"
+  u.idx = 1                       # "device" completes a request
+  assert usedIdx(vq) == 1, "usedIdx must re-read the device-written idx"
+  echo "PASS: usedIdx observes the device-written used index"
+
+proc testPopSeesCompletionAfterEmptyPoll() =
+  ## Reproduces the timeout: pop returns empty, then the device bumps used.idx;
+  ## the next pop MUST find the completion. Pre-fix (hoisted load) it never did.
+  var u: VirtqUsed
+  var vq: Virtqueue
+  bindUsed(vq, addr u)
+  u.idx = 0
+  assert not virtqueuePop(vq).found, "empty before any completion"
+  u.idx = 1                       # device DMAs a completed descriptor
+  u.ring[0] = VirtqUsedElem(id: 7, len: 512)
+  let r = virtqueuePop(vq)
+  assert r.found and r.id == 7 and r.len == 512, "pop must see the completion"
+  echo "PASS: pop sees the completion the device wrote after an empty poll"
+
 when isMainModule:
   testVirtioPciCapLayout()
   testCommonCfgLayout()
@@ -158,4 +200,6 @@ when isMainModule:
   testNegotiateSetsStatus()
   testQueueSetupWritesRingAddrs()
   testNotifyAddr()
+  testUsedIdxObservesDeviceWrite()
+  testPopSeesCompletionAfterEmptyPoll()
   echo "All virtio-pci tests passed."

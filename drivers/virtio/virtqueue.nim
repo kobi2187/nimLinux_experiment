@@ -7,6 +7,7 @@
 ##   3. Used ring         (device→driver: completed descriptor indices)
 
 import virtio_regs
+import ../../arch/common/atomics
 
 const
   QueueSize* = 256    # must be a power of two ≤ QueueNumMax
@@ -52,10 +53,10 @@ proc alignUp(p: uint64; align: uint64): uint64 {.inline.} =
 proc descTableSize(): uint64 {.inline.} =
   uint64(QueueSize) * uint64(sizeof(VirtqDesc))
 
-proc availRingOffset(): uint64 {.inline.} =
+proc availRingOffset*(): uint64 {.inline.} =
   alignUp(descTableSize(), 2)
 
-proc usedRingOffset(): uint64 {.inline.} =
+proc usedRingOffset*(): uint64 {.inline.} =
   alignUp(availRingOffset() + uint64(sizeof(VirtqAvail)), 4)
 
 proc totalQueueBytes*(): uint64 =
@@ -81,24 +82,26 @@ proc writeQueueAddrs(vq: Virtqueue) =
 
 # ── Public API ───────────────────────────────────────────────────────────────
 
-proc virtqueueInit*(mmioBase: uint64; queueIdx: uint32; mem: pointer): Virtqueue =
-  ## Place descriptor/avail/used rings in `mem` and wire them to the device.
+proc placeRings(mem: pointer; mmioBase: uint64; queueIdx: uint32): Virtqueue =
+  ## Lay out and zero the three rings in `mem`; no device wiring.
   let base = cast[uint64](mem)
   result.desc     = cast[ptr array[QueueSize, VirtqDesc]](base)
   result.avail    = cast[ptr VirtqAvail](base + availRingOffset())
   result.used     = cast[ptr VirtqUsed](base + usedRingOffset())
-  result.lastUsed = 0
-  result.nextFree = 0
   result.mmioBase = mmioBase
   result.queueIdx = queueIdx
-
-  # Zero the rings so flags/idx start clean
-  let totalBytes = totalQueueBytes()
   var p = cast[ptr UncheckedArray[uint8]](mem)
-  for i in 0..<int(totalBytes):
-    p[i] = 0
+  for i in 0..<int(totalQueueBytes()): p[i] = 0
 
+proc virtqueueInit*(mmioBase: uint64; queueIdx: uint32; mem: pointer): Virtqueue =
+  ## Place descriptor/avail/used rings in `mem` and wire them via MMIO.
+  result = placeRings(mem, mmioBase, queueIdx)
   writeQueueAddrs(result)
+
+proc virtqueueInitNoWire*(queueIdx: uint32; mem: pointer): Virtqueue =
+  ## Place the rings but skip MMIO wiring — the caller registers the ring phys
+  ## address through a transport (e.g. virtio-pci CommonCfg) instead.
+  placeRings(mem, 0'u64, queueIdx)
 
 proc virtqueueAddBuf*(vq: var Virtqueue; buf: pointer; len: uint32;
                       writable: bool): uint16 =
@@ -122,9 +125,15 @@ proc virtqueueKick*(vq: var Virtqueue) =
   {.emit: "asm volatile(\"\" ::: \"memory\");".}
   mmioWrite32(vq.mmioBase, VirtioRegQueueNotify, vq.queueIdx)
 
+proc usedIdx*(vq: var Virtqueue): uint16 {.inline.} =
+  ## Acquire-load the device-written used index. MUST be volatile: the device
+  ## DMAs the new idx, so a hoisted/cached ordinary load would never observe it
+  ## (the C optimizer can lift a plain `vq.used.idx` out of a spin loop).
+  atomicLoad(addr vq.used.idx, moAcquire)
+
 proc virtqueuePop*(vq: var Virtqueue): tuple[found: bool; id: uint32; len: uint32] =
   ## Return the next completed entry from the used ring, if any.
-  if vq.lastUsed == vq.used.idx:
+  if vq.lastUsed == usedIdx(vq):
     return (false, 0'u32, 0'u32)
   let elem = vq.used.ring[vq.lastUsed mod QueueSize.uint16]
   vq.lastUsed = vq.lastUsed + 1
