@@ -395,6 +395,45 @@ Later: when virtio-gpu virgl (3D) lands, raylib switches to OpenGL ES 2 via virg
 - UNCONFIRMED: Does the dispatcher use IST (Interrupt Stack Table) entries for its realtime class, or is PIT-driven preemption sufficient?
 - UNCONFIRMED: FlatBuffers schema ownership — defined per-server or in a shared `schemas/` directory?
 
+## QEMU debug tooling — autopsy + scalpel + automation (2026-06-28)
+
+**Why:** serial-log grepping (`timeout + tail + grep`) was failing us — truncated
+captures, ANSI noise, overwritten logs, and total blindness to silent faults /
+triple faults (a checked testMode kernel produced a 0-byte log; a disk boot looked
+fine on serial while actually trapping #UD forever). Researched QEMU debugging best
+practices (QEMU GDB-stub + QMP docs, OSDev) and built reusable tooling.
+
+**Built:** `tests/qemu_debug.py` (no external deps — raw-socket QMP) + Makefile targets:
+- `make debug-log [DISK=] [UNTIL=regex]` — AUTOPSY. Boots with
+  `-d int,cpu_reset,guest_errors -no-reboot -no-shutdown`, captures the QEMU event
+  log + a de-ANSI serial transcript, and prints a *deduplicated* fault summary:
+  exceptions collapsed by (vector, RIP) with counts, naming the vector (#UD/#GP/#PF/
+  #DF…) and flagging fault loops. Caps the event log at 8 MB and bails early on a
+  fault loop (an infinite exception otherwise fills the disk). `debug-log-test` = same
+  on the testMode kernel.
+- `make debug-gdb [DISK=]` — SCALPEL. Boots paused with the GDB stub (`-s -S`, :1234)
+  and writes a `.gdbinit` that loads kernel symbols, sets breakpoints (kernelMain,
+  panic, virtioBlkRead, virtioBlkInitPci) and a `vq` helper to dump used.idx.
+  `set architecture i386:x86-64` for the 64-bit kernel.
+- `make debug-qmp [UNTIL=] [MONITOR="info registers"]` — AUTOMATION. Boots with a QMP
+  socket, waits for a serial pattern, runs a human-monitor command, quits cleanly.
+
+**Validated on a real bug its first run:** boot traps `#UD invalid-opcode RIP=0x101e`
+(RAX=0x3701) in an infinite loop — invisible to the old serial method. DETERMINISTIC
+(3/3 runs; reproduces on danger AND checked builds, with AND without disk). Fires right
+after `vfs: registered driver lwext4` — i.e. in `mountDisk()`→`vfsMount()` (kernel/init/
+main.nim:333). RIP=0x101e is just past `_start` (0x100018) in the boot-stub low-memory
+region — NOT valid kernel code → almost certainly a **corrupted function pointer /
+return address** jumping into the boot stub. NOTE: this is a SEPARATE bug from the V10
+timeout — the V10 fix is correct and *unblocked reaching it* (mount path now executes
+because the disk read completes instead of timing out). Next: `make debug-gdb`, break at
+vfsMount/mountDisk, step to the bad indirect jump. Likely in the fatfs/vfs/metadata_db
+mount path (note metadata_db's known kernel-only seq/string corruption — may be related).
+
+**Principle going forward:** on any silent fault / hang / triple-fault, run
+`make debug-log` FIRST (autopsy) before reading serial; use `debug-gdb` to step
+through logic bugs.
+
 ## SMP — Single-CPU constraint (2026-06-26)
 
 **Current state:** Single CPU only. Two places encode this assumption:

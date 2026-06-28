@@ -37,3 +37,52 @@ sector round-trips, `fs_server: starting` appears at boot.
 **Plan:** V2 struct layouts (host tests) → V3 cap-walk → V4 BAR map → V5–V8 vtable ops
 → V9 wire into virtio_blk → V10 boot done-check. virtio-gpu migrates onto the same
 vtable afterward (it has the identical MMIO-only blocker).
+
+## V9 — Transport wiring + uncached-mapping escalation (2026-06-27)
+
+**Wiring:** new `drivers/virtio/virtio_pci_transport.nim` builds the frozen
+`VirtioTransport` vtable. Adapters are `{.nimcall.}` (can't capture), so the found
+device (bus/slot/fn) + resolved cap addresses live in a module-global `gDev`
+(same pattern as `gVirtioBlk`). `cfgReader` wraps `pciConfigReadU8`; `barBase` wraps
+`pciBarDecode(...).base`. `virtioBlkInit` is now `virtioBlkInitPci() or
+virtioBlkInitMmio()`. Split `virtqueueInit` into `placeRings` + `virtqueueInitNoWire`
+so the PCI path lays the ring without legacy MMIO queue-register writes, then registers
+it through `commonQueueSetup`; exported `availRingOffset`/`usedRingOffset` for the split.
+
+**Uncached mapping — ESCALATED, not done.** No existing uncached-map path exists to
+reuse: the legacy MMIO transport relies on the boot stub's 64 MB identity map (no PCD),
+and `mapRegion`/`pfCacheDisable` in `virtual_manager.nim` are never invoked at runtime
+for device memory. Did NOT touch `virtual_manager.nim` per constraint. V10 must add a
+`mapRegion(..., {pfWritable, pfCacheDisable})` per cap region at probe time — a parent
+boundary call that also fixes the legacy MMIO high-BAR failure.
+
+## 2026-06-28 — device-mmio seam built; V10 result; build observability
+
+**`mm/device_mmio.nim` seam (parent):** general `mapDeviceMmio(phys,len): VirtAddr`
+over the existing `kernelMapRegion(..., {pfWritable,pfCacheDisable})`; idempotent;
+boot registers the live VMM via `registerDeviceMapper` in `initVirtHeap`. Chosen over
+per-cap `mapRegion` calls (user decision) so all drivers share one MM-facing primitive.
+Compiles into all 3 models.
+
+**V10 LIVE result (release `nimixos.iso` AND testMode, disk via virtio-blk-pci):**
+probe/config WORKS — `virtio-blk(pci): ready, sectors=65536` (cap-walk + negotiate +
+deviceConfigRead all confirmed in hardware). But first real `blkRead` → `request timed
+out` (used-ring idx never advances) → mount fails → servers don't load. Ruled out
+virt/phys DMA (regions identity-mapped at 4MB). Leading suspects: notify/kick address
+or a missing barrier between avail.idx write (cached ring) and notify. Dispatched
+`v10-debug` agent (TDD: failing host test first) to fix.
+
+**Build observability (user-driven):** `-d:danger` was hiding real defects. Makefile
+now defaults checks ON (`DANGER` opt-in; `release` target restores it). Added
+`kernel/init/panicoverride.nim` (serial-routed defect handler). VALIDATED: the checked
+**monolithic** kernel boots all the way to the `nimixos>` shell — checks-on works for
+the normal OS, Makefile change is sound (no revert).
+
+**CORRECTION:** earlier "checked faults pre-serial" was WRONG — it was observed only on
+the checked **testMode** build (0-byte log). The fault is SPECIFIC TO `-d:testMode`
+(the very-early `kernelTestMain()` under cli(), or the staticRead user_tests embed),
+NOT checks-on in general. This is checks-on doing its JOB: catching a real testMode
+defect the danger build silently survived. Tracked as its own (smaller, scoped to
+testMode early path) task — bisect with serial checkpoints/asserts when picked up.
+Does NOT block normal OS debugging: `make build` + `make iso` boot to shell with
+checks live.
