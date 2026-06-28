@@ -23,9 +23,13 @@ NIM     ?= /home/kl/apps/Nim/bin/nim
 OVMF    ?= /usr/share/ovmf/OVMF.fd
 QEMU_MEM ?= 256
 
-# Nim flags for kernel build
+# Nim flags for kernel build.
+# DANGER is OFF by default so runtime checks (bounds/index/nil/assert) stay live
+# and surface real defects on serial via panicoverride. Opt into the optimized,
+# unchecked build with:  make DANGER=-d:danger   (or the `release` target).
+DANGER ?=
 NIM_FLAGS = c --os:any --mm:arc -d:StandaloneHeapSize=16777216 \
-            -d:release -d:danger -d:kernelFull --noMain --outdir:build \
+            -d:release $(DANGER) -d:kernelFull --noMain --outdir:build \
             --nimblePath:nimcache
 
 # Kernel models to build
@@ -132,7 +136,12 @@ apps/ping/ping_embedded.nim: apps/ping/ping.wasm
 	print(']')"                                                        >> $@
 
 # ── Compile kernel ────────────────────────────────────────────────
+# Default `build` keeps runtime checks ON (DANGER empty) for observable defects.
 build: $(addprefix build/kernel-,$(KERNEL_MODELS))
+
+# Optimized, unchecked build (production). Runtime checks compiled out.
+release:
+	$(MAKE) build DANGER=-d:danger
 
 # Build targets for each kernel model
 build/kernel-%:
@@ -307,6 +316,33 @@ test-structured: $(TESTMODE_ISO) disk-add-apps
 		--structured --timeout 30 \
 		$(if $(wildcard $(DISK)),--disk $(DISK) --virtio-blk,)
 
+# ── Debugging (see tests/qemu_debug.py) ───────────────────────────
+# debug-log: autopsy — boots with -d int,cpu_reset,guest_errors -no-reboot and
+#   captures faults/exceptions/CPU-state + a clean serial transcript. First tool
+#   to reach for on a silent fault or triple fault. Override DISK= to attach one.
+debug-log: $(ISO_OUT) disk-add-apps
+	python3 tests/qemu_debug.py log --iso $(ISO_OUT) --bios $(OVMF) --timeout 30 \
+		$(if $(wildcard $(DISK)),--disk $(DISK) --virtio-blk,) $(if $(UNTIL),--until "$(UNTIL)",)
+
+# debug-log-test: same, but on the testMode kernel (catches early-boot faults).
+debug-log-test: $(TESTMODE_ISO) disk-add-apps
+	python3 tests/qemu_debug.py log --iso $(TESTMODE_ISO) --bios $(OVMF) --timeout 30 \
+		--kernel build/kernel-test \
+		$(if $(wildcard $(DISK)),--disk $(DISK) --virtio-blk,) $(if $(UNTIL),--until "$(UNTIL)",)
+
+# debug-gdb: scalpel — boots paused with the GDB stub (:1234) + a .gdbinit that
+#   loads kernel symbols and sets breakpoints. Attach with the printed command.
+debug-gdb: $(ISO_OUT) disk-add-apps
+	python3 tests/qemu_debug.py gdb --iso $(ISO_OUT) --bios $(OVMF) \
+		--kernel build/kernel-monolithic \
+		$(if $(wildcard $(DISK)),--disk $(DISK) --virtio-blk,)
+
+# debug-qmp: automation — boot, wait for UNTIL=, run a MONITOR= command, quit.
+debug-qmp: $(ISO_OUT) disk-add-apps
+	python3 tests/qemu_debug.py qmp --iso $(ISO_OUT) --bios $(OVMF) --timeout 30 \
+		$(if $(wildcard $(DISK)),--disk $(DISK) --virtio-blk,) \
+		$(if $(UNTIL),--until "$(UNTIL)",) $(if $(MONITOR),--monitor "$(MONITOR)",)
+
 # ── Clean ─────────────────────────────────────────────────────────
 clean:
-	rm -rf build/main build/kernel-* $(ISO_OUT) $(ISO_ALL_OUT) nimcache/ build/ iso/
+	rm -rf build/main build/kernel-* $(ISO_OUT) $(ISO_ALL_OUT) nimcache/ build/ iso/ qemu-debug/
