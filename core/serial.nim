@@ -65,8 +65,20 @@ else:
 # ═══════════════════════════════════════════════════════════════════════════
 
 proc init*(serial: var SerialPort, port: uint16 = COM1, baud: uint32 = 115200) =
-  ## Initialize serial port
+  ## Initialize serial port to given baud rate.
+  ##
+  ## Steps:
+  ## 1. Disable interrupts
+  ## 2. Set divisor latch for baud rate (115200 / baud)
+  ## 3. Configure: 8 data bits, no parity, 1 stop bit
+  ## 4. Enable and clear FIFO
+  ## 5. Enable DTR, RTS, OUT2 signals
+  ##
+  ## After init, putChar/putString are safe to call.
   serial.port = port
+
+  doAssert baud > 0, "baud rate must be positive"
+  doAssert port in [COM1, COM2, COM3, COM4], "invalid serial port"
 
   let divisor = uint16(115200 div baud)
 
@@ -104,7 +116,9 @@ proc isReceiveReady(serial: SerialPort): bool {.inline.} =
 # ═══════════════════════════════════════════════════════════════════════════
 
 proc putChar*(serial: SerialPort, c: char) =
-  ## Write a character to serial port
+  ## Write a single character to serial port.
+  ##
+  ## Note: Blocks until transmitter is ready (busy-wait).
   if not serial.initialized:
     return
 
@@ -112,10 +126,15 @@ proc putChar*(serial: SerialPort, c: char) =
   while not serial.isTransmitReady():
     discard
 
+  doAssert serial.port > 0, "serial port address invalid"
   serialOutb(serial.port + SerData, uint8(c))
 
 proc putString*(serial: SerialPort, s: cstring) =
-  ## Write a null-terminated string
+  ## Write a null-terminated string to serial port.
+  ##
+  ## Converts LF to CR+LF for proper terminal display.
+  doAssert s != nil, "cannot write nil cstring"
+
   var i = 0
   while s[i] != '\0':
     if s[i] == '\n':
@@ -137,7 +156,12 @@ proc putLine*(serial: SerialPort, s: string) =
   serial.putChar('\n')
 
 proc putHex*(serial: SerialPort, val: uint64, width: int = 0) =
-  ## Write a hex value
+  ## Write a hex value with optional zero-padding.
+  ##
+  ## Width: number of hex digits to pad to (0 = no padding).
+  ## Maximum 16 digits for uint64 (4 bits per hex digit).
+  doAssert width >= 0 and width <= 16, "width out of range"
+
   const hexChars = "0123456789abcdef"
   var buf: array[16, char]
   var v = val
@@ -163,7 +187,7 @@ proc putHex*(serial: SerialPort, val: uint64, width: int = 0) =
     serial.putChar(buf[i])
 
 proc putInt*(serial: SerialPort, val: int64) =
-  ## Write a decimal integer
+  ## Write a decimal integer (signed).
   if val < 0:
     serial.putChar('-')
     serial.putInt(-val)
