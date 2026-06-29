@@ -86,10 +86,13 @@
 
 | Module | Path | Status | Notes |
 |--------|------|--------|-------|
-| FatFs (vendor) | `fs/fatfs.nim` + vendor | BUILT | FAT16/32 read; write support in progress |
+| VFS Layer | `fs/vfs.nim` | PLANNED | Virtual File System routing prefixes to specific drivers |
+| FatFs (vendor) | `fs/fatfs.nim` + vendor | BUILT | FAT16/32 read/write driver |
+| littlefs driver | `fs/littlefs.nim` | PLANNED | littlefs driver mapping sectors |
+| lwext4 driver | `fs/lwext4.nim` | PLANNED | lwext4 driver for ext4 large files |
+| Metadata B+ Tree | `fs/metadata_db.nim` | PLANNED | Pure Nim B+ Tree for flexible tags |
 | fs_server ELF | `build/apps/fs_server.elf` | PARTIAL | binary exists; boot-from-disk wiring incomplete |
 | Path resolution | — | PLANNED | absolute paths, `.` and `..` handling |
-| ext2 / littlefs | — | PLANNED | second FS option |
 
 ### Servers (ELF userspace)
 
@@ -192,3 +195,4 @@ app: regionOpen(token) → (ptr, len) → direct read → regionClose(token)
 | 2026-06 | MsgPack wired into ServerChan (serverMsgFromMp/serverMsgToMp) | git: fdab067 |
 | 2026-06-27 | test-structured harness fixed: skip prompt-wait in --structured; attach disk via virtio-blk-pci; pid_monotonic test corrected | (uncommitted) |
 | 2026-06-27 | Virtio transport split: VirtioTransport vtable + MMIO/PCI backends; virtio-pci SPAWNED | DECISIONS.md §Virtio transport split |
+| 2026-06-27 | VFS layer + B+ Tree metadata filesystem architecture introduced | DECISIONS.md §VFS and Metadata B+ Tree |

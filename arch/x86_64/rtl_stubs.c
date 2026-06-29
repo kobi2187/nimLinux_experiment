@@ -136,59 +136,9 @@ long __udivmoddi4(unsigned long a, unsigned long b, unsigned long *mod) {
     return 0;
 }
 
-/* ── Heap stubs for wasm3 (delegates to Nim ARC heap) ─────────────
- * wasm3 uses malloc/free/realloc for its internal data structures.
- * We forward these to the kernel's standalone heap (set via
- * -d:StandaloneHeapSize). Nim ARC's alloc/dealloc are safe to call
- * from C code compiled into the same binary.                       */
-
-/* Nim ARC standalone heap — these symbols are emitted by Nim's C backend */
-extern void *  nimBorrowedAlloc   (size_t size);
-extern void    nimBorrowedDealloc (void *p, size_t size);
-
-/* Simple bump allocator backed by a static arena.
- * wasm3 allocates ~100-200 KB for a small module.
- * We give it a 512 KB static pool to work from.    */
-static unsigned char wasm_heap[512 * 1024];
-static size_t        wasm_heap_used = 0;
-
-/* Block header: stores size so free/realloc can find it */
-typedef struct { size_t sz; } Hdr;
-
-void *malloc(size_t size) {
-    size_t aligned = (size + 15) & ~(size_t)15;
-    size_t need    = sizeof(Hdr) + aligned;
-    if (wasm_heap_used + need > sizeof(wasm_heap)) return 0;
-    Hdr *h = (Hdr *)(wasm_heap + wasm_heap_used);
-    h->sz = size;
-    wasm_heap_used += need;
-    return (void *)(h + 1);
-}
-
-void free(void *p) {
-    (void)p;  /* bump allocator: no individual frees — reset between WASM runs */
-}
-
-void *realloc(void *p, size_t size) {
-    if (!p) return malloc(size);
-    Hdr *h = ((Hdr *)p) - 1;
-    void *n = malloc(size);
-    if (n && h->sz) {
-        size_t copy = h->sz < size ? h->sz : size;
-        memcpy(n, p, copy);
-    }
-    return n;
-}
-
-void *calloc(size_t nmemb, size_t size) {
-    size_t total = nmemb * size;
-    void *p = malloc(total);
-    if (p) memset(p, 0, total);
-    return p;
-}
-
+/* Heap allocations are implemented in Nim's HeapManager and exported to C. */
 void wasm_heap_reset(void) {
-    wasm_heap_used = 0;
+    /* no-op: managed by global allocator */
 }
 
 /* Fortified glibc wrappers — clang may emit these; redirect to plain versions */

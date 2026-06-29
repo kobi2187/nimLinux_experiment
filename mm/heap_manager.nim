@@ -49,6 +49,7 @@ type
     heapStart*: VirtAddr            ## Heap start address
     heapEnd*: VirtAddr              ## Current heap end
     heapMax*: VirtAddr              ## Maximum heap address
+    heapFrontier*: VirtAddr         ## Current frontier/bump address
 
     # Free list
     freeList*: ptr FreeBlock        ## Head of free list
@@ -63,6 +64,8 @@ type
     peakUsed*: uint64               ## Peak usage
     allocCount*: uint64             ## Number of allocations
     freeCount*: uint64              ## Number of frees
+
+var globalHeapManager*: HeapManager = nil
 
 const
   # Heap configuration
@@ -87,6 +90,7 @@ proc newHeapManager*(physMgr: PhysicalMemManager,
     heapStart: heapStart,
     heapEnd: heapStart,
     heapMax: heapMax,
+    heapFrontier: heapStart,
     freeList: nil,
     totalAllocated: 0,
     totalFreed: 0,
@@ -96,6 +100,7 @@ proc newHeapManager*(physMgr: PhysicalMemManager,
     freeCount: 0
   )
   result.lock.init()
+  globalHeapManager = result
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Heap Growth
@@ -200,8 +205,8 @@ proc alloc*(self: HeapManager, size: uint64): Result[pointer, HeapError] =
   if size == 0:
     return err(heInvalidSize)
 
-  self.lock.acquire()
-  defer: self.lock.release()
+  var guard = self.lock.acquireIrqSave()
+  defer: guard.release()
 
   # Calculate actual size needed (header + data, aligned)
   let actualSize = alignUp(size + HeaderSize, MinBlockSize)
@@ -236,34 +241,17 @@ proc alloc*(self: HeapManager, size: uint64): Result[pointer, HeapError] =
 
   kprintln("    [HEAP] alloc: no free block, growing heap...")
 
-  let needed = actualSize
-  let growResult = self.grow(needed)
-  if growResult.isErr:
-    kprintln("    [HEAP] alloc: grow failed")
-    return err(heOutOfMemory)
-
-  # Determine next allocation address
-  let currentTop = if self.freeList == nil:
-    self.heapStart
-  else:
-    # Find highest address
-    var highest = self.heapStart
-    var blk = self.freeList
-    while blk != nil:
-      let blkEnd = VirtAddr(cast[uint64](blk) + blk.size)
-      if blkEnd > highest:
-        highest = blkEnd
-      blk = blk.next
-    highest
-
-  if currentTop + needed > self.heapEnd:
-    let growResult = self.grow(needed)
+  let currentTop = self.heapFrontier
+  if currentTop + actualSize > self.heapEnd:
+    let growResult = self.grow(actualSize)
     if growResult.isErr:
+      kprintln("    [HEAP] alloc: grow failed")
       return err(heOutOfMemory)
 
   # Allocate at current top
   let allocBlock = cast[ptr uint64](currentTop)
   allocBlock[] = actualSize
+  self.heapFrontier = currentTop + actualSize
 
   self.currentUsed += actualSize
   if self.currentUsed > self.peakUsed:
@@ -278,8 +266,8 @@ proc free*(self: HeapManager, p: pointer): Result[void, HeapError] =
   if p == nil:
     return ok()
 
-  self.lock.acquire()
-  defer: self.lock.release()
+  var guard = self.lock.acquireIrqSave()
+  defer: guard.release()
 
   # Get block header
   let blockAddr = cast[uint64](p) - HeaderSize
@@ -359,8 +347,8 @@ proc stats*(self: HeapManager): tuple[allocated, freed, current, peak: uint64] =
 
 proc freeMemory*(self: HeapManager): uint64 =
   ## Get total free memory in heap
-  self.lock.acquire()
-  defer: self.lock.release()
+  var guard = self.lock.acquireIrqSave()
+  defer: guard.release()
 
   result = 0
   var blk = self.freeList
@@ -370,3 +358,97 @@ proc freeMemory*(self: HeapManager): uint64 =
 
   # Add unmapped space
   result += uint64(self.heapMax) - uint64(self.heapEnd)
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Global Allocator Interface & Shims for C / Nim Runtime
+# ═══════════════════════════════════════════════════════════════════════════
+
+const
+  MagicEarly = 0xEAEAEA01'u64
+  MagicLate  = 0xEAEAEA02'u64
+  EarlyArenaSize = 1024 * 1024 # 1 MB for early boot/startup allocations
+
+type
+  MallocHeader = object
+    magic: uint64
+    size: uint64
+
+var earlyArena {.align: 16.}: array[EarlyArenaSize, byte]
+var earlyAllocated = 0
+
+proc earlyAlloc(size: uint64): pointer =
+  let aligned = alignUp(size, 16)
+  if earlyAllocated + int(aligned) > EarlyArenaSize:
+    return nil
+  let p = addr earlyArena[earlyAllocated]
+  earlyAllocated += int(aligned)
+  p
+
+proc malloc*(size: csize_t): pointer {.exportc: "malloc", cdecl.} =
+  kprintln("  [HEAP] malloc: size=" & $uint64(size))
+  let totalSize = uint64(size) + uint64(sizeof(MallocHeader))
+  var rawPtr: pointer = nil
+  var magic: uint64
+  
+  if globalHeapManager != nil:
+    let res = globalHeapManager.alloc(totalSize)
+    if res.isOk:
+      rawPtr = res.value
+      magic = MagicLate
+  else:
+    rawPtr = earlyAlloc(totalSize)
+    magic = MagicEarly
+    
+  if rawPtr == nil:
+    return nil
+    
+  let header = cast[ptr MallocHeader](rawPtr)
+  header.magic = magic
+  header.size = uint64(size)
+  
+  let userPtr = cast[pointer](cast[uint64](rawPtr) + uint64(sizeof(MallocHeader)))
+  kprintln("  [HEAP] malloc: returned userPtr=" & $cast[uint64](userPtr))
+  userPtr
+
+proc free*(p: pointer) {.exportc: "free", cdecl.} =
+  if p == nil: return
+  let headerAddr = cast[uint64](p) - uint64(sizeof(MallocHeader))
+  let header = cast[ptr MallocHeader](headerAddr)
+  
+  kprintln("  [HEAP] free: p=" & $cast[uint64](p) & " magic=" & $header.magic)
+  if header.magic == MagicLate:
+    if globalHeapManager != nil:
+      discard globalHeapManager.free(cast[pointer](headerAddr))
+  # Early allocator frees are no-ops
+
+proc realloc*(p: pointer, size: csize_t): pointer {.exportc: "realloc", cdecl.} =
+  if p == nil:
+    return malloc(size)
+  if size == 0:
+    free(p)
+    return nil
+    
+  let headerAddr = cast[uint64](p) - uint64(sizeof(MallocHeader))
+  let header = cast[ptr MallocHeader](headerAddr)
+  let oldSize = header.size
+  
+  # Allocate new block
+  let newPtr = malloc(size)
+  if newPtr == nil:
+    return nil
+    
+  # Copy data
+  let copySize = min(oldSize, uint64(size))
+  kprintln("  [HEAP] realloc: p=" & $cast[uint64](p) & " oldSize=" & $oldSize & " newSize=" & $size & " newPtr=" & $cast[uint64](newPtr) & " copySize=" & $copySize)
+  copyMem(newPtr, p, int(copySize))
+  
+  # Free old block
+  free(p)
+  newPtr
+
+proc calloc*(nmemb, size: csize_t): pointer {.exportc: "calloc", cdecl.} =
+  let total = uint64(nmemb) * uint64(size)
+  let p = malloc(csize_t(total))
+  if p != nil:
+    zeroMem(p, int(total))
+  p

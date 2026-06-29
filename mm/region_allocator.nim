@@ -17,7 +17,7 @@
 import ../core/log
 
 const
-  RegionBase* = 0x400000'u64      ## First app starts here (4 MB mark)
+  RegionBase* = 0x2000000'u64      ## First app starts here (32 MB mark)
   RegionSize* = 4 * 1024 * 1024'u64  ## Each slot is 4 MB
   MaxRegions* = 16                ## Max simultaneous loaded apps
 

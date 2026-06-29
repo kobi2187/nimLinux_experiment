@@ -20,6 +20,16 @@ proc registerDeviceMapper*(vmm: VirtualMemManager) =
   assert vmm != nil, "registerDeviceMapper: nil VMM"
   gMapper = vmm
 
+proc translatePhys*(virt: pointer): uint64 =
+  ## Translate a virtual pointer to a physical address using the registered mapper.
+  if gMapper == nil:
+    return cast[uint64](virt)
+  let r = gMapper.translate(gMapper.kernelSpace, VirtAddr(cast[uint64](virt)))
+  if r.isOk:
+    uint64(r.value)
+  else:
+    cast[uint64](virt)
+
 proc deviceMmioFlags(): set[PageFlags] {.inline.} =
   {pfWritable, pfCacheDisable}
 

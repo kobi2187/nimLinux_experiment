@@ -3,6 +3,7 @@
 ## Separate from fatfs.nim (read) to keep files focused.
 
 import fatfs   # fsMounted, FR_OK, FRESULT, FIL, FA_WRITE, f_open, f_close, fsMount
+import vfs
 
 type WriteResult* = enum
   wOk, wMountError, wOpenError, wWriteError, wPartialWrite, wDeleteError, wMkdirError
@@ -83,3 +84,27 @@ proc fsMkdir*(path: cstring): WriteResult =
     if not fsMounted and not fsMount(): return wMountError
     if f_mkdir(path) != FR_OK: return wMkdirError
     wOk
+
+proc vfsFatFsMount(): bool {.nimcall.} =
+  fsMount()
+
+proc vfsFatFsReadInto(path: cstring; buf: ptr byte; len: int): int {.nimcall.} =
+  let (res, nbytes) = fsReadInto(path, buf, len)
+  if res == fOk: nbytes else: -1
+
+proc vfsFatFsWriteFile(path: cstring; data: pointer; len: int): int {.nimcall.} =
+  let res = fsWriteFile(path, data, len)
+  if res == wOk: 0 else: -1
+
+proc vfsFatFsDirList(path: cstring; buf: pointer; len: int): int {.nimcall.} =
+  fsDirList(path, buf, len)
+
+proc registerFatFs*() =
+  registerDriver(FSDriver(
+    name: "fatfs",
+    prefix: "/fat/",
+    mount: vfsFatFsMount,
+    readInto: vfsFatFsReadInto,
+    writeFile: vfsFatFsWriteFile,
+    dirList: vfsFatFsDirList
+  ))

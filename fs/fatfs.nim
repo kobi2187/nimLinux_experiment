@@ -21,6 +21,7 @@ when not defined(noKernelHardware):
   import ../drivers/virtio/diskio_virtio
 
 import ../core/log
+import vfs
 
 # ── FatFs C types ─────────────────────────────────────────────────────────────
 

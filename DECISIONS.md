@@ -614,3 +614,21 @@ live in production (e.g. shell `execApp`). Logged as a known sharp edge.
 execute its tests (no `suite=user_tests` output) — a scheduling/yield issue in the
 testMode two-phase boot, tracked separately. Task 3's ring-3 mapAnon verification waits
 on that.
+
+## VFS and Metadata B+ Tree (2026-06-27)
+
+### Context
+To support files larger than 4GB (the FAT limit) and support flexible metadata tagging (like BeOS BFS attributes), we need a better filesystem block layer (such as LittleFS and/or LwExt4) and a tag-query database. We want the tag database to be pure Nim.
+
+### Decision
+1. **Virtual File System (VFS) Layer:**
+   Introduce a unified, prefix-routed VFS interface in `fs/vfs.nim`. 
+   FileSystem drivers (FatFs, littlefs, lwext4) register themselves with a path prefix (e.g. `/fat/`, `/lfs/`, `/ext/`). The kernel-side ABI delegates all filesystem reads, writes, and directory listings through the VFS prefix router, falling back to the primary `/fat/` volume if no prefix matches.
+2. **Metadata B+ Tree Database:**
+   Implement a pure Nim on-disk page-structured B+ Tree in `fs/metadata_db.nim` to index schema-less metadata tags.
+   - The index is stored as a file `/metadata.db` on any underlying filesystem.
+   - The tree keys are formatted as `key:value:fileId` to allow $O(\log N)$ range-based prefix queries (e.g. searching for all files with tag `artist:Daft Punk`).
+   - The file contents (blobs) are stored on the underlying block filesystem (littlefs or lwext4) named by their unique file IDs.
+3. **Decoupled Architecture:**
+   The database runs entirely on top of the VFS block-filesystem abstraction, making it database-independent of the underlying storage format.
+

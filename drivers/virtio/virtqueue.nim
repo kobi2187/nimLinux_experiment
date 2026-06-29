@@ -8,6 +8,7 @@
 
 import virtio_regs
 import ../../arch/common/atomics
+import ../../mm/device_mmio
 
 const
   QueueSize* = 256    # must be a power of two ≤ QueueNumMax
@@ -65,9 +66,9 @@ proc totalQueueBytes*(): uint64 =
 # ── MMIO wiring ─────────────────────────────────────────────────────────────
 
 proc writeQueueAddrs(vq: Virtqueue) =
-  let descAddr   = cast[uint64](vq.desc)
-  let availAddr  = cast[uint64](vq.avail)
-  let usedAddr   = cast[uint64](vq.used)
+  let descAddr   = translatePhys(vq.desc)
+  let availAddr  = translatePhys(vq.avail)
+  let usedAddr   = translatePhys(vq.used)
   let base       = vq.mmioBase
   let qi         = vq.queueIdx
   mmioWrite32(base, VirtioRegQueueSel, qi)
@@ -107,7 +108,7 @@ proc virtqueueAddBuf*(vq: var Virtqueue; buf: pointer; len: uint32;
                       writable: bool): uint16 =
   ## Post one buffer to the queue. Returns the descriptor index used.
   let idx = vq.nextFree mod QueueSize.uint16
-  vq.desc[idx].bufAddr  = cast[uint64](buf)
+  vq.desc[idx].bufAddr  = translatePhys(buf)
   vq.desc[idx].len   = len
   vq.desc[idx].flags = if writable: VirtqDescFWrite else: 0'u16
   vq.desc[idx].next  = 0

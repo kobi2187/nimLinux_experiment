@@ -92,7 +92,7 @@ proc blkAllocDesc(vq: ptr Virtqueue): uint16 =
 
 proc blkDescHdr(vq: ptr Virtqueue; b: BlkDmaBufs): uint16 =
   let i = blkAllocDesc(vq)
-  vq.desc[i] = VirtqDesc(bufAddr: cast[uint64](b.hdr),
+  vq.desc[i] = VirtqDesc(bufAddr: translatePhys(b.hdr),
                           len: uint32(sizeof(BlkReqHdr)),
                           flags: VirtqDescFNext,
                           next: (i + 1) mod QueueSize.uint16)
@@ -101,14 +101,14 @@ proc blkDescHdr(vq: ptr Virtqueue; b: BlkDmaBufs): uint16 =
 proc blkDescData(vq: ptr Virtqueue; b: BlkDmaBufs; write: bool) =
   let i = blkAllocDesc(vq)
   let dataFlags = VirtqDescFNext or (if write: 0'u16 else: VirtqDescFWrite)
-  vq.desc[i] = VirtqDesc(bufAddr: cast[uint64](b.data),
+  vq.desc[i] = VirtqDesc(bufAddr: translatePhys(b.data),
                           len: BlkSectorSize.uint32,
                           flags: dataFlags,
                           next: (i + 1) mod QueueSize.uint16)
 
 proc blkDescStat(vq: ptr Virtqueue; b: BlkDmaBufs) =
   let i = blkAllocDesc(vq)
-  vq.desc[i] = VirtqDesc(bufAddr: cast[uint64](b.stat),
+  vq.desc[i] = VirtqDesc(bufAddr: translatePhys(b.stat),
                           len: 1'u32,
                           flags: VirtqDescFWrite,
                           next: 0)
@@ -202,7 +202,7 @@ proc virtioBlkInitPci(): bool =
   let mem = blkAllocQueue()
   if mem == nil: return false
   let q = virtqueueInitNoWire(0, mem)
-  if not t.queueSetup(0'u16, cast[uint64](mem)): return false
+  if not t.queueSetup(0'u16, translatePhys(mem)): return false
   gVirtioBlk = VirtioBlk(transport: t, usePci: true, queueMem: mem,
                           irqLine: t.irqLine(), queue: q,
                           numSectors: blkPciCapacity(t))

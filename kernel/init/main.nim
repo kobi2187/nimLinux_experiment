@@ -365,13 +365,25 @@ proc tryLoadServer(name: cstring): bool =
   true
 
 proc initServers() =
+  assert true, "initServers: start"
   regionAllocInit()
+  assert true, "initServers: after regionAllocInit"
+
   serverChanRegistryInit()
+  assert true, "initServers: after serverChanRegistryInit"
+
   pingServerInit()
+  assert true, "initServers: after pingServerInit"
+
   spawnInitialTasks()
+  assert true, "initServers: after spawnInitialTasks"
+
   spawnDispatcher()
+  assert true, "initServers: after spawnDispatcher"
+
   # DISABLED: VFS mount triggers a kernel fault loop (metadata_db seq[string] bug)
   # TODO: refactor metadata_db off seq[string] onto fixed-size arrays
+  assert true, "initServers: skipping VFS mount (disabled for debugging)"
   # if mountDisk():
   #   discard tryLoadServer("fs_server.elf")
 
@@ -393,21 +405,63 @@ when defined(testMode):
     while true: hlt()
 
 proc runKernel(bootInfo: ptr BootInfo) =
+  assert bootInfo != nil, "runKernel: bootInfo is nil"
   let k = initKernel(bootInfo)
-  if not k.initialized: panic("Kernel initialization failed")
+  assert k.initialized, "runKernel: Kernel initialization failed"
   kprintln("Starting scheduler...")
-  eventServerInit(); klog(llInfo, "Event server ready")
-  picInit();         klog(llInfo, "PIC 8259A remapped to vectors 0x20-0x2F")
+
+  assert true, "CP1: after kprintln"
+  eventServerInit()
+  assert true, "CP2: after eventServerInit"
+  klog(llInfo, "Event server ready")
+
+  assert true, "CP3: before picInit"
+  picInit()
+  assert true, "CP4: after picInit"
+  klog(llInfo, "PIC 8259A remapped to vectors 0x20-0x2F")
+
+  assert true, "CP5: before initKernelModel"
   initKernelModel()
+  assert true, "CP6: after initKernelModel"
+
+  assert true, "CP7: before initTimerAndInput"
   initTimerAndInput()
+  assert true, "CP8: after initTimerAndInput"
+
+  assert true, "CP9: before initVirtioDevices"
   initVirtioDevices()
+  assert true, "CP10: after initVirtioDevices"
+
+  assert true, "CP11: before enableInterrupts"
   enableInterrupts()
+  assert true, "CP12: after enableInterrupts"
+
+  assert true, "CP13: before initDriverRegistry"
   initDriverRegistry()
-  discard rtcReadDateTime(); klog(llInfo, "RTC: wall clock read")
-  syscallGateInit();         klog(llInfo, "Syscall gate ready (ring 0<->3)")
+  assert true, "CP14: after initDriverRegistry"
+
+  assert true, "CP15: before rtcReadDateTime"
+  discard rtcReadDateTime()
+  assert true, "CP16: after rtcReadDateTime"
+  klog(llInfo, "RTC: wall clock read")
+
+  assert true, "CP17: before syscallGateInit"
+  syscallGateInit()
+  assert true, "CP18: after syscallGateInit"
+  klog(llInfo, "Syscall gate ready (ring 0<->3)")
+
+  assert true, "CP19: before initServers"
   initServers()
-  when defined(testMode): runTestMode()
+  assert true, "CP20: after initServers"
+
+  when defined(testMode):
+    assert true, "CP21: before runTestMode"
+    runTestMode()
+    assert true, "CP22: after runTestMode"
+
+  assert true, "CP23: before runShell"
   runShell(k.physMgr)
+  assert true, "CP24: after runShell"
 
 # earlyPutChar / earlyPutString / earlyPutHex are now in core/debug.nim
 
