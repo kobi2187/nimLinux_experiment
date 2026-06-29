@@ -23,6 +23,7 @@ import ../../kernel/models/microkernel
 import ../../kernel/models/sasos
 import ../config
 import ../../kernel/driver_registry
+import ../../kernel/module_loader
 import ../../drivers/pic
 import ../../drivers/pit
 import ../../kern/interrupts
@@ -33,9 +34,6 @@ import ../../kernel/event_server
 import ../../arch/x86_64/syscall_gate
 import ../../servers/ping_server
 import ../../ipc/server_chan
-import ../../fs/fatfs
-import ../../fs/fatfs_write
-import ../../fs/lwext4
 import ../../mm/region_allocator
 import ../../kernel/process_table
 import ../../kernel/cap/capability
@@ -44,6 +42,18 @@ import ../../drivers/pci/pci_device
 import ../../drivers/virtio/virtio_net
 import ../../drivers/virtio/virtio_blk
 import ../../drivers/rtc
+
+# Monolithic model: link filesystem/driver modules; microkernel/SASOS load as servers
+when IsMonolithic:
+  import ../../fs/fatfs_module
+  import ../../fs/lwext4
+else:
+  # Microkernel/SASOS: filesystems run as userspace servers, not kernel modules
+  discard
+
+# Legacy direct imports (to be phased out when all modules are wrappers)
+import ../../fs/fatfs
+import ../../fs/fatfs_write
 
 when defined(testMode):
   import ../../tests/kernel_tests/main as kernelTests
@@ -301,6 +311,15 @@ proc initDriverRegistry() =
   klogInt(llInfo, "  ok:   ", int64(drvOk))
   klogInt(llInfo, "  fail: ", int64(drvFail))
 
+proc initModules() =
+  ## Load all registered kernel modules (filesystems, drivers, etc.).
+  ## In monolithic mode, modules are linked and initialized here.
+  ## In microkernel/SASOS, modules run as userspace servers.
+  let (modOk, modFail) = loadAllModules()
+  klog(llInfo, "Kernel modules loaded")
+  klogInt(llInfo, "  ok:   ", int64(modOk))
+  klogInt(llInfo, "  fail: ", int64(modFail))
+
 proc spawnDispatcher() =
   var dispatchChan = serverChanCreate("dispatch")
   serverChanRegister(dispatchChan)
@@ -434,6 +453,7 @@ proc runKernel(bootInfo: ptr BootInfo) =
   ## 6. initVirtioDevices() - virtio-pci probe
   ## 7. enableInterrupts() - local APIC + IRQ handlers
   ## 8. initDriverRegistry() - driver manager
+  ## 8.5. initModules() - load kernel modules (filesystems, drivers, etc.)
   ## 9. syscallGateInit() - ring 0 ↔ ring 3 gateway
   ## 10. initServers() - IPC servers (ping_server, fs_server deferred)
   ## 11. runShell() - user shell (never returns)
@@ -478,6 +498,9 @@ proc runKernel(bootInfo: ptr BootInfo) =
 
   initDriverRegistry()
   assert true, "initDriverRegistry: completed"
+
+  initModules()
+  assert true, "initModules: completed"
 
   discard rtcReadDateTime()
   assert true, "rtcReadDateTime: completed"

@@ -259,6 +259,7 @@ test:
 	$(NIM) c -r $(TEST_FLAGS) tests/test_event_server.nim
 	$(NIM) c -r $(TEST_FLAGS) tests/test_driver_registry.nim
 	$(NIM) c -r $(TEST_FLAGS) tests/test_module_loader.nim
+	$(NIM) c -r $(TEST_FLAGS) tests/test_kernel_module_integration.nim
 	$(NIM) c -r $(TEST_FLAGS) tests/test_tss.nim
 	$(NIM) c -r $(TEST_FLAGS) tests/test_server_chan.nim
 	$(NIM) c -r $(TEST_FLAGS) tests/test_capability.nim

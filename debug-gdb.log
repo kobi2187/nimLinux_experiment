@@ -1,0 +1,5 @@
+MTOOLS_SKIP_CHECK=1 mcopy -oi disk.img apps/ping/ping.wasm apps/pingpong/pingpong.wasm ::
+MTOOLS_SKIP_CHECK=1 mcopy -oi disk.img build/apps/hello.elf build/apps/ps.elf build/apps/kill.elf build/apps/stats.elf build/apps/ls.elf build/apps/top.elf build/apps/dispatch_server.elf build/apps/fs_server.elf build/apps/user_tests.elf ::
+python3 tests/qemu_debug.py gdb --iso nimixos.iso --bios /usr/share/ovmf/OVMF.fd \
+	--kernel build/kernel-monolithic \
+	--disk disk.img --virtio-blk
