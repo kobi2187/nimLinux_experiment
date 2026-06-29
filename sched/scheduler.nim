@@ -109,8 +109,15 @@ proc newSchedulerManager*(taskMgr: TaskManager, cpuCount: int, model: ExecutionM
 # ═══════════════════════════════════════════════════════════════════════════
 
 proc enqueue*(self: SchedulerManager, task: Task, cpuId: int = 0) =
-  ## Add task to run queue
+  ## Add task to run queue, marking it ready to run.
+  ##
+  ## If cpuId is invalid, defaults to CPU 0.
+  ## Sets task state to tsReady and resets time slice.
+  doAssert task != nil, "cannot enqueue nil task"
+  doAssert self.runQueues.len > 0, "no run queues initialized"
+
   let cpu = if cpuId >= 0 and cpuId < self.cpuCount: cpuId else: 0
+  doAssert cpu >= 0 and cpu < self.runQueues.len, "cpu index out of bounds"
   let rq = self.runQueues[cpu]
 
   rq.lock.acquire()
@@ -122,7 +129,13 @@ proc enqueue*(self: SchedulerManager, task: Task, cpuId: int = 0) =
   inc rq.totalTasks
 
 proc dequeue*(self: SchedulerManager, cpuId: int = 0): Option[Task] =
-  ## Remove highest priority task from run queue
+  ## Remove and return highest priority task from run queue.
+  ##
+  ## Returns None if queue is empty.
+  ## Priority: lower number = higher priority (standard Unix nice scale).
+  doAssert self.runQueues.len > 0, "no run queues initialized"
+  doAssert cpuId >= 0 and cpuId < self.runQueues.len, "cpuId out of bounds"
+
   let rq = self.runQueues[cpuId]
 
   rq.lock.acquire()
@@ -131,27 +144,36 @@ proc dequeue*(self: SchedulerManager, cpuId: int = 0): Option[Task] =
   if rq.tasks.len == 0:
     return none(Task)
 
+  doAssert rq.tasks.len > 0, "queue should not be empty at this point"
+
   # Find highest priority (lowest number = highest priority)
   var bestIdx = 0
   var bestPrio = rq.tasks[0].priority
   for i in 1..<rq.tasks.len:
+    doAssert i < rq.tasks.len, "task index out of bounds during search"
     if rq.tasks[i].priority < bestPrio:
       bestPrio = rq.tasks[i].priority
       bestIdx = i
 
+  doAssert bestIdx >= 0 and bestIdx < rq.tasks.len, "bestIdx out of bounds"
   let task = rq.tasks[bestIdx]
   rq.tasks.delete(bestIdx)
   some(task)
 
 proc pickNext*(self: SchedulerManager, cpuId: int = 0): Task =
-  ## Pick next task to run
+  ## Pick next task to run from queue, or return idle task if empty.
+  ##
+  ## Always returns a task (idle task if nothing else runnable).
   let next = self.dequeue(cpuId)
   if next.isSome:
+    doAssert next.get != nil, "dequeue returned nil task in Some"
     return next.get
 
   # No runnable tasks, return idle task
   if self.idleTask != nil:
     return self.idleTask
+
+  doAssert false, "no idle task available"  # Should never reach this
 
   # No idle task either (shouldn't happen)
   nil
