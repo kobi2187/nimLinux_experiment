@@ -13,6 +13,7 @@ const
 
 type
   PciDevice* = object
+    found*:     bool
     bus*, slot*, fn*:     uint8
     vendorId*, deviceId*: uint16
     classCode*: uint8
@@ -25,6 +26,7 @@ var
   gPciCount*:   int
 
 proc pciReadDevice(bus, slot, fn: uint8): PciDevice =
+  result.found    = true
   result.bus      = bus
   result.slot     = slot
   result.fn       = fn
@@ -85,3 +87,12 @@ proc pciDeviceName*(vendor, device: uint16): cstring =
     if entry.vendor == vendor and entry.device == device:
       return entry.name
   nil
+
+proc pciVirtioFind*(vendorId, deviceId: uint16): PciDevice =
+  ## Find the first (bus, slot, fn) matching vendorId:deviceId.
+  ## Returns a device with found=false if not found.
+  for i in 0..<gPciCount:
+    let d = gPciDevices[i]
+    if d.vendorId == vendorId and d.deviceId == deviceId:
+      return d
+  PciDevice(found: false, bus: 0, slot: 0, fn: 0, vendorId: 0xFFFF'u16)
