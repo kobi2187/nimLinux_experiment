@@ -327,11 +327,14 @@ var serverLoadBuf: array[512 * 1024, byte]   # 512 KB static buffer for server E
 
 proc mountDisk(): bool =
   ## Mount disk; log result. Returns true on success.
+  ## TEMPORARY: only FAT is registered for V10. VFS multi-driver support
+  ## (littlefs, lwext4, metadata_db) deferred to Milestone 2 due to kernel-
+  ## context registration corruption (seq[string] in --os:any).
   registerFatFs()
-  registerLittleFS()
-  registerLwExt4()
+  # registerLittleFS()  # DEFERRED: kernel corruption
+  # registerLwExt4()   # DEFERRED: kernel corruption
   if vfsMount():
-    klog(llInfo, "boot: VFS prefix-routed volumes mounted")
+    klog(llInfo, "boot: FAT volume mounted (VFS drivers deferred)")
     return true
   klog(llWarn, "boot: disk not available — servers will not load")
   false
@@ -381,11 +384,11 @@ proc initServers() =
   spawnDispatcher()
   assert true, "initServers: after spawnDispatcher"
 
-  # DISABLED: VFS mount triggers a kernel fault loop (metadata_db seq[string] bug)
-  # TODO: refactor metadata_db off seq[string] onto fixed-size arrays
-  assert true, "initServers: skipping VFS mount (disabled for debugging)"
-  # if mountDisk():
-  #   discard tryLoadServer("fs_server.elf")
+  assert true, "initServers: about to mountDisk"
+  if mountDisk():
+    assert true, "initServers: disk mounted, loading fs_server"
+    discard tryLoadServer("fs_server.elf")
+  assert true, "initServers: done"
 
 when defined(testMode):
   proc runTestMode() =
