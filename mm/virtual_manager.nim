@@ -63,11 +63,15 @@ type
   # ═══════════════════════════════════════════════════════════════════════════
 
   AddressSpace* = ref object
-    ## A complete virtual address space
-    root*: PhysAddr           ## CR3 value (PML4 physical address)
-    regions*: seq[VmRegion]   ## Mapped regions
-    lock*: SpinLock           ## Per-address-space lock
-    refCount*: int            ## Reference count
+    ## A complete virtual address space with 4-level page tables (x86-64 PML4).
+    ##
+    ## Strategy: Per-process address spaces; kernel shared across all processes.
+    ## CR3 switches on context switch; TLB invalidation on major changes.
+
+    root*: PhysAddr           ## CR3 value (PML4 table physical address)
+    regions*: seq[VmRegion]   ## Mapped regions (for validation + debugging)
+    lock*: SpinLock           ## Per-address-space lock (protects regions list)
+    refCount*: int            ## Reference count (for sharing/cleanup)
 
   # ═══════════════════════════════════════════════════════════════════════════
   # Virtual Memory Manager
@@ -254,7 +258,14 @@ proc mapPage*(self: VirtualMemManager, space: AddressSpace,
   space.lock.acquire()
   defer: space.lock.release()
 
+  doAssert (uint64(phys) and 0xFFF'u64) == 0, "physical address not page-aligned"
+  doAssert (uint64(virt) and 0xFFF'u64) == 0, "virtual address not page-aligned"
+
   let idx = virtIndices(virt)
+  doAssert idx.pml4 >= 0 and idx.pml4 < PT_ENTRIES, "PML4 index out of bounds"
+  doAssert idx.pdpt >= 0 and idx.pdpt < PT_ENTRIES, "PDPT index out of bounds"
+  doAssert idx.pd >= 0 and idx.pd < PT_ENTRIES, "PD index out of bounds"
+  doAssert idx.pt >= 0 and idx.pt < PT_ENTRIES, "PT index out of bounds"
   let pml4 = physPtr[array[PT_ENTRIES, uint64]](space.root)
 
   # Walk/create page tables
@@ -269,6 +280,7 @@ proc mapPage*(self: VirtualMemManager, space: AddressSpace,
     return err(meAlreadyMapped)
 
   # Set the page table entry
+  doAssert idx.pt >= 0 and idx.pt < PT_ENTRIES, "PT index validation after walk"
   pt[idx.pt] = uint64(phys) or flagsToEntry(flags)
 
   ok()

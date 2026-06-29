@@ -1,8 +1,12 @@
 # SPDX-License-Identifier: GPL-2.0
-## Pure Nim Page-Structured B+ Tree Database
-## Designed for freestanding kernel environments.
+## B+ Tree metadata database with probe/search separation.
+##
+## Provides two query patterns:
+## - keyExists(): fast bool probe (does key exist?)
+## - keySearch(): retrieves value by output parameter, returns bool for success
+## This separation avoids overhead for existence checks.
 
-import ../core/log, ../core/serial
+import ../core/serial
 
 const
   PageSize* = 4096
@@ -159,9 +163,10 @@ proc insertRecursive(db: MetadataDB; nodeId: PageId; key: string; val: uint64;
   
   if node.isLeaf:
     let idx = findInsertIndex(node.keys, key)
+    doAssert idx >= 0 and idx <= node.keys.len, "insert index out of bounds"
     node.keys.insert(key, idx)
     node.values.insert(val, idx)
-    
+
     if node.keys.len > MaxKeysPerNode:
       let (sk, sid) = splitLeaf(db, node)
       splitKey = sk
@@ -170,12 +175,14 @@ proc insertRecursive(db: MetadataDB; nodeId: PageId; key: string; val: uint64;
     return false
   else:
     let idx = findInsertIndex(node.keys, key)
+    doAssert idx >= 0 and idx < node.children.len, "child index out of bounds"
     let childId = node.children[idx]
-    
+
     var promoKey: string
     var promoId: PageId
     if insertRecursive(db, childId, key, val, promoKey, promoId):
       let insIdx = findInsertIndex(node.keys, promoKey)
+      doAssert insIdx >= 0 and insIdx <= node.keys.len, "promotion insert index out of bounds"
       node.keys.insert(promoKey, insIdx)
       node.children.insert(promoId, insIdx + 1)
       
@@ -214,7 +221,17 @@ proc searchNode(db: MetadataDB; nodeId: PageId; key: string): BPlusNode =
     let idx = findInsertIndex(node.keys, key)
     return searchNode(db, node.children[idx], key)
 
-proc get*(db: MetadataDB; key: string; val: var uint64): bool =
+proc keyExists*(db: MetadataDB; key: string): bool =
+  ## Fast probe: check if key exists without retrieving value.
+  let leaf = searchNode(db, db.rootId, key)
+  if leaf == nil: return false
+  for i in 0 ..< leaf.keys.len:
+    if leaf.keys[i] == key:
+      return true
+  false
+
+proc keySearch*(db: MetadataDB; key: string; val: var uint64): bool =
+  ## Retrieve value for key, returning true if found, false otherwise.
   let leaf = searchNode(db, db.rootId, key)
   if leaf == nil: return false
   for i in 0 ..< leaf.keys.len:
@@ -222,6 +239,10 @@ proc get*(db: MetadataDB; key: string; val: var uint64): bool =
       val = leaf.values[i]
       return true
   false
+
+proc get*(db: MetadataDB; key: string; val: var uint64): bool =
+  ## Legacy alias: use keySearch() for clarity.
+  keySearch(db, key, val)
 
 proc startsWith(s, prefix: string): bool =
   if prefix.len > s.len: return false

@@ -62,37 +62,35 @@ type
   # ═══════════════════════════════════════════════════════════════════════════
 
   Task* = ref object
-    ## Task (thread) representation
-    id*: uint64                   ## Unique task ID
-    name*: array[32, char]        ## Task name
+    ## Task (thread) representation.
+    ##
+    ## Lifecycle: created → ready → running → (sleeping|waiting) → zombie → dead
+    ## Each task has its own address space, kernel stack, and CPU context.
 
-    # State
-    state*: TaskState             ## Current state
-    priority*: TaskPriority       ## Scheduling priority
-    flags*: uint32                ## Task flags
+    id*: uint64                   ## Unique PID (persistent across lifecycle)
+    name*: array[32, char]        ## Task name (debugging)
 
-    # Memory
-    addressSpace*: AddressSpace   ## Virtual address space
-    kernelStack*: VirtAddr        ## Kernel stack base
-    kernelStackSize*: uint64      ## Kernel stack size
-    userStack*: VirtAddr          ## User stack (if user task)
+    state*: TaskState             ## Current lifecycle state
+    priority*: TaskPriority       ## Scheduling priority (0-139)
+    flags*: uint32                ## Task flags (RT, system, etc.)
 
-    # CPU state
-    context*: CpuContext          ## Saved context
+    addressSpace*: AddressSpace   ## Virtual address space (page tables, VMA)
+    kernelStack*: VirtAddr        ## Kernel stack base (grows downward)
+    kernelStackSize*: uint64      ## Kernel stack size (typically 8KB)
+    userStack*: VirtAddr          ## User stack (for user-mode tasks)
 
-    # Scheduling
-    cpuTime*: uint64              ## Total CPU time (ticks)
-    lastRun*: uint64              ## Last run timestamp
-    timeSlice*: uint64            ## Remaining time slice
-    cpu*: int                     ## CPU affinity (-1 = any)
+    context*: CpuContext          ## Saved context (swapped on schedule)
 
-    # Hierarchy
-    parent*: Task                 ## Parent task
-    children*: seq[Task]          ## Child tasks
-    exitCode*: int                ## Exit code
+    cpuTime*: uint64              ## Cumulative CPU time (for fairness)
+    lastRun*: uint64              ## Last execution timestamp
+    timeSlice*: uint64            ## Remaining ticks in current time slice
+    cpu*: int                     ## CPU affinity (-1 = any CPU)
 
-    # Lists
-    nextInQueue*: Task            ## Next in run/wait queue
+    parent*: Task                 ## Parent task (for hierarchy)
+    children*: seq[Task]          ## Child tasks (for cleanup)
+    exitCode*: int                ## Exit code (if zombie)
+
+    nextInQueue*: Task            ## Next task in run/wait queue (scheduler)
 
   # ═══════════════════════════════════════════════════════════════════════════
   # Task Manager

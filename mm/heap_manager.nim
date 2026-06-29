@@ -41,29 +41,29 @@ type
   # ═══════════════════════════════════════════════════════════════════════════
 
   HeapManager* = ref object
-    ## Heap manager state
-    physMgr*: PhysicalMemManager    ## Physical memory dependency
-    virtMgr*: VirtualMemManager     ## Virtual memory dependency
+    ## Heap manager state: buddy allocator with free list + bump allocator
+    ##
+    ## Strategy: Small allocations use free list; bumps at frontier for large requests.
+    ## Free list is coalesced to reduce fragmentation; frontier only grows, never shrinks.
 
-    # Heap boundaries
-    heapStart*: VirtAddr            ## Heap start address
-    heapEnd*: VirtAddr              ## Current heap end
-    heapMax*: VirtAddr              ## Maximum heap address
-    heapFrontier*: VirtAddr         ## Current frontier/bump address
+    physMgr*: PhysicalMemManager      ## Physical frame allocator (for growing heap)
+    virtMgr*: VirtualMemManager       ## Virtual address mapper (for identity-mapping frames)
 
-    # Free list
-    freeList*: ptr FreeBlock        ## Head of free list
+    heapStart*: VirtAddr              ## Heap start address (read-only after init)
+    heapEnd*: VirtAddr                ## Current heap end (grows as demand increases)
+    heapMax*: VirtAddr                ## Maximum heap address (hard limit)
+    heapFrontier*: VirtAddr           ## Bump allocator frontier (monotonic)
 
-    # Synchronization
-    lock*: SpinLock
+    freeList*: ptr FreeBlock          ## Head of coalesced free block list (address-sorted)
 
-    # Statistics
-    totalAllocated*: uint64         ## Total bytes allocated
-    totalFreed*: uint64             ## Total bytes freed
-    currentUsed*: uint64            ## Current bytes in use
-    peakUsed*: uint64               ## Peak usage
-    allocCount*: uint64             ## Number of allocations
-    freeCount*: uint64              ## Number of frees
+    lock*: SpinLock                   ## IRQ-safe spinlock protecting all fields
+
+    totalAllocated*: uint64           ## Total bytes allocated across lifetime
+    totalFreed*: uint64               ## Total bytes freed across lifetime
+    currentUsed*: uint64              ## Currently in-use bytes (allocated - freed)
+    peakUsed*: uint64                 ## Peak usage bytes (max currentUsed)
+    allocCount*: uint64               ## Allocation count (debugging/stats)
+    freeCount*: uint64                ## Free call count (debugging/stats)
 
 var globalHeapManager*: HeapManager = nil
 
@@ -201,7 +201,13 @@ proc coalesce(self: HeapManager) =
 # ═══════════════════════════════════════════════════════════════════════════
 
 proc alloc*(self: HeapManager, size: uint64): Result[pointer, HeapError] =
-  ## Allocate memory from heap
+  ## Allocate memory from heap, returning error on failure.
+  ##
+  ## Returns Ok(pointer) on success, Err(HeapError) if:
+  ## - size is 0 (heInvalidSize)
+  ## - heap cannot grow enough (heOutOfMemory)
+  ## - physical memory unavailable (heOutOfMemory)
+  ## - virtual mapping fails (heOutOfMemory)
   if size == 0:
     return err(heInvalidSize)
 
@@ -219,16 +225,22 @@ proc alloc*(self: HeapManager, size: uint64): Result[pointer, HeapError] =
     kprintln("    [HEAP] alloc: found free block")
     self.removeFromFreeList(prev, curr)
 
+    doAssert curr.size >= actualSize, "found block too small for allocation"
+
     # Split block if significantly larger
     if curr.size >= actualSize + MinBlockSize + HeaderSize:
       let newBlock = cast[ptr FreeBlock](cast[uint64](curr) + actualSize)
+      doAssert cast[uint64](newBlock) >= uint64(self.heapStart), "split block out of heap"
+      doAssert cast[uint64](newBlock) < uint64(self.heapEnd), "split block beyond heap end"
       newBlock.size = curr.size - actualSize
+      doAssert newBlock.size >= MinBlockSize, "split created undersized block"
       newBlock.next = nil
       self.addToFreeList(newBlock)
       curr.size = actualSize
 
     # Convert to allocated block
     let allocBlock = cast[ptr uint64](curr)
+    doAssert cast[uint64](allocBlock) >= uint64(self.heapStart), "allocation out of heap"
     allocBlock[] = curr.size  # Store size
 
     self.currentUsed += curr.size
@@ -242,6 +254,9 @@ proc alloc*(self: HeapManager, size: uint64): Result[pointer, HeapError] =
   kprintln("    [HEAP] alloc: no free block, growing heap...")
 
   let currentTop = self.heapFrontier
+  doAssert currentTop >= self.heapStart, "frontier below heap start"
+  doAssert currentTop <= self.heapEnd, "frontier beyond heap end"
+
   if currentTop + actualSize > self.heapEnd:
     let growResult = self.grow(actualSize)
     if growResult.isErr:
@@ -250,8 +265,11 @@ proc alloc*(self: HeapManager, size: uint64): Result[pointer, HeapError] =
 
   # Allocate at current top
   let allocBlock = cast[ptr uint64](currentTop)
+  doAssert cast[uint64](allocBlock) >= uint64(self.heapStart), "allocation out of heap"
   allocBlock[] = actualSize
-  self.heapFrontier = currentTop + actualSize
+  let newFrontier = currentTop + actualSize
+  doAssert newFrontier <= self.heapEnd, "frontier would exceed heap end"
+  self.heapFrontier = newFrontier
 
   self.currentUsed += actualSize
   if self.currentUsed > self.peakUsed:
@@ -262,7 +280,10 @@ proc alloc*(self: HeapManager, size: uint64): Result[pointer, HeapError] =
   ok(cast[pointer](cast[uint64](allocBlock) + HeaderSize))
 
 proc free*(self: HeapManager, p: pointer): Result[void, HeapError] =
-  ## Free allocated memory
+  ## Free allocated memory, returning error on failure.
+  ##
+  ## Safe to call with nil (no-op).
+  ## Returns Err(heInvalidPointer) if pointer is outside heap bounds.
   if p == nil:
     return ok()
 
@@ -278,6 +299,8 @@ proc free*(self: HeapManager, p: pointer): Result[void, HeapError] =
     return err(heInvalidPointer)
 
   let blockSize = sizePtr[]
+  doAssert blockSize > 0, "invalid block size during free"
+  doAssert blockSize >= HeaderSize, "block size less than header"
 
   # Convert to free block and add to list
   let freeBlk = cast[ptr FreeBlock](blockAddr)
@@ -294,7 +317,10 @@ proc free*(self: HeapManager, p: pointer): Result[void, HeapError] =
   ok()
 
 proc allocAligned*(self: HeapManager, size: uint64, align: uint64): Result[pointer, HeapError] =
-  ## Allocate aligned memory
+  ## Allocate aligned memory, returning pointer aligned to `align` boundary.
+  ##
+  ## Note: May waste memory before alignment point (not optimal for small alignments).
+  ## Same error conditions as alloc().
   if align <= MinBlockSize:
     return self.alloc(size)
 
@@ -310,7 +336,10 @@ proc allocAligned*(self: HeapManager, size: uint64, align: uint64): Result[point
   ok(cast[pointer](aligned))
 
 proc realloc*(self: HeapManager, p: pointer, newSize: uint64): Result[pointer, HeapError] =
-  ## Reallocate memory
+  ## Reallocate memory to new size, copying old data.
+  ##
+  ## If p is nil, behaves like alloc(). If newSize < old size, returns original pointer.
+  ## If newSize > old size, allocates new block, copies data, frees old block.
   if p == nil:
     return self.alloc(newSize)
 

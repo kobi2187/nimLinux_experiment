@@ -356,33 +356,54 @@ proc tryLoadServer(name: cstring): bool =
   true
 
 proc initServers() =
+  ## Initialize kernel servers and IPC infrastructure.
+  ##
+  ## Steps:
+  ## 1. regionAllocInit() - initialize capability-based memory allocation
+  ## 2. serverChanRegistryInit() - set up kernel message channels
+  ## 3. pingServerInit() - start ping server for basic IPC test
+  ## 4. spawnInitialTasks() - launch core kernel tasks (dispatcher deferred to shell)
+  earlyPutString("[BOOT] initServers: start\n")
   regionAllocInit()
+  earlyPutString("[BOOT] initServers: regionAllocInit done\n")
+
   # Verify region allocator initialized (can allocate regions)
   let testHandle = regionAlloc(4096)
   assert regionValid(testHandle), "initServers: regionAlloc failed"
   regionFree(testHandle)
+  earlyPutString("[BOOT] initServers: region alloc verified\n")
 
   serverChanRegistryInit()
-  assert true, "initServers: serverChanRegistryInit completed"
+  earlyPutString("[BOOT] initServers: serverChanRegistryInit done\n")
 
   pingServerInit()
-  assert true, "initServers: pingServerInit completed"
+  earlyPutString("[BOOT] initServers: pingServerInit done\n")
 
   spawnInitialTasks()
   assert procTable.nextPid > 1, "initServers: spawnInitialTasks created no processes"
+  earlyPutString("[BOOT] initServers: spawnInitialTasks done\n")
 
-  spawnDispatcher()
-  assert procTable.nextPid > 2, "initServers: spawnDispatcher created no dispatcher"
+  # Dispatcher spawn deferred — will launch from shell instead
+  # spawnDispatcher()
+  # assert procTable.nextPid > 2, "initServers: spawnDispatcher created no dispatcher"
+  earlyPutString("[BOOT] initServers: dispatcher spawn deferred (launch from shell)\n")
 
-  if mountDisk():
-    assert fsMounted, "initServers: mountDisk returned true but FAT not mounted"
-    klog(llInfo, "boot: disk mounted, loading fs_server")
-    if tryLoadServer("fs_server.elf"):
-      klog(llInfo, "boot: fs_server loaded successfully")
-    else:
-      klog(llWarn, "boot: fs_server failed to load")
-  else:
-    klog(llWarn, "boot: disk mount failed")
+  # Mount disk deferred — manually mount from shell instead
+  # This unblocks boot to reach shell prompt; disk I/O can hang during boot
+  earlyPutString("[BOOT] initServers: disk mount deferred (mount from shell with 'mount' command)\n")
+  # if mountDisk():
+  #   assert fsMounted, "initServers: mountDisk returned true but FAT not mounted"
+  #   earlyPutString("[BOOT] initServers: mountDisk succeeded\n")
+  #   klog(llInfo, "boot: disk mounted, loading fs_server")
+  #   if tryLoadServer("fs_server.elf"):
+  #     klog(llInfo, "boot: fs_server loaded successfully")
+  #   else:
+  #     klog(llWarn, "boot: fs_server failed to load")
+  # else:
+  #   earlyPutString("[BOOT] initServers: mountDisk FAILED\n")
+  #   klog(llWarn, "boot: disk mount failed")
+
+  earlyPutString("[BOOT] initServers: complete\n")
 
 when defined(testMode):
   proc runTestMode() =
@@ -402,10 +423,37 @@ when defined(testMode):
     while true: hlt()
 
 proc runKernel(bootInfo: ptr BootInfo) =
+  ## Main kernel entry point after assembly bootloader transfer.
+  ##
+  ## Initialization sequence:
+  ## 1. initKernel() - memory managers, scheduler
+  ## 2. eventServerInit() - kernel event handler
+  ## 3. picInit() - remap PIC to 0x20-0x2F
+  ## 4. initKernelModel() - set execution model (monolithic/microkernel/sasos)
+  ## 5. initTimerAndInput() - PIT, PS2 drivers
+  ## 6. initVirtioDevices() - virtio-pci probe
+  ## 7. enableInterrupts() - local APIC + IRQ handlers
+  ## 8. initDriverRegistry() - driver manager
+  ## 9. syscallGateInit() - ring 0 ↔ ring 3 gateway
+  ## 10. initServers() - IPC servers (ping_server, fs_server deferred)
+  ## 11. runShell() - user shell (never returns)
+  earlyPutString("[BOOT] runKernel: entry, bootInfo=")
+  earlyPutHex(cast[uint64](bootInfo))
+  earlyPutString("\n")
+
   assert bootInfo != nil, "runKernel: bootInfo is nil"
+  earlyPutString("[BOOT] runKernel: bootInfo verified non-nil\n")
+
+  earlyPutString("[BOOT] runKernel: calling initKernel...\n")
   let k = initKernel(bootInfo)
+  earlyPutString("[BOOT] runKernel: initKernel returned\n")
+
   assert k.initialized, "runKernel: Kernel initialization failed"
+  earlyPutString("[BOOT] runKernel: kernel initialized verified\n")
+
   assert k.physMgr != nil, "runKernel: physical manager is nil"
+  earlyPutString("[BOOT] runKernel: physMgr verified\n")
+
   kprintln("Starting scheduler...")
 
   eventServerInit()
@@ -439,6 +487,7 @@ proc runKernel(bootInfo: ptr BootInfo) =
   assert true, "syscallGateInit: completed"
   klog(llInfo, "Syscall gate ready (ring 0<->3)")
 
+  earlyPutString("[BOOT] runKernel: about to call initServers\n")
   initServers()
   assert true, "initServers: completed"
 
@@ -509,11 +558,19 @@ proc parseOrFallback(magicReg: uint32; infoPtr: pointer; bi: var BootInfo) =
     earlyPutString("[PARSE] SUCCESS\n")
 
 proc kernelMain*(magicReg: uint32, infoPtr: pointer) {.exportc.} =
+  earlyPutString("[BOOT] kernelMain entry\n")
   discard earlyDebug(magicReg, infoPtr)
+  earlyPutString("[BOOT] earlyDebug complete\n")
+
   var bootInfo: BootInfo
+  earlyPutString("[BOOT] bootInfo allocated on stack\n")
+
   parseOrFallback(magicReg, infoPtr, bootInfo)
-  earlyPutString("\n[BOOT] Calling runKernel...\n")
+  earlyPutString("[BOOT] parseOrFallback complete\n")
+
+  earlyPutString("[BOOT] Calling runKernel...\n")
   runKernel(addr bootInfo)
+  earlyPutString("[BOOT] runKernel returned (should not happen)\n")
 
 # ── Standalone Test Entry Point ──────────────────────────────────
 # NOT compiled during kernel build (no -d:kernelTestMode).

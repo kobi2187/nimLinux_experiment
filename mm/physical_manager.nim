@@ -43,21 +43,21 @@ type
   # ═══════════════════════════════════════════════════════════════════════════
 
   PhysicalMemManager* = ref object
-    ## Physical memory manager state
-    # Bitmap: 1 = used, 0 = free
-    bitmap*: ptr UncheckedArray[uint64]
-    bitmapSize*: uint64       ## Size in uint64 words
+    ## Physical memory manager state: bitmap-based frame allocator.
+    ##
+    ## Bitmap strategy: 1 bit per 4KB frame; 1 = allocated, 0 = free.
+    ## Zones partition memory for ISA DMA (0-16MB), 32-bit DMA (16MB-4GB), normal (4GB+).
 
-    # Frame counts
-    totalFrames*: uint64      ## Total physical frames
-    usedFrames*: uint64       ## Currently allocated frames
-    reservedFrames*: uint64   ## Reserved (unusable) frames
+    bitmap*: ptr UncheckedArray[uint64]   ## Bitmap of frame allocation (uint64-aligned)
+    bitmapSize*: uint64                   ## Size in uint64 words (one bit per frame)
 
-    # Zone information
-    zones*: array[Zone, ZoneInfo]
+    totalFrames*: uint64                  ## Total physical frames (fixed at init)
+    usedFrames*: uint64                   ## Currently allocated frames (monotonic within alloc/free)
+    reservedFrames*: uint64               ## Reserved frames (unusable, e.g., BIOS ROM)
 
-    # Synchronization
-    lock*: SpinLock
+    zones*: array[Zone, ZoneInfo]         ## Zone boundaries and free counts
+
+    lock*: SpinLock                       ## IRQ-safe spinlock protecting bitmap + counts
 
     # Statistics
     allocCount*: uint64       ## Total allocations
