@@ -11,6 +11,7 @@ import ../../core/log
 import ../../arch/common/boot_info
 import ../../mm/physical_manager
 import ../../mm/virtual_manager
+import ../../mm/device_mmio
 import ../../mm/heap_manager
 
 import ../../sched/task_manager
@@ -32,7 +33,11 @@ import ../../kernel/event_server
 import ../../arch/x86_64/syscall_gate
 import ../../servers/ping_server
 import ../../ipc/server_chan
+import ../../fs/vfs
 import ../../fs/fatfs
+import ../../fs/fatfs_write
+import ../../fs/littlefs
+import ../../fs/lwext4
 import ../../mm/region_allocator
 import ../../kernel/process_table
 import ../../kernel/cap/capability
@@ -139,6 +144,7 @@ proc initVirtHeap(k: Kernel): bool =
   let res = k.virtMgr.initKernelSpace()
   if res.isErr:
     kprintln("  ERROR: Could not initialize kernel address space"); return false
+  registerDeviceMapper(k.virtMgr)   # device drivers can now uncached-map BARs
   k.heapMgr = newHeapManager(k.physMgr, k.virtMgr)
   true
 
@@ -321,8 +327,11 @@ var serverLoadBuf: array[512 * 1024, byte]   # 512 KB static buffer for server E
 
 proc mountDisk(): bool =
   ## Mount disk; log result. Returns true on success.
-  if fsMount():
-    klog(llInfo, "boot: FAT volume mounted")
+  registerFatFs()
+  registerLittleFS()
+  registerLwExt4()
+  if vfsMount():
+    klog(llInfo, "boot: VFS prefix-routed volumes mounted")
     return true
   klog(llWarn, "boot: disk not available — servers will not load")
   false
@@ -330,13 +339,27 @@ proc mountDisk(): bool =
 proc tryLoadServer(name: cstring): bool =
   ## Read a server ELF from disk into serverLoadBuf and spawn it ring-3.
   ## Returns true if the server was spawned successfully.
-  assert fsMounted, "disk must be mounted before loading servers"
-  let (res, nbytes) = fsReadInto(name, cast[ptr byte](addr serverLoadBuf[0]),
+  var pathBuf: array[64, char]
+  var path: cstring = name
+  if name[0] != '/':
+    # Prepend "/fat/" to default to the FAT volume
+    var i = 0
+    let prefix = "/fat/"
+    while i < prefix.len:
+      pathBuf[i] = prefix[i]
+      inc i
+    var j = 0
+    while name[j] != '\0' and i < pathBuf.len - 1:
+      pathBuf[i] = name[j]
+      inc i; inc j
+    pathBuf[i] = '\0'
+    path = cast[cstring](addr pathBuf[0])
+
+  let nbytes = vfsReadInto(path, cast[ptr byte](addr serverLoadBuf[0]),
                                   serverLoadBuf.len)
-  if res != fOk:
+  if nbytes <= 0:
     klog(llWarn, "boot: server ELF not found on disk")
     return false
-  assert nbytes > 0, "fsReadInto returned fOk but nbytes == 0"
   launchElfBytes(name, cast[ptr byte](addr serverLoadBuf[0]), nbytes)
   klog(llInfo, "boot: server spawned")
   true
@@ -347,13 +370,17 @@ proc initServers() =
   pingServerInit()
   spawnInitialTasks()
   spawnDispatcher()
-  if mountDisk():
-    discard tryLoadServer("fs_server.elf")
+  # DISABLED: VFS mount triggers a kernel fault loop (metadata_db seq[string] bug)
+  # TODO: refactor metadata_db off seq[string] onto fixed-size arrays
+  # if mountDisk():
+  #   discard tryLoadServer("fs_server.elf")
 
 when defined(testMode):
   proc runTestMode() =
     klog(llInfo, "testMode: running kernel tests (ring 0)")
+    cli()
     kernelTests.kernelTestMain()
+    sti()
     klog(llInfo, "testMode: kernel tests done — launching user tests (ring 3)")
     var userTestsBuf = userTestsElf
     # ELF load + ring-3 spawn is not interrupt-safe: a PIT/IRQ firing mid-load
