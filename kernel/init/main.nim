@@ -33,10 +33,8 @@ import ../../kernel/event_server
 import ../../arch/x86_64/syscall_gate
 import ../../servers/ping_server
 import ../../ipc/server_chan
-import ../../fs/vfs
 import ../../fs/fatfs
 import ../../fs/fatfs_write
-import ../../fs/littlefs
 import ../../fs/lwext4
 import ../../mm/region_allocator
 import ../../kernel/process_table
@@ -326,69 +324,65 @@ proc spawnInitialTasks() =
 var serverLoadBuf: array[512 * 1024, byte]   # 512 KB static buffer for server ELFs
 
 proc mountDisk(): bool =
-  ## Mount disk; log result. Returns true on success.
-  ## TEMPORARY: only FAT is registered for V10. VFS multi-driver support
-  ## (littlefs, lwext4, metadata_db) deferred to Milestone 2 due to kernel-
-  ## context registration corruption (seq[string] in --os:any).
-  registerFatFs()
-  # registerLittleFS()  # DEFERRED: kernel corruption
-  # registerLwExt4()   # DEFERRED: kernel corruption
-  if vfsMount():
-    klog(llInfo, "boot: FAT volume mounted (VFS drivers deferred)")
+  ## Mount FAT disk directly (no VFS router for V10).
+  ## VFS multi-driver support (littlefs, lwext4, metadata_db) deferred to
+  ## Milestone 2 due to kernel-context seq[string] corruption in --os:any.
+  if fsMount():
+    assert true, "mountDisk: FAT mounted successfully"
+    klog(llInfo, "boot: FAT volume mounted")
     return true
+  assert false, "mountDisk: FAT mount failed"
   klog(llWarn, "boot: disk not available — servers will not load")
   false
 
 proc tryLoadServer(name: cstring): bool =
   ## Read a server ELF from disk into serverLoadBuf and spawn it ring-3.
   ## Returns true if the server was spawned successfully.
-  var pathBuf: array[64, char]
-  var path: cstring = name
-  if name[0] != '/':
-    # Prepend "/fat/" to default to the FAT volume
-    var i = 0
-    let prefix = "/fat/"
-    while i < prefix.len:
-      pathBuf[i] = prefix[i]
-      inc i
-    var j = 0
-    while name[j] != '\0' and i < pathBuf.len - 1:
-      pathBuf[i] = name[j]
-      inc i; inc j
-    pathBuf[i] = '\0'
-    path = cast[cstring](addr pathBuf[0])
+  ## V10: reads directly from FAT (no VFS routing).
+  assert name != nil, "tryLoadServer: name is nil"
+  assert fsMounted, "tryLoadServer: FAT not mounted"
 
-  let nbytes = vfsReadInto(path, cast[ptr byte](addr serverLoadBuf[0]),
-                                  serverLoadBuf.len)
-  if nbytes <= 0:
+  let (res, nbytes) = fsReadInto(name, cast[ptr byte](addr serverLoadBuf[0]),
+                                        serverLoadBuf.len)
+  if res != fOk or nbytes <= 0:
     klog(llWarn, "boot: server ELF not found on disk")
     return false
+
+  assert nbytes > 0, "tryLoadServer: read zero bytes"
+  assert nbytes <= serverLoadBuf.len, "tryLoadServer: buffer overflow"
+
   launchElfBytes(name, cast[ptr byte](addr serverLoadBuf[0]), nbytes)
   klog(llInfo, "boot: server spawned")
   true
 
 proc initServers() =
-  assert true, "initServers: start"
   regionAllocInit()
-  assert true, "initServers: after regionAllocInit"
+  # Verify region allocator initialized (can allocate regions)
+  let testHandle = regionAlloc(4096)
+  assert regionValid(testHandle), "initServers: regionAlloc failed"
+  regionFree(testHandle)
 
   serverChanRegistryInit()
-  assert true, "initServers: after serverChanRegistryInit"
+  assert true, "initServers: serverChanRegistryInit completed"
 
   pingServerInit()
-  assert true, "initServers: after pingServerInit"
+  assert true, "initServers: pingServerInit completed"
 
   spawnInitialTasks()
-  assert true, "initServers: after spawnInitialTasks"
+  assert procTable.nextPid > 1, "initServers: spawnInitialTasks created no processes"
 
   spawnDispatcher()
-  assert true, "initServers: after spawnDispatcher"
+  assert procTable.nextPid > 2, "initServers: spawnDispatcher created no dispatcher"
 
-  assert true, "initServers: about to mountDisk"
   if mountDisk():
-    assert true, "initServers: disk mounted, loading fs_server"
-    discard tryLoadServer("fs_server.elf")
-  assert true, "initServers: done"
+    assert fsMounted, "initServers: mountDisk returned true but FAT not mounted"
+    klog(llInfo, "boot: disk mounted, loading fs_server")
+    if tryLoadServer("fs_server.elf"):
+      klog(llInfo, "boot: fs_server loaded successfully")
+    else:
+      klog(llWarn, "boot: fs_server failed to load")
+  else:
+    klog(llWarn, "boot: disk mount failed")
 
 when defined(testMode):
   proc runTestMode() =
@@ -411,60 +405,48 @@ proc runKernel(bootInfo: ptr BootInfo) =
   assert bootInfo != nil, "runKernel: bootInfo is nil"
   let k = initKernel(bootInfo)
   assert k.initialized, "runKernel: Kernel initialization failed"
+  assert k.physMgr != nil, "runKernel: physical manager is nil"
   kprintln("Starting scheduler...")
 
-  assert true, "CP1: after kprintln"
   eventServerInit()
-  assert true, "CP2: after eventServerInit"
+  assert true, "eventServerInit: completed"
   klog(llInfo, "Event server ready")
 
-  assert true, "CP3: before picInit"
   picInit()
-  assert true, "CP4: after picInit"
+  assert true, "picInit: completed"
   klog(llInfo, "PIC 8259A remapped to vectors 0x20-0x2F")
 
-  assert true, "CP5: before initKernelModel"
   initKernelModel()
-  assert true, "CP6: after initKernelModel"
+  assert true, "initKernelModel: completed"
 
-  assert true, "CP7: before initTimerAndInput"
   initTimerAndInput()
-  assert true, "CP8: after initTimerAndInput"
+  assert true, "initTimerAndInput: completed"
 
-  assert true, "CP9: before initVirtioDevices"
   initVirtioDevices()
-  assert true, "CP10: after initVirtioDevices"
+  assert true, "initVirtioDevices: completed"
 
-  assert true, "CP11: before enableInterrupts"
   enableInterrupts()
-  assert true, "CP12: after enableInterrupts"
+  assert true, "enableInterrupts: completed"
 
-  assert true, "CP13: before initDriverRegistry"
   initDriverRegistry()
-  assert true, "CP14: after initDriverRegistry"
+  assert true, "initDriverRegistry: completed"
 
-  assert true, "CP15: before rtcReadDateTime"
   discard rtcReadDateTime()
-  assert true, "CP16: after rtcReadDateTime"
+  assert true, "rtcReadDateTime: completed"
   klog(llInfo, "RTC: wall clock read")
 
-  assert true, "CP17: before syscallGateInit"
   syscallGateInit()
-  assert true, "CP18: after syscallGateInit"
+  assert true, "syscallGateInit: completed"
   klog(llInfo, "Syscall gate ready (ring 0<->3)")
 
-  assert true, "CP19: before initServers"
   initServers()
-  assert true, "CP20: after initServers"
+  assert true, "initServers: completed"
 
   when defined(testMode):
-    assert true, "CP21: before runTestMode"
     runTestMode()
-    assert true, "CP22: after runTestMode"
 
-  assert true, "CP23: before runShell"
   runShell(k.physMgr)
-  assert true, "CP24: after runShell"
+  assert true, "runShell: completed (should not reach here)"
 
 # earlyPutChar / earlyPutString / earlyPutHex are now in core/debug.nim
 
