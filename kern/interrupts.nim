@@ -277,7 +277,15 @@ proc initializeIdt*(manager: InterruptManager, kernelCodeSelector: uint16): Resu
 
 proc registerExceptionHandler*(manager: InterruptManager, vector: uint32,
                                handler: ExceptionHandler): Result[void, ExceptionError] =
-  ## Register handler for exception vector
+  ## Register handler for exception vector (0-255).
+  ##
+  ## Returns:
+  ## - Ok() if handler registered successfully
+  ## - eeInvalidVector if vector >= 256
+  ## - eeInvalidHandler if handler is nil
+  ## - eeAlreadyRegistered if handler already set for this vector
+  doAssert vector < 256, "vector must be < 256"
+
   if vector >= 256:
     return err(eeInvalidVector)
 
@@ -287,6 +295,8 @@ proc registerExceptionHandler*(manager: InterruptManager, vector: uint32,
   manager.lock.acquire()
   defer: manager.lock.release()
 
+  doAssert vector < manager.handlers.len, "handler array bounds"
+
   if manager.handlers[vector] != nil:
     return err(eeAlreadyRegistered)
 
@@ -294,13 +304,18 @@ proc registerExceptionHandler*(manager: InterruptManager, vector: uint32,
   ok()
 
 proc unregisterExceptionHandler*(manager: InterruptManager, vector: uint32): Result[void, ExceptionError] =
-  ## Unregister handler for exception vector
+  ## Unregister handler for exception vector.
+  ##
+  ## Safe to call even if no handler registered (no-op in that case).
+  doAssert vector < 256, "vector must be < 256"
+
   if vector >= 256:
     return err(eeInvalidVector)
 
   manager.lock.acquire()
   defer: manager.lock.release()
 
+  doAssert vector < manager.handlers.len, "handler array bounds"
   manager.handlers[vector] = nil
   ok()
 
@@ -309,12 +324,20 @@ proc unregisterExceptionHandler*(manager: InterruptManager, vector: uint32): Res
 # ═══════════════════════════════════════════════════════════════════════════
 
 proc dispatchException*(manager: InterruptManager, ctx: ptr ExceptionContext): Result[void, ExceptionError] =
-  ## Dispatch exception to registered handler
+  ## Dispatch exception to registered handler.
+  ##
+  ## Context is passed from CPU exception frame or interrupt stub.
+  ## If no handler registered, returns eeHandlerNotSet.
+  doAssert ctx != nil, "exception context cannot be nil"
+
   let vec = int(ctx.vectorNum)
+  doAssert vec >= 0 and vec < 256, "vector out of range"
+
   if vec >= 256:
     return err(eeInvalidVector)
 
   manager.lock.acquire()
+  doAssert vec < manager.handlers.len, "handler array bounds"
   let handler = manager.handlers[vec]
   manager.lock.release()
 
