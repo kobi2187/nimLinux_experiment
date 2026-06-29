@@ -1,0 +1,106 @@
+[2J[01;01H[=3h[2J[01;01H[2J[01;01H[=3h[2J[01;01H[2J[01;01H[=3h[2J[01;01HBdsDxe: loading Boot0001 "UEFI QEMU DVD-ROM QM00003 " from PciRoot(0x0)/Pci(0x1,0x1)/Ata(Secondary,Master,0x0)
+BdsDxe: starting Boot0001 "UEFI QEMU DVD-ROM QM00003 " from PciRoot(0x0)/Pci(0x1,0x1)/Ata(Secondary,Master,0x0)
+WARNING: no console will be available to OS
+error: no suitable video mode found.
+[ASM] Entered 64-bit mode, about to call NimMain...
+[ASM] After NimMain, about to call kernelMain...
+[ASM] After NimMain, about to call kernelMain...
+[BOOT] kernelMain entry
+
+
+
+╔════════════════════════════════════════╗
+║        NimixOS Kernel — EARLY DEBUG   ║
+╚════════════════════════════════════════╝
+
+[BOOT] magicReg = 0x36d76289
+[BOOT] MULTIBOOT2_MAGIC = 0x36d76289
+[BOOT] MULTIBOOT1_MAGIC = 0x2badb002
+[BOOT] Detected protocol: Multiboot2
+[BOOT] infoPtr = 0x1a000
+[BOOT] infoPtr & 0xFFF = 0x0 (should be 0 if page-aligned)
+[INFO] Multiboot2: total_size=7664 end=0x0x1bdf0
+[BOOT] earlyDebug complete
+[BOOT] bootInfo allocated on stack
+
+[PARSE] Calling parseBootInfo...
+[MB2] Entered parseMultiboot2
+[MB2] Reading total_size...
+[MB2] total_size = 0x1df0
+[MB2] total_size OK, endPtr = 0x1bdf0
+[MB2] Init defaults...
+[MB2] Init done, starting tag loop...
+[MB2] Tag #1: ptr=0x1a008 type=0x15 size=0xc
+[MB2] Skipping tag type=0x15
+[MB2] Tag #2: ptr=0x1a018 type=0x1 size=0x9
+[MB2] Cmdline: 
+[MB2] Tag #3: ptr=0x1a028 type=0x2 size=0x1d
+[MB2] Bootloader: GRUB 2.12-1ubuntu7.3
+[MB2] Tag #4: ptr=0x1a048 type=0x6 size=0x1d8
+[MB2] Parsed memory map: 19 regions
+[MB2] Tag #5: ptr=0x1a220 type=0x9 size=0x254
+[MB2] Skipping tag type=0x9
+[MB2] Tag #6: ptr=0x1a478 type=0x4 size=0x10
+[MB2] Skipping tag type=0x4
+[MB2] Tag #7: ptr=0x1a488 type=0xc size=0x10
+[MB2] Skipping tag type=0xc
+[MB2] Tag #8: ptr=0x1a498 type=0xe size=0x1c
+[MB2] Skipping tag type=0xe
+[MB2] Tag #9: ptr=0x1a4b8 type=0xf size=0x2c
+[MB2] Skipping tag type=0xf
+[MB2] Tag #10: ptr=0x1a4e8 type=0x11 size=0x1900
+[MB2] Parsed RSDP
+[MB2] Tag #11: ptr=0x1bde8 type=0x0 size=0x8
+[MB2] Parsing complete: 11 tags, 19 regions
+[PARSE] parseBootInfo returned
+[PARSE] SUCCESS
+[BOOT] parseOrFallback complete
+[BOOT] Calling runKernel...
+[BOOT] runKernel: entry, bootInfo=0x1665b0
+[BOOT] runKernel: bootInfo verified non-nil
+[BOOT] runKernel: calling initKernel...
+[INFO]  [INIT] Initializing memory management...
+[INFO]  [INIT] Memory management initialized
+[INFO]  [INIT] Initializing scheduler...
+    [TASK] allocKernelStack: calling heap.alloc...
+    [HEAP] alloc: actualSize=16416
+    [HEAP] alloc: no free block, growing heap...
+    [HEAP] grow: growBy=4194304 pages=1024
+    [TASK] allocKernelStack: heap.alloc succeeded
+[INFO]  [INIT] Scheduler initialized
+[BOOT] runKernel: initKernel returned
+[BOOT] runKernel: kernel initialized verified
+[BOOT] runKernel: physMgr verified
+Starting scheduler...
+[INFO]  Event server ready
+[INFO]  PIC 8259A remapped to vectors 0x20-0x2F
+[INFO]  Selected kernel model: monolithic
+[INFO]  Monolithic kernel model initialized
+[INFO]  Kernel model ready
+[INFO]  Interrupt system initialized
+[INFO]  PIT timer: 100Hz, IRQ0 handler registered
+[INFO]  PS2 keyboard: IRQ1 handler registered
+[INFO]  PS2 mouse: IRQ12 handler registered
+[INFO]  PCI scan: devices found: 7
+[WARN]  virtio-net: device not found
+[WARN]  virtio-net: not available
+[INFO]  regionAlloc: allocated slot 0
+[INFO]  virtio-blk(pci): ready, sectors=65536
+[INFO]  virtio-blk: initialized
+[INFO]  IDT loaded
+[INFO]  Interrupts enabled
+[INFO]  Drivers probed
+[INFO]    ok:   3
+[INFO]    fail: 0
+[INFO]  RTC: wall clock read
+[INFO]  Syscall gate ready (ring 0<->3)
+[INFO]  regionAlloc: allocated slot 0
+[INFO]  regionAlloc: freed slot 0
+[INFO]  ping_server: ready
+[INFO]  procSpawn: pid=1
+[INFO]  procSpawn: pid=2
+[INFO]  procSpawn: pid=3
+[INFO]  procSpawn: pid=4
+[INFO]  Dispatch channel registered
+[INFO]  procSpawn: pid=5
+[INFO]  Dispatcher registered with capAdmin + capFs + capNet

@@ -129,9 +129,10 @@ proc capAddr*(loc: VirtioCapLoc; barBase: BarBaseFn): uint64 =
 # is mapped uncached so ordinary stores are MMIO writes.
 
 const
-  StatusAck    = 1'u8
-  StatusDriver = 2'u8
-  StatusFeatOk = 8'u8
+  StatusAck     = 1'u8
+  StatusDriver  = 2'u8
+  StatusDriverOk = 4'u8
+  StatusFeatOk  = 8'u8
   VirtioFVersion1* = 1'u64 shl 32   ## bit 32: modern (virtio-1.0) device
 
 proc lo32(v: uint64): uint32 {.inline.} = uint32(v and 0xFFFFFFFF'u64)
@@ -154,6 +155,14 @@ proc commonNegotiate*(cfg: ptr VirtioPciCommonCfg; features: uint64): bool =
   writeGuestFeatures(cfg, features or VirtioFVersion1)
   cfg.deviceStatus = cfg.deviceStatus or StatusFeatOk
   (cfg.deviceStatus and StatusFeatOk) != 0
+
+proc commonSetDriverOk*(cfg: ptr VirtioPciCommonCfg) =
+  ## Final handshake step: set DRIVER_OK so the device begins servicing the
+  ## virtqueues (spec §3.1.1). MUST come AFTER virtqueue setup. Without this the
+  ## device accepts buffers (avail.idx advances) but never processes them
+  ## (used.idx never moves) — every request times out.
+  assert cfg != nil, "setDriverOk: cfg must be non-nil"
+  cfg.deviceStatus = cfg.deviceStatus or StatusDriverOk
 
 proc commonQueueSetup*(cfg: ptr VirtioPciCommonCfg; idx: uint16;
                        descPhys, availPhys, usedPhys: uint64): bool =

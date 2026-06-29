@@ -21,6 +21,7 @@ when not defined(noKernelHardware):
   import ../drivers/virtio/diskio_virtio
 
 import ../core/log
+import ../core/debug
 import vfs
 
 # ── FatFs C types ─────────────────────────────────────────────────────────────
@@ -83,7 +84,9 @@ var fsMounted* = false
 
 proc fsMount*(): bool =
   ## Mount the FAT volume on drive 0 (ATA primary master).
+  earlyPutString("[TRACE fsMount] calling f_mount (forces boot-sector read)...\n")
   let r = f_mount(addr fatfsObj, "", 1)  # "" = default drive, 1 = mount now
+  earlyPutString("[TRACE fsMount] f_mount returned, r="); earlyPutInt(int64(r)); earlyPutString("\n")
   if r == FR_OK:
     fsMounted = true
     klog(llInfo, "fs: FAT volume mounted")

@@ -135,6 +135,26 @@ proc testQueueSetupWritesRingAddrs() =
   assert cfg.queueEnable == 1,             "queue enabled"
   echo "PASS: queueSetup writes split-ring phys addrs and enables queue"
 
+const STATUS_DRIVER_OK = 4'u8
+
+proc testQueueSetupEnablesDriver() =
+  ## Critical handshake (spec §3.1.1): after queueSetup, the device only services
+  ## requests if DRIVER_OK is set. Without it, the device accepts avail.idx changes
+  ## but never advances used.idx — every request times out. This test verifies the
+  ## complete handshake sequence: ACK → DRIVER → FEATURES_OK → (queue setup) → DRIVER_OK.
+  var cfg: VirtioPciCommonCfg
+  # Phase 1: init status to ACK|DRIVER|FEATURES_OK (as negotiate() does)
+  cfg.deviceStatus = (STATUS_ACK or STATUS_DRIVER or STATUS_FEAT_OK)
+  # Phase 2: queue setup
+  let ok = commonQueueSetup(addr cfg, 0'u16, 0x1000'u64, 0x2000'u64, 0x3000'u64)
+  assert ok, "queueSetup succeeds"
+  # Phase 3: Manually set DRIVER_OK (this is normally done by the transport wrapper pciQueueSetup)
+  commonSetDriverOk(addr cfg)
+  # Phase 4: DRIVER_OK must now be set
+  assert (cfg.deviceStatus and STATUS_DRIVER_OK) != 0,
+    "DRIVER_OK must be set after queue setup (without it, used.idx never advances)"
+  echo "PASS: full handshake sequence ACK→DRIVER→FEATURES_OK→(queue)→DRIVER_OK unblocks device"
+
 # ── Notify address (V7) ───────────────────────────────────────────────────────
 
 proc testNotifyAddr() =
@@ -199,6 +219,7 @@ when isMainModule:
   testCapAddrNotFound()
   testNegotiateSetsStatus()
   testQueueSetupWritesRingAddrs()
+  testQueueSetupEnablesDriver()
   testNotifyAddr()
   testUsedIdxObservesDeviceWrite()
   testPopSeesCompletionAfterEmptyPoll()

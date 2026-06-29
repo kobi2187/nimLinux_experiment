@@ -188,26 +188,29 @@ $(ISO_ALL_OUT): $(addprefix build/kernel-,$(KERNEL_MODELS))
 
 # ── Run in QEMU (headless, serial only) ───────────────────────────
 DISK ?= disk.img
-DISK_FLAGS = $(if $(wildcard $(DISK)),-hda $(DISK),)
+DISK_DRIVE = -drive if=none,file=$(DISK),format=raw,id=d0
+DISK_DEVICE = -device virtio-blk-pci,drive=d0
+DISK_FLAGS = $(if $(wildcard $(DISK)),$(DISK_DRIVE) $(DISK_DEVICE),)
 
-qemu: $(ISO_OUT)
+qemu: $(ISO_OUT) $(DISK)
 	qemu-system-x86_64 -cdrom $(ISO_OUT) -bios $(OVMF) \
 		$(DISK_FLAGS) \
 		-no-reboot -m $(QEMU_MEM)M -serial stdio -display none
 
 # ── Run in QEMU with all kernel variants ───────────────────────────────────────────
-qemu-all: $(ISO_ALL_OUT)
+qemu-all: $(ISO_ALL_OUT) $(DISK)
 	qemu-system-x86_64 -cdrom $(ISO_ALL_OUT) -bios $(OVMF) \
 		$(DISK_FLAGS) \
 		-no-reboot -m $(QEMU_MEM)M -serial stdio -display none
 
 # ── Run in QEMU (with VGA) ────────────────────────────────────────
-qemu-gui: $(ISO_OUT)
+qemu-gui: $(ISO_OUT) $(DISK)
 	qemu-system-x86_64 -cdrom $(ISO_OUT) -bios $(OVMF) \
+		$(DISK_FLAGS) \
 		-no-reboot -m $(QEMU_MEM)M -serial stdio
 
 # ── Run in QEMU with GDB server (paused at start) ─────────────────
-qemu-debug: $(ISO_OUT)
+qemu-debug: $(ISO_OUT) $(DISK)
 	@echo "GDB: target remote :1234  —  symbol file: build/kernel-monolithic"
 	qemu-system-x86_64 -cdrom $(ISO_OUT) -bios $(OVMF) \
 		$(DISK_FLAGS) \
@@ -255,6 +258,7 @@ test:
 	$(NIM) c -r $(TEST_FLAGS) tests/test_pit.nim
 	$(NIM) c -r $(TEST_FLAGS) tests/test_event_server.nim
 	$(NIM) c -r $(TEST_FLAGS) tests/test_driver_registry.nim
+	$(NIM) c -r $(TEST_FLAGS) tests/test_module_loader.nim
 	$(NIM) c -r $(TEST_FLAGS) tests/test_tss.nim
 	$(NIM) c -r $(TEST_FLAGS) tests/test_server_chan.nim
 	$(NIM) c -r $(TEST_FLAGS) tests/test_capability.nim

@@ -8,12 +8,17 @@
 ##   nimixBlkReady() → int             (1=ready, 0=not ready)
 
 import virtio_blk
+import ../../core/debug
 
 proc nimixBlkReady(): cint {.exportc, cdecl.} =
+  earlyPutString("[TRACE diskio] nimixBlkReady, ready="); earlyPutInt(if gVirtioBlkReady: 1 else: 0); earlyPutString("\n")
   if gVirtioBlkReady: 1 else: 0
 
 proc nimixBlkRead(sector: uint64; buf: pointer): cint {.exportc, cdecl.} =
-  if virtioBlkRead(sector, buf): 0 else: -1
+  earlyPutString("[TRACE diskio] nimixBlkRead sector="); earlyPutInt(int64(sector)); earlyPutString("\n")
+  let ok = virtioBlkRead(sector, buf)
+  earlyPutString("[TRACE diskio] nimixBlkRead done, ok="); earlyPutInt(if ok: 1 else: 0); earlyPutString("\n")
+  if ok: 0 else: -1
 
 proc nimixBlkWrite(sector: uint64; buf: pointer): cint {.exportc, cdecl.} =
   if virtioBlkWrite(sector, buf): 0 else: -1
