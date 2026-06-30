@@ -200,12 +200,15 @@ proc blkPciReady(t: VirtioTransport): bool =
 proc virtioBlkInitPci(): bool =
   var t = pciTransport(VirtioVendorBlk, VirtioBlkDevice)
   if not blkPciReady(t): return false
-  let mem = blkAllocQueue()
-  if mem == nil: return false
-  # ponytail: map DMA ring region uncached (device DMAs to phys, CPU cache would block updates)
-  discard mapDeviceMmio(PhysAddr(translatePhys(mem)), 4096)
+  # Allocate DMA ring from physMgr (above boot identity map), mapped uncached.
+  # Queue needs 2 pages (desc+avail+used=7193B) + DMA bufs. 3 pages = safe margin.
+  let mem = allocDmaPages(3)
+  if mem == nil:
+    klog(llError, "virtio-blk: DMA alloc failed")
+    return false
+  let physBase = translatePhys(mem)
   let q = virtqueueInitNoWire(0, mem)
-  if not t.queueSetup(0'u16, translatePhys(mem)): return false
+  if not t.queueSetup(0'u16, physBase): return false
   gVirtioBlk = VirtioBlk(transport: t, usePci: true, queueMem: mem,
                           irqLine: t.irqLine(), queue: q,
                           numSectors: blkPciCapacity(t))

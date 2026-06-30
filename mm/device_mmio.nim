@@ -12,6 +12,7 @@
 
 import ../core/types
 import ./virtual_manager
+import ./physical_manager
 
 var gMapper: VirtualMemManager   ## live VMM, set once at boot
 
@@ -53,3 +54,23 @@ proc mapDeviceMmio*(phys: PhysAddr, length: uint64): VirtAddr =
     assert ok, "mapDeviceMmio: page map failed"
     off += FrameSize
   VirtAddr(phys)
+
+proc allocDmaPages*(nPages: int): pointer =
+  ## Allocate `nPages` contiguous physical frames from physMgr (outside the
+  ## boot identity map), map them uncached into the kernel address space, and
+  ## return the virtual pointer. Returns nil on failure.
+  ## Use for DMA ring buffers that must be cache-coherent with a device.
+  assert gMapper != nil, "allocDmaPages: mapper not registered"
+  assert nPages > 0, "allocDmaPages: zero pages"
+  # Use zoneDma32 (16MB-4GB) — zoneNormal (4GB+) is empty on QEMU 256MB;
+  # zoneDma32 has frames well above the 64MB boot identity map.
+  let r = gMapper.physMgr.allocContiguous(nPages, zoneDma32)
+  if r.isErr: return nil
+  let phys = r.value
+  # Map uncached first, then zero via the mapped virt address.
+  # (phys may be above the boot identity map, so direct cast would be wrong.)
+  let virt = mapDeviceMmio(phys, uint64(nPages) * FrameSize)
+  let p = cast[ptr UncheckedArray[byte]](virt)
+  let sizeBytes = uint64(nPages) * FrameSize
+  for i in 0..<sizeBytes: p[i] = 0
+  cast[pointer](virt)

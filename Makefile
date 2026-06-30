@@ -111,6 +111,10 @@ build/apps/top.elf: apps/nim/top/top.nim build/nimix_abi_stub.o
 	@mkdir -p build/apps
 	$(NIM_APP) --path:$(CURDIR)/apps/nim/top -o:$@ $<
 
+build/apps/mount_test.elf: apps/mount_test.nim kernel/abi/nimix_abi_stub.c build/nimix_abi_stub.o
+	@mkdir -p build/apps
+	$(NIM_APP) -o:$@ $<
+
 build/apps/dispatch_server.elf: servers/dispatch/dispatch_server_elf.nim servers/dispatch/dispatch_logic.nim servers/dispatch/priority_queue.nim servers/dispatch/qos_policy.nim servers/dispatch/dispatch_wire.nim build/nimix_abi_stub.o
 	@mkdir -p build/apps
 	$(NIM_APP) --path:$(CURDIR)/servers/dispatch --path:$(CURDIR)/apps/nim -d:dispatchNoCps -o:$@ $<
