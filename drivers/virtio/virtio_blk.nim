@@ -202,6 +202,8 @@ proc virtioBlkInitPci(): bool =
   if not blkPciReady(t): return false
   let mem = blkAllocQueue()
   if mem == nil: return false
+  # ponytail: map DMA ring region uncached (device DMAs to phys, CPU cache would block updates)
+  discard mapDeviceMmio(PhysAddr(translatePhys(mem)), 4096)
   let q = virtqueueInitNoWire(0, mem)
   if not t.queueSetup(0'u16, translatePhys(mem)): return false
   gVirtioBlk = VirtioBlk(transport: t, usePci: true, queueMem: mem,
