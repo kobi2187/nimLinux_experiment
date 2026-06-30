@@ -51,9 +51,7 @@ proc pciScanSlot(bus, slot: uint8) =
     return
   for fn in 1'u8..7'u8:
     let dev = pciReadDevice(bus, slot, fn)
-    if dev.vendorId == PciVendorNone:
-      continue
-    if gPciCount < MaxPciDevices:
+    if dev.vendorId != PciVendorNone and gPciCount < MaxPciDevices:
       gPciDevices[gPciCount] = dev
       inc gPciCount
 

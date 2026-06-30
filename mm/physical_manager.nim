@@ -72,7 +72,7 @@ const
 # Bitmap Operations
 # ═══════════════════════════════════════════════════════════════════════════
 
-proc frameToIndex(frame: uint64): tuple[word: int, bit: int] {.inline.} =
+func frameToIndex(frame: uint64): tuple[word: int, bit: int] {.inline.} =
   ## Convert frame number to bitmap index
   (int(frame div BitsPerWord), int(frame mod BitsPerWord))
 
@@ -121,7 +121,7 @@ proc findFirstFreeInWord(word: uint64): int {.inline.} =
     v = v shr 2
   if (v and 0x1'u64) == 0:
     n += 1
-  return n
+  result = n
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Initialization

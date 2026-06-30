@@ -144,13 +144,10 @@ proc dequeue*(self: SchedulerManager, cpuId: int = 0): Option[Task] =
   if rq.tasks.len == 0:
     return none(Task)
 
-  doAssert rq.tasks.len > 0, "queue should not be empty at this point"
-
   # Find highest priority (lowest number = highest priority)
   var bestIdx = 0
   var bestPrio = rq.tasks[0].priority
   for i in 1..<rq.tasks.len:
-    doAssert i < rq.tasks.len, "task index out of bounds during search"
     if rq.tasks[i].priority < bestPrio:
       bestPrio = rq.tasks[i].priority
       bestIdx = i

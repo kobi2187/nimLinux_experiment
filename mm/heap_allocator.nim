@@ -76,26 +76,26 @@ const
 # Helper Functions
 # ═══════════════════════════════════════════════════════════════════════════
 
-proc alignUp*(adr: uint64, alignment: uint64): uint64 {.inline.} =
+func alignUp*(adr: uint64, alignment: uint64): uint64 {.inline.} =
   ## Align address up to alignment boundary
   ((adr + alignment - 1) div alignment) * alignment
 
-proc alignDown*(adr: uint64, alignment: uint64): uint64 {.inline.} =
+func alignDown*(adr: uint64, alignment: uint64): uint64 {.inline.} =
   ## Align address down to alignment boundary
   (adr div alignment) * alignment
 
-proc getUserPointer*(header: ptr BlockHeader): pointer {.inline.} =
+func getUserPointer*(header: ptr BlockHeader): pointer {.inline.} =
   ## Get user pointer from block header
   cast[pointer](cast[uint64](header) + BLOCK_HEADER_SIZE)
 
-proc getHeaderFromPointer*(ptr: pointer): ptr BlockHeader {.inline.} =
+func getHeaderFromPointer*(ptr: pointer): ptr BlockHeader {.inline.} =
   ## Get block header from user pointer
   cast[ptr BlockHeader](cast[uint64](ptr) - BLOCK_HEADER_SIZE)
 
-proc isAllocated*(header: ptr BlockHeader): bool {.inline.} =
+func isAllocated*(header: ptr BlockHeader): bool {.inline.} =
   header.magic == ALLOCATED_MAGIC
 
-proc isFree*(header: ptr BlockHeader): bool {.inline.} =
+func isFree*(header: ptr BlockHeader): bool {.inline.} =
   header.magic == FREE_MAGIC
 
 # ═══════════════════════════════════════════════════════════════════════════

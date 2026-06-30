@@ -38,7 +38,7 @@ proc regionAllocInit*() =
   for i in 0 ..< MaxRegions:
     gRegionRefCount[i] = 0
 
-proc regionBase*(h: RegionHandle): uint64 =
+func regionBase*(h: RegionHandle): uint64 =
   ## Convert a handle to the absolute base address of that slot.
   RegionBase + uint64(int(h)) * RegionSize
 
@@ -73,7 +73,7 @@ proc regionFree*(h: RegionHandle) =
     inc gRegionAlloc.freeCount
     klogInt(llInfo, "regionAlloc: freed slot ", int64(int(h)))
 
-proc regionValid*(h: RegionHandle): bool =
+func regionValid*(h: RegionHandle): bool =
   int(h) >= 0
 
 proc regionUsedCount*(): int =
@@ -89,7 +89,7 @@ proc regionDecRef*(h: RegionHandle): bool =
   if int(h) < 0 or int(h) >= MaxRegions: return false
   if gRegionRefCount[int(h)] > 0:
     dec gRegionRefCount[int(h)]
-  return gRegionRefCount[int(h)] == 0
+  result = gRegionRefCount[int(h)] == 0
 
 proc regionRefCount*(h: RegionHandle): int =
   if int(h) < 0 or int(h) >= MaxRegions: return 0

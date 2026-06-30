@@ -181,7 +181,7 @@ proc initKernelSpace*(self: VirtualMemManager): Result[void, MappingError] =
 type VirtIndices* = tuple[pml4, pdpt, pd, pt: int]
   ## All four page table indices for a virtual address
 
-proc getVirtIndex*(virt: VirtAddr, level: int): int {.inline.} =
+func getVirtIndex*(virt: VirtAddr, level: int): int {.inline.} =
   ## Get page table index for address at given level
   let shift = case level
     of 4: PML4_SHIFT
@@ -191,7 +191,7 @@ proc getVirtIndex*(virt: VirtAddr, level: int): int {.inline.} =
     else: 0
   int((uint64(virt) shr shift) and INDEX_MASK)
 
-proc virtIndices*(virt: VirtAddr): VirtIndices {.inline.} =
+func virtIndices*(virt: VirtAddr): VirtIndices {.inline.} =
   ## Compute all four page table indices for a virtual address at once.
   let v = uint64(virt)
   result.pml4 = int((v shr PML4_SHIFT) and INDEX_MASK)
@@ -199,7 +199,7 @@ proc virtIndices*(virt: VirtAddr): VirtIndices {.inline.} =
   result.pd   = int((v shr PD_SHIFT) and INDEX_MASK)
   result.pt   = int((v shr PT_SHIFT) and INDEX_MASK)
 
-proc flagsToEntry(flags: set[PageFlags]): uint64 =
+func flagsToEntry(flags: set[PageFlags]): uint64 =
   ## Convert page flags to PTE bits
   result = PTE_PRESENT
   if pfWritable in flags: result = result or PTE_WRITABLE
@@ -210,7 +210,7 @@ proc flagsToEntry(flags: set[PageFlags]): uint64 =
   if pfGlobal in flags: result = result or PTE_GLOBAL
   if pfNoExecute in flags: result = result or PTE_NX
 
-proc entryToFlags(entry: uint64): set[PageFlags] =
+func entryToFlags(entry: uint64): set[PageFlags] {.used.} =
   ## Convert PTE bits to page flags
   result = {}
   if (entry and PTE_PRESENT) != 0: result.incl pfPresent

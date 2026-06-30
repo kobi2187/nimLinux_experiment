@@ -284,8 +284,6 @@ proc registerExceptionHandler*(manager: InterruptManager, vector: uint32,
   ## - eeInvalidVector if vector >= 256
   ## - eeInvalidHandler if handler is nil
   ## - eeAlreadyRegistered if handler already set for this vector
-  doAssert vector < 256, "vector must be < 256"
-
   if vector >= 256:
     return err(eeInvalidVector)
 
@@ -295,7 +293,7 @@ proc registerExceptionHandler*(manager: InterruptManager, vector: uint32,
   manager.lock.acquire()
   defer: manager.lock.release()
 
-  doAssert vector < manager.handlers.len, "handler array bounds"
+  doAssert int(vector) < manager.handlers.len, "handler array bounds"
 
   if manager.handlers[vector] != nil:
     return err(eeAlreadyRegistered)
@@ -307,15 +305,13 @@ proc unregisterExceptionHandler*(manager: InterruptManager, vector: uint32): Res
   ## Unregister handler for exception vector.
   ##
   ## Safe to call even if no handler registered (no-op in that case).
-  doAssert vector < 256, "vector must be < 256"
-
   if vector >= 256:
     return err(eeInvalidVector)
 
   manager.lock.acquire()
   defer: manager.lock.release()
 
-  doAssert vector < manager.handlers.len, "handler array bounds"
+  doAssert int(vector) < manager.handlers.len, "handler array bounds"
   manager.handlers[vector] = nil
   ok()
 
@@ -430,61 +426,41 @@ proc initInterruptSystem*(kernelCodeSelector: uint16): Result[void, ExceptionErr
 
 proc getInterruptStats*(manager: InterruptManager): string =
   ## Get human-readable interrupt statistics
-  var result = "Interrupt Statistics:\n"
-  result &= "  Total Interrupts: " & $manager.totalInterrupts & "\n"
-  result &= "  Exceptions:\n"
+  var stats = "Interrupt Statistics:\n"
+  stats &= "  Total Interrupts: " & $manager.totalInterrupts & "\n"
+  stats &= "  Exceptions:\n"
 
   for i in 0..<32:
     if manager.exceptionCount[i] > 0:
-      result &= "    Vector " & $i & ": " & $manager.exceptionCount[i] & "\n"
+      stats &= "    Vector " & $i & ": " & $manager.exceptionCount[i] & "\n"
 
-  result &= "  IRQs:\n"
+  stats &= "  IRQs:\n"
   for i in 0..<16:
     if manager.irqCount[i] > 0:
-      result &= "    IRQ " & $i & ": " & $manager.irqCount[i] & "\n"
+      stats &= "    IRQ " & $i & ": " & $manager.irqCount[i] & "\n"
 
-  result
+  stats
 
 proc getExceptionName*(vector: uint32): string =
   ## Get human-readable exception name
   case vector
-  of EX_DIVIDE_ERROR:
-    return "Divide Error"
-  of EX_DEBUG:
-    return "Debug"
-  of EX_NMI:
-    return "NMI"
-  of EX_BREAKPOINT:
-    return "Breakpoint"
-  of EX_OVERFLOW:
-    return "Overflow"
-  of EX_BOUND_RANGE:
-    return "Bound Range Exceeded"
-  of EX_INVALID_OPCODE:
-    return "Invalid Opcode"
-  of EX_DEVICE_NOT_AVAILABLE:
-    return "Device Not Available"
-  of EX_DOUBLE_FAULT:
-    return "Double Fault"
-  of EX_COPROC_SEGMENT:
-    return "Coprocessor Segment Overrun"
-  of EX_INVALID_TSS:
-    return "Invalid TSS"
-  of EX_SEGMENT_NOT_PRESENT:
-    return "Segment Not Present"
-  of EX_STACK_FAULT:
-    return "Stack Fault"
-  of EX_GENERAL_PROTECTION:
-    return "General Protection Fault"
-  of EX_PAGE_FAULT:
-    return "Page Fault"
-  of EX_FLOAT_EXCEPTION:
-    return "Floating Point Exception"
-  of EX_ALIGNMENT_CHECK:
-    return "Alignment Check"
-  of EX_MACHINE_CHECK:
-    return "Machine Check"
-  of EX_SIMD_EXCEPTION:
-    return "SIMD Exception"
-  else:
-    return "Unknown Exception"
+  of EX_DIVIDE_ERROR:          "Divide Error"
+  of EX_DEBUG:                 "Debug"
+  of EX_NMI:                   "NMI"
+  of EX_BREAKPOINT:            "Breakpoint"
+  of EX_OVERFLOW:              "Overflow"
+  of EX_BOUND_RANGE:           "Bound Range Exceeded"
+  of EX_INVALID_OPCODE:        "Invalid Opcode"
+  of EX_DEVICE_NOT_AVAILABLE:  "Device Not Available"
+  of EX_DOUBLE_FAULT:          "Double Fault"
+  of EX_COPROC_SEGMENT:        "Coprocessor Segment Overrun"
+  of EX_INVALID_TSS:           "Invalid TSS"
+  of EX_SEGMENT_NOT_PRESENT:   "Segment Not Present"
+  of EX_STACK_FAULT:           "Stack Fault"
+  of EX_GENERAL_PROTECTION:    "General Protection Fault"
+  of EX_PAGE_FAULT:            "Page Fault"
+  of EX_FLOAT_EXCEPTION:       "Floating Point Exception"
+  of EX_ALIGNMENT_CHECK:       "Alignment Check"
+  of EX_MACHINE_CHECK:         "Machine Check"
+  of EX_SIMD_EXCEPTION:        "SIMD Exception"
+  else:                        "Unknown Exception"

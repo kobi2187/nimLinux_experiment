@@ -70,7 +70,7 @@ template err*[E](e: E): untyped =
   type Res = typeof(result)
   Res(isOk: false, error: e)
 
-proc isErr*[T, E](r: Result[T, E]): bool {.inline.} =
+func isErr*[T, E](r: Result[T, E]): bool {.inline.} =
   ## Check if result is an error
   not r.isOk
 
@@ -126,19 +126,19 @@ type
     of false:
       discard
 
-proc some*[T](val: T): Option[T] {.inline.} =
+func some*[T](val: T): Option[T] {.inline.} =
   ## Create an Option containing a value
   Option[T](isSome: true, val: val)
 
-proc none*[T](): Option[T] {.inline.} =
+func none*[T](): Option[T] {.inline.} =
   ## Create an empty Option
   Option[T](isSome: false)
 
-proc none*(T: typedesc): Option[T] {.inline.} =
+func none*(T: typedesc): Option[T] {.inline.} =
   ## Create an empty Option (alternative syntax)
   Option[T](isSome: false)
 
-proc isNone*[T](o: Option[T]): bool {.inline.} =
+func isNone*[T](o: Option[T]): bool {.inline.} =
   ## Check if option is empty
   not o.isSome
 
@@ -147,7 +147,7 @@ proc get*[T](o: Option[T]): T {.inline.} =
   assert o.isSome, "Attempted to get value from None"
   o.val
 
-proc getOrDefault*[T](o: Option[T], default: T): T {.inline.} =
+func getOrDefault*[T](o: Option[T], default: T): T {.inline.} =
   ## Get value or return default if empty
   if o.isSome: o.val else: default
 
@@ -156,37 +156,37 @@ proc getOrDefault*[T](o: Option[T], default: T): T {.inline.} =
 # ═══════════════════════════════════════════════════════════════════════════
 
 # PhysAddr arithmetic
-proc `+`*(a: PhysAddr, b: uint64): PhysAddr {.inline.} =
+func `+`*(a: PhysAddr, b: uint64): PhysAddr {.inline.} =
   PhysAddr(uint64(a) + b)
-proc `-`*(a: PhysAddr, b: uint64): PhysAddr {.inline.} =
+func `-`*(a: PhysAddr, b: uint64): PhysAddr {.inline.} =
   PhysAddr(uint64(a) - b)
-proc `-`*(a, b: PhysAddr): uint64 {.inline.} =
+func `-`*(a, b: PhysAddr): uint64 {.inline.} =
   uint64(a) - uint64(b)
-proc `==`*(a, b: PhysAddr): bool {.inline.} =
+func `==`*(a, b: PhysAddr): bool {.inline.} =
   uint64(a) == uint64(b)
-proc `<`*(a, b: PhysAddr): bool {.inline.} =
+func `<`*(a, b: PhysAddr): bool {.inline.} =
   uint64(a) < uint64(b)
-proc `<=`*(a, b: PhysAddr): bool {.inline.} =
+func `<=`*(a, b: PhysAddr): bool {.inline.} =
   uint64(a) <= uint64(b)
 
 # VirtAddr arithmetic
-proc `+`*(a: VirtAddr, b: uint64): VirtAddr {.inline.} =
+func `+`*(a: VirtAddr, b: uint64): VirtAddr {.inline.} =
   VirtAddr(uint64(a) + b)
-proc `-`*(a: VirtAddr, b: uint64): VirtAddr {.inline.} =
+func `-`*(a: VirtAddr, b: uint64): VirtAddr {.inline.} =
   VirtAddr(uint64(a) - b)
-proc `-`*(a, b: VirtAddr): uint64 {.inline.} =
+func `-`*(a, b: VirtAddr): uint64 {.inline.} =
   uint64(a) - uint64(b)
-proc `==`*(a, b: VirtAddr): bool {.inline.} =
+func `==`*(a, b: VirtAddr): bool {.inline.} =
   uint64(a) == uint64(b)
-proc `<`*(a, b: VirtAddr): bool {.inline.} =
+func `<`*(a, b: VirtAddr): bool {.inline.} =
   uint64(a) < uint64(b)
-proc `<=`*(a, b: VirtAddr): bool {.inline.} =
+func `<=`*(a, b: VirtAddr): bool {.inline.} =
   uint64(a) <= uint64(b)
 
 # Conversions
-proc toUint64*(a: PhysAddr): uint64 {.inline.} = uint64(a)
-proc toUint64*(a: VirtAddr): uint64 {.inline.} = uint64(a)
-proc toPhysAddr*(a: uint64): PhysAddr {.inline.} = PhysAddr(a)
+func toUint64*(a: PhysAddr): uint64 {.inline.} = uint64(a)
+func toUint64*(a: VirtAddr): uint64 {.inline.} = uint64(a)
+func toPhysAddr*(a: uint64): PhysAddr {.inline.} = PhysAddr(a)
 proc toVirtAddr*(a: uint64): VirtAddr {.inline.} = VirtAddr(a)
 
 # ═══════════════════════════════════════════════════════════════════════════
