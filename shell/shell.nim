@@ -43,6 +43,7 @@ type
     scLoadPing      ## load ping — embedded WASM
     scLoadPingpong  ## load pingpong — actor mailbox demo
     scLs            ## ls — list files on disk
+    scMount         ## mount — mount FAT disk
     scRun           ## run <file> — load WASM from disk and execute
     scExec          ## exec <file> — load ELF from disk and jump to entry
     scPs            ## ps — list all tasks with pid/class/state/cpu
@@ -87,6 +88,7 @@ proc parseCommand*(buf: openArray[char], len: int): ShellCommand =
   if bufEq(buf, first, last, "model"):     return scModel
   if bufEq(buf, first, last, "load ping"):      return scLoadPing
   if bufEq(buf, first, last, "load pingpong"):  return scLoadPingpong
+  if bufEq(buf, first, last, "mount"):   return scMount
   if bufEq(buf, first, last, "ls"):    return scLs
   if bufEq(buf, first, last, "ps"):    return scPs
   if bufEq(buf, first, last, "stats"):  return scStats
@@ -110,6 +112,7 @@ proc cmdHelp() =
   kprint("  meminfo          - physical memory usage\n")
   kprint("  clear            - scroll past old output\n")
   kprint("  model            - current kernel architecture model\n")
+  kprint("  mount            - mount FAT disk\n")
   kprint("  load ping        - run embedded ping WASM app\n")
   kprint("  load pingpong    - run embedded pingpong demo\n")
   kprint("  ls               - list files on disk\n")
@@ -137,6 +140,12 @@ proc cmdModel() =
 
 proc cmdClear() =
   for i in 0..39: defaultSerial.putChar('\n')
+
+proc cmdMount() =
+  if fsMount():
+    kprint("Disk mounted\n")
+  else:
+    kprint("Mount failed\n")
 
 proc kprintKV(label: string; value: int64; unit: string) =
   kprint(label); kprintInt(value); kprint(unit)
@@ -368,6 +377,7 @@ proc dispatchCmd(cmd: ShellCommand; buf: openArray[char];
   of scMeminfo:     cmdMeminfo(physMgr)
   of scClear:       cmdClear()
   of scModel:       cmdModel()
+  of scMount:       cmdMount()
   of scLoadPing:
     runWasm("ping",    cast[ptr byte](unsafeAddr pingWasm[0]),     pingWasm.len)
   of scLoadPingpong:

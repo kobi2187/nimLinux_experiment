@@ -40,8 +40,6 @@ when IsMonolithic:
 else:
   discard
 
-var serverLoadBuf: array[512 * 1024, byte]
-
 # ═══════════════════════════════════════════════════════════════════════════
 # Stage 1: Hardware (PIC, PIT, Input, Interrupts)
 # ═══════════════════════════════════════════════════════════════════════════
@@ -181,33 +179,6 @@ proc mountFatDisk*(): bool =
   klog(llInfo, "[SERVICES] ✓ FAT volume mounted")
   true
 
-proc tryLoadServer*(name: cstring): bool =
-  ## Read server ELF from disk and spawn ring-3.
-  assert name != nil
-  assert fsMounted, "disk not mounted"
-
-  let (res, nbytes) = fsReadInto(name, cast[ptr byte](addr serverLoadBuf[0]),
-                                        serverLoadBuf.len)
-  if res != fOk or nbytes <= 0:
-    klog(llWarn, "boot: server ELF not found on disk: ")
-    klog(llWarn, name)
-    return false
-
-  launchElfBytes(name, cast[ptr byte](addr serverLoadBuf[0]), nbytes)
-  klog(llInfo, "boot: server spawned: ")
-  klog(llInfo, name)
-  true
-
-proc initBootServices*() =
-  ## Try to load fs_server from disk (optional).
-  if not mountFatDisk():
-    klog(llWarn, "[SERVICES] disk mount failed — proceeding without fs_server")
-    return
-
-  if tryLoadServer("fs_server.elf"):
-    klog(llInfo, "[SERVICES] ✓ fs_server loaded from disk")
-  else:
-    klog(llWarn, "[SERVICES] fs_server not found on disk")
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Main Service Initialization Sequence
@@ -219,10 +190,11 @@ proc initServices*() =
   ## Stages:
   ##  1. Interrupts + PIC + PIT + Input
   ##  2. Event server + RTC
-  ##  3. Virtio devices + driver probing
+  ##  3. Virtio devices + driver probing + kernel modules (FAT code)
   ##  4. IPC infrastructure
   ##  5. Syscall gate
-  ##  6. Boot services (ping, fs)
+  ##
+  ## Disk mounting + app loading deferred to shell commands.
 
   klog(llInfo, "[SERVICES] Starting service initialization")
 
@@ -253,9 +225,5 @@ proc initServices*() =
   # Stage 5
   klog(llInfo, "[SERVICES] Stage 5: Syscall gate")
   initSyscallGate()
-
-  # Stage 6
-  klog(llInfo, "[SERVICES] Stage 6: Boot services")
-  initBootServices()
 
   klog(llInfo, "[SERVICES] ✓ Service initialization complete")
