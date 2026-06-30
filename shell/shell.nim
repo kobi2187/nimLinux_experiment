@@ -162,11 +162,6 @@ proc cmdMeminfo(physMgr: PhysicalMemManager) =
   kprintKV("  Used:  ", usedMB,  " MB\n")
   kprintKV("  Free:  ", freeMB,  " MB\n")
 
-proc cmdUnknown(buf: openArray[char], first, last: int) =
-  kprint("Unknown command: '")
-  for i in first..last: defaultSerial.putChar(buf[i])
-  kprint("'\nType 'help' for available commands.\n")
-
 proc printHex4(val: uint16) {.inline.} =
   defaultSerial.putHex(uint64(val), 4)
 
@@ -336,6 +331,36 @@ proc extractArg[N: static int](buf: openArray[char]; first, last, skip: int;
 proc execApp(name: cstring; args: cstring) =
   ## Load a PIE ELF app from disk with given args string.
   cmdExec(name, args)
+
+proc cmdUnknown(buf: openArray[char], first, last: int) =
+  ## Try to execute as filename from disk. Detect .elf vs .wasm.
+  if not fsMounted and not fsMount():
+    kprint("No disk mounted\n")
+    return
+
+  var fname: array[128, char]
+  var flen = 0
+  var i = first
+  while i <= last and flen < 127:
+    if buf[i] == ' ': break
+    fname[flen] = buf[i]
+    inc flen
+    inc i
+  fname[flen] = '\0'
+
+  let isElf = flen > 4 and fname[flen-4] == '.' and fname[flen-3] == 'e' and
+              fname[flen-2] == 'l' and fname[flen-1] == 'f'
+  let isWasm = flen > 5 and fname[flen-5] == '.' and fname[flen-4] == 'w' and
+               fname[flen-3] == 'a' and fname[flen-2] == 's' and fname[flen-1] == 'm'
+
+  if isElf:
+    cmdExec(cast[cstring](addr fname[0]))
+  elif isWasm:
+    cmdRun(cast[cstring](addr fname[0]))
+  else:
+    kprint("Unknown command: '")
+    for j in first..last: defaultSerial.putChar(buf[j])
+    kprint("' (not .elf or .wasm)\n")
 
 # ── Shell input helpers ────────────────────────────────────────────────────
 
