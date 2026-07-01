@@ -24,6 +24,8 @@ proc nimixWrite(buf: pointer; len: int) {.importc, cdecl.}
 proc nimixChanRecv(name: cstring; buf: pointer; len: int): int {.importc, cdecl.}
 proc nimixChanSend(name: cstring; data: pointer; len: int): int {.importc, cdecl.}
 proc nimixSndPlay(pcm: pointer; byteLen: int): int {.importc, cdecl.}
+proc nimixSndDrain(): int {.importc, cdecl.}
+proc nimixYield() {.importc, cdecl.}
 
 # ── Small helpers ──────────────────────────────────────────────────────────────
 
@@ -36,7 +38,17 @@ proc write(s: cstring) =
 
 proc elfPlay(pcm: pointer; byteLen: uint32): int {.nimcall.} =
   ## The single kernel crossing: hand decoded PCM to virtio-snd via sndPlay.
+  ## Returns 0=ok, -1=not ready, -2=ring full (audioStream drains + retries).
   nimixSndPlay(pcm, int(byteLen))
+
+proc elfDrain(): int {.nimcall.} =
+  ## Reclaim completed tx buffers; return in-flight count.
+  nimixSndDrain()
+
+proc elfWait() {.nimcall.} =
+  ## Yield the CPU while the ring drains — cooperative, keeps the server polite
+  ## under the dispatcher's concurrency.
+  nimixYield()
 
 proc elfStop(): int {.nimcall.} =
   ## Stop is a control-only op today (no dedicated ABI yet); ack it.
@@ -79,7 +91,8 @@ proc encodeReply(r: MediaReply; out: ptr UncheckedArray[uint8]): int =
 
 proc appMain*() {.exportc.} =
   write("audio_server: starting\n")
-  let iface = AudioIface(play: elfPlay, stop: elfStop, volume: elfVolume)
+  let iface = AudioIface(play: elfPlay, drain: elfDrain, wait: elfWait,
+                         stop: elfStop, volume: elfVolume)
   write("audio_server: ready on 'media' channel\n")
 
   var msgBuf: array[64, uint8]

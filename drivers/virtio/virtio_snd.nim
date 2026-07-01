@@ -72,10 +72,12 @@ type
     notifyMult*: uint32
 
   VirtioSnd* = object
-    ctlQueue*:  Virtqueue
-    txQueue*:   Virtqueue
-    qMem*:      pointer   # DMA pages (ctl + tx queues)
-    ready*:     bool
+    ctlQueue*:   Virtqueue
+    txQueue*:    Virtqueue
+    qMem*:       pointer   # DMA pages (ctl + tx queues)
+    ready*:      bool
+    submitted*:  uint64    # total tx buffers enqueued
+    completed*:  uint64    # total tx buffers the device has consumed
 
 var gSnd*:    VirtioSnd
 var gSndDev:  SndPciDev
@@ -193,12 +195,41 @@ proc virtioSndInit*(): bool =
   klog(llInfo, "virtio-snd: ready (44100 Hz, stereo, S16LE)")
   true
 
-# ── Playback ─────────────────────────────────────────────────────────────────
+# ── Streaming playback ─────────────────────────────────────────────────────────
+# The tx queue holds up to QueueSize buffers in flight. A continuous stream
+# submits chunks faster than the device drains them, so we track submitted vs
+# completed and reclaim slots from the used ring. Without this, `nextFree mod
+# QueueSize` wraps and overwrites descriptors the device is still playing.
+
+proc virtioSndInFlight*(): uint64 {.inline.} =
+  ## Buffers enqueued but not yet consumed by the device.
+  gSnd.submitted - gSnd.completed
+
+proc virtioSndTxDrain*(): uint64 =
+  ## Reclaim completed tx buffers from the used ring. Returns how many completed
+  ## this call. Cheap to call in a loop — advances `completed` as the device
+  ## reports consumed buffers.
+  if not gSnd.ready: return 0
+  var n = 0'u64
+  while true:
+    let pop = virtqueuePop(gSnd.txQueue)
+    if not pop.found: break
+    inc gSnd.completed
+    inc n
+  n
+
+proc virtioSndTxFull*(): bool {.inline.} =
+  ## True when the tx ring can't accept another buffer without overwriting an
+  ## in-flight one. Callers should drain + retry rather than submit.
+  virtioSndInFlight() >= uint64(QueueSize)
 
 proc virtioSndPlay*(pcmData: pointer; byteLen: uint32): bool =
-  ## Enqueue a PCM buffer for playback on stream 0.
-  ## pcmData must be DMA-accessible (from allocDmaPages or identity-mapped region).
+  ## Enqueue one PCM buffer for playback on stream 0. Non-blocking.
+  ## Returns false if the device isn't ready OR the tx ring is full (caller must
+  ## drain via virtioSndTxDrain and retry). pcmData must be DMA-accessible.
   if not gSnd.ready: return false
+  discard virtioSndTxDrain()          # opportunistically reclaim before checking
+  if virtioSndTxFull(): return false  # backpressure: ring saturated
   let vq = addr gSnd.txQueue
   let i  = vq.nextFree mod QueueSize.uint16
   vq.desc[i] = VirtqDesc(bufAddr: translatePhys(pcmData), len: byteLen, flags: 0, next: 0)
@@ -207,5 +238,6 @@ proc virtioSndPlay*(pcmData: pointer; byteLen: uint32): bool =
   {.emit: "asm volatile(\"\" ::: \"memory\");".}
   vq.avail.idx = vq.avail.idx + 1
   vq.nextFree  = vq.nextFree + 1
+  inc gSnd.submitted
   sndNotify(SndQTx)
   true

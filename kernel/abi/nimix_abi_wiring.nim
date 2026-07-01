@@ -36,3 +36,4 @@ proc wireSharedAbi*(av: var NimixAbiVTable) =
   av.mapAnon        = abiMapAnon
   av.freeAnon       = abiFreeAnon
   av.sndPlay        = abiSndPlay
+  av.sndDrain       = abiSndDrain

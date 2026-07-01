@@ -130,8 +130,16 @@ proc abiYield*() {.nimcall.} =
 proc abiSndPlay*(pcm: pointer; byteLen: int): int {.nimcall.} =
   ## Submit a PCM buffer to virtio-snd. virtioSndPlay translates the pointer to a
   ## physical address internally, so we forward the region pointer as-is.
+  ## Distinguish device-not-ready (-1) from ring-full backpressure (-2) so the
+  ## streaming caller knows to drain and retry rather than give up.
   if pcm == nil or byteLen <= 0: return -1
-  if virtioSndPlay(pcm, uint32(byteLen)): 0 else: -1
+  if virtioSndPlay(pcm, uint32(byteLen)): return 0
+  if virtioSndTxFull(): -2 else: -1
+
+proc abiSndDrain*(): int {.nimcall.} =
+  ## Reclaim completed tx buffers; return in-flight count (0 = ring idle).
+  discard virtioSndTxDrain()
+  int(virtioSndInFlight())
 
 # ── Timing ────────────────────────────────────────────────────────────────────
 

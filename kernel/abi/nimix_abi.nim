@@ -98,8 +98,12 @@ type
       ## Enqueue a PCM buffer (S16LE stereo 44100 Hz) on the audio device.
       ## `pcm` points into a region the caller owns; the kernel translates it to a
       ## physical address and hands it to virtio-snd. Non-blocking: returns after
-      ## enqueue. Returns 0=ok, -1=device not ready. Data plane stays zero-copy —
-      ## no PCM bytes cross an IPC channel.
+      ## enqueue. Returns 0=ok, -1=device not ready, -2=tx ring full (drain+retry).
+      ## Data plane stays zero-copy — no PCM bytes cross an IPC channel.
+    sndDrain*:    proc(): int {.nimcall.}
+      ## Reclaim completed tx buffers and return the current in-flight count
+      ## (buffers submitted but not yet consumed). A streaming caller polls this
+      ## to apply backpressure: when sndPlay returns -2, drain then retry.
 
 var nimixAbi*: NimixAbiVTable
   ## Global ABI vtable. Set once at boot by the chosen kernel model init.

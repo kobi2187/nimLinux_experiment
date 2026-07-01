@@ -36,8 +36,12 @@ type
     err*:      int32      ## 0=ok, negative=error
     queued*:   uint32     ## bytes accepted for playback
 
-  # Injected sink: enqueue PCM for playback. Returns 0=ok, -1=device not ready.
+  # Injected sink: enqueue one PCM chunk. 0=ok, -1=not ready, -2=ring full.
   PlayFn*   = proc(pcm: pointer; byteLen: uint32): int {.nimcall.}
+  # Injected: reclaim completed buffers; return in-flight count (0=idle).
+  DrainFn*  = proc(): int {.nimcall.}
+  # Injected: cooperative wait (yield) while the ring drains.
+  WaitFn*   = proc() {.nimcall.}
   # Injected: stop current stream. Returns 0=ok.
   StopFn*   = proc(): int {.nimcall.}
   # Injected: set volume 0..255. Returns 0=ok.
@@ -45,8 +49,14 @@ type
 
   AudioIface* = object
     play*:   PlayFn
+    drain*:  DrainFn
+    wait*:   WaitFn
     stop*:   StopFn
     volume*: VolumeFn
+
+const
+  ChunkBytes* = 4096'u32   ## per-submit PCM chunk (matches virtio-snd periodBytes)
+  DrainSpins* = 100_000    ## bound the drain wait so a stuck device can't hang us
 
 # ── Errors ────────────────────────────────────────────────────────────────────
 
@@ -62,6 +72,32 @@ proc mediaOpOf*(op: uint32): MediaOp {.inline.} =
 
 # ── Core routing ──────────────────────────────────────────────────────────────
 
+proc streamChunk(iface: AudioIface; base: uint64; off, len: uint32): bool =
+  ## Submit one chunk, applying backpressure: if the ring is full (-2), drain and
+  ## yield until a slot frees, then retry. Returns false only on device-not-ready.
+  let p = cast[pointer](base + off)
+  var spins = 0
+  while true:
+    let rc = iface.play(p, len)
+    if rc == ErrOk.int: return true
+    if rc != -2: return false          # -1 device not ready
+    discard iface.drain()              # ring full → reclaim + wait
+    if iface.wait != nil: iface.wait()
+    inc spins
+    if spins >= DrainSpins: return false
+
+proc audioStream*(iface: AudioIface; req: MediaRequest): MediaReply =
+  ## Stream a PCM region to the sink in ChunkBytes pieces with flow control.
+  ## Pure: the loop and backpressure policy live here; I/O is injected.
+  var off = 0'u32
+  while off < req.len:
+    let remaining = req.len - off
+    let chunk = if remaining < ChunkBytes: remaining else: ChunkBytes
+    if not streamChunk(iface, req.base, off, chunk):
+      return MediaReply(err: ErrDeviceNotReady, queued: off)
+    off += chunk
+  MediaReply(err: ErrOk, queued: off)
+
 proc audioHandle*(iface: AudioIface; req: MediaRequest): MediaReply =
   ## Route one media request to the injected sink. Pure — no I/O of its own.
   case mediaOpOf(req.op)
@@ -72,10 +108,7 @@ proc audioHandle*(iface: AudioIface; req: MediaRequest): MediaReply =
     # the caller learns rather than hearing silence.
     if req.fmt.bits != 16 or req.fmt.channels notin {1'u8, 2'u8}:
       return MediaReply(err: ErrUnsupportedOp)
-    let rc = iface.play(cast[pointer](req.base), req.len)
-    if rc != 0:
-      return MediaReply(err: ErrDeviceNotReady)
-    MediaReply(err: ErrOk, queued: req.len)
+    audioStream(iface, req)
   of moStop:
     discard iface.stop()
     MediaReply(err: ErrOk)

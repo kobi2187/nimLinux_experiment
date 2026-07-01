@@ -58,8 +58,9 @@ type NimixSyscall* = enum
   scMapAnon        = 24
   scFreeAnon       = 25
   scSndPlay        = 26
+  scSndDrain       = 27
 
-const NimixSyscallCount* = 27   ## total number of syscalls
+const NimixSyscallCount* = 28   ## total number of syscalls
 
 # ── Dispatch table ────────────────────────────────────────────────────────────
 # Raw function pointers indexed by NimixSyscall ordinal.
@@ -97,6 +98,7 @@ proc syscallTableInit*() =
   syscallTable[24] = cast[uint64](v.mapAnon)
   syscallTable[25] = cast[uint64](v.freeAnon)
   syscallTable[26] = cast[uint64](v.sndPlay)
+  syscallTable[27] = cast[uint64](v.sndDrain)
 
 proc syscallDispatch*(nr, a0, a1, a2, a3: uint64): uint64 {.exportc: "syscallDispatch", cdecl.} =
   ## Called from syscall_entry asm stub. Dispatches by nr through syscallTable.
