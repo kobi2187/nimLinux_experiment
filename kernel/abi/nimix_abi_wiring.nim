@@ -35,3 +35,4 @@ proc wireSharedAbi*(av: var NimixAbiVTable) =
   av.wallClock      = abiWallClock
   av.mapAnon        = abiMapAnon
   av.freeAnon       = abiFreeAnon
+  av.sndPlay        = abiSndPlay

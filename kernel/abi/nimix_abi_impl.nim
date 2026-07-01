@@ -15,6 +15,7 @@ import ../../mm/sip_heap
 import ../../mm/region_allocator
 import ../../drivers/pit
 import ../../drivers/rtc
+import ../../drivers/virtio/virtio_snd
 import ../../kernel/cap/capability as cap
 import nimix_abi_proc
 import nimix_abi_fs
@@ -123,6 +124,14 @@ proc abiEventPoll*(token: uint32; buf: pointer; bufLen: int): int {.nimcall.} =
 
 proc abiYield*() {.nimcall.} =
   yieldToNext()
+
+# ── Audio ─────────────────────────────────────────────────────────────────────
+
+proc abiSndPlay*(pcm: pointer; byteLen: int): int {.nimcall.} =
+  ## Submit a PCM buffer to virtio-snd. virtioSndPlay translates the pointer to a
+  ## physical address internally, so we forward the region pointer as-is.
+  if pcm == nil or byteLen <= 0: return -1
+  if virtioSndPlay(pcm, uint32(byteLen)): 0 else: -1
 
 # ── Timing ────────────────────────────────────────────────────────────────────
 

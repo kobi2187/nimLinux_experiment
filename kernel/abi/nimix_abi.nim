@@ -93,6 +93,14 @@ type
     freeAnon*:    proc(p: pointer; size: int) {.nimcall.}
       ## Release memory (no-op for bump allocator; region freed on exit).
 
+    # ── Audio: submit PCM for playback ────────────────────────────────────────
+    sndPlay*:     proc(pcm: pointer; byteLen: int): int {.nimcall.}
+      ## Enqueue a PCM buffer (S16LE stereo 44100 Hz) on the audio device.
+      ## `pcm` points into a region the caller owns; the kernel translates it to a
+      ## physical address and hands it to virtio-snd. Non-blocking: returns after
+      ## enqueue. Returns 0=ok, -1=device not ready. Data plane stays zero-copy —
+      ## no PCM bytes cross an IPC channel.
+
 var nimixAbi*: NimixAbiVTable
   ## Global ABI vtable. Set once at boot by the chosen kernel model init.
   ## Apps never call this directly — the ELF loader patches weak stubs with
