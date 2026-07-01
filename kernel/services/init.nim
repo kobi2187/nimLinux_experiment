@@ -19,6 +19,9 @@ import ../../kernel/cap/cap_registry
 import ../../servers/ping_server
 import ../../drivers/virtio/virtio_net
 import ../../drivers/virtio/virtio_blk
+import ../../drivers/virtio/virtio_gpu
+import ../../drivers/virtio/virtio_snd
+import ../../drivers/virtio/virtio_input
 import ../../drivers/pic
 import ../../drivers/pit
 import ../../drivers/ps2_keyboard
@@ -120,6 +123,21 @@ proc initVirtioDevices*() =
     klog(llInfo, "[SERVICES] ✓ virtio-blk initialized")
   else:
     klog(llWarn, "[SERVICES] virtio-blk: not available")
+
+  if virtioGpuInit():
+    klog(llInfo, "[SERVICES] ✓ virtio-gpu initialized")
+  else:
+    klog(llWarn, "[SERVICES] virtio-gpu: not available")
+
+  if virtioSndInit():
+    klog(llInfo, "[SERVICES] ✓ virtio-snd initialized")
+  else:
+    klog(llWarn, "[SERVICES] virtio-snd: not available")
+
+  if virtioInputInit():
+    klog(llInfo, "[SERVICES] ✓ virtio-input initialized")
+  else:
+    klog(llWarn, "[SERVICES] virtio-input: not available")
 
 proc initBuiltinDrivers*() =
   ## Probe VGA, PS2, etc. via driver registry.

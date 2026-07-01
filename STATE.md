@@ -1,117 +1,91 @@
 # STATE.md — Current Position
 
-Last updated: 2026-06-27 (session 5)
+Last updated: 2026-07-01 (session 6)
 
-## Session 5 — boot-from-disk verification + virtio transport spawn
+## Session 6 — virtio-gpu PCI transport migration
 
-Executing the `2026-06-27-fs-elf-heap.md` plan inline. Task 1 (boot fs_server
-from disk) code was already present in the tree. Verifying its done-check exposed
-a chain of issues, fixed in order:
+Picking up after session 5 which left virtio-pci V10 partially done. Since then
+(sessions 5b+): V10 DMA fix landed, kernel modularized, shell generified.
 
-1. **Harness bug (FIXED):** `make test-structured` waited for the shell prompt,
-   which testMode never prints (it halts after tests). Now skips prompt-wait in
-   `--structured` mode → `tests/qemu_harness.py`.
-2. **Disk not attached (FIXED):** test-structured passed no disk. Added a
-   `--virtio-blk` harness flag (`-drive if=none + -device virtio-blk-pci`) and
-   wired `test-structured` to attach `disk.img` (which has fs_server.elf).
-3. **pid_monotonic test wrong (FIXED):** asserted new pid `> nextPid` (impossible —
-   new pid EQUALS captured nextPid). Corrected to `pid_assigned`(==) +
-   `pid_monotonic`(nextPid advanced). Kernel tests now **24/24**.
-4. **virtio-blk transport mismatch (SPAWNED):** driver is MMIO-only; QEMU device is
-   virtio-blk-pci → "BAR0 not MMIO". Root cause = transport mismatch, not a logic
-   bug. Spawned `subprojects/virtio-pci/` behind a frozen `VirtioTransport` vtable
-   (`drivers/virtio/virtio_transport.nim`, stubbed). See DECISIONS 2026-06-27.
+## What landed between sessions 5 and 6 (already committed)
 
-**Task 1 status:** code correct, but boot-from-disk done-check is BLOCKED on the
-virtio-pci sub-project (disk can't mount until the PCI transport lands).
-
-**Task 2 (ELF relocs):** DONE + committed (05d9544). Verified: 7 host tests, 3 models
-build, and confirmed live — testMode serial shows `PT_INTERP stripped` +
-`applied relocations, count=47` loading user_tests.elf.
-
-**Task 3 (mapAnon/freeAnon):** DONE + committed (22002c4), HOST-verified (syscall
-table 26/26, all host tests, 3 models). **Ring-3 QEMU verification OPEN (TW#65):**
-testMode serial truncates mid-ABI-patch right after `kernel_tests 24/24 DONE`; the
-user_tests ring-3 phase (`abi_map_anon`) not observed reaching appMain. Unknown
-whether real hang vs serial-flush/timeout artifact.
-
-**TW#24 (osenv stub):** CLOSED as obsolete — survey showed msgpack4nim already
-compiles + round-trips under --os:standalone, no getenv stub needed (DECISIONS).
-
-**virtio-pci sub-project (the keystone — gates BOTH boot-from-disk AND graphics,
-since virtio-blk and virtio-gpu share the MMIO-vs-PCI transport blocker):**
-- V1 survey + V2 structs committed (0842b7b); V3–V8 internals committed (fa25602).
-- DONE (host-tested, 11 assertions): cap-walk, capAddr, commonNegotiate,
-  commonQueueSetup, notifyAddr, deviceConfigRead32 — all in `drivers/virtio/virtio_pci.nim`.
-- REMAINING: V9 (wire transport into virtio_blk via VirtioTransport vtable;
-  build the pciConfigReadU8/pciBarDecode adapters; verify MMIO region mapped
-  uncached for volatility) + V10 (QEMU boot proof). See `subprojects/virtio-pci/STATE.md`.
-- After V10: migrate virtio-gpu onto the vtable → display lights up.
+| Commit | What |
+|--------|------|
+| d2a68a5 | V10 DMA fix: map DMA ring uncached via `mapDeviceMmio` → `virtio-blk(pci): ready` confirmed in QEMU |
+| e1760d0 | V9: PCI transport vtable wired into virtio_blk |
+| 5067f58 | main.nim refactored to use module loader |
+| d1aa8e5 | Kernel modularity: frozen module ABI + registry |
+| 0145dba | Nim quality pass across core modules |
+| c6d7425 | Kernel architecture refactor: core / services / boot phases |
+| 9173725 | Boot-time fs_server removed; `mount` is now a shell command |
+| 876f5f5 | Shell generified: unknown command → tries `.elf`/`.wasm` from disk |
+| ddc5959 | DHCP client + stb_truetype integration |
+| 4ee7944 | vendor: audio (dr_libs, stb_vorbis) + video (pl_mpeg) + fonts |
 
 ## Milestone status
 
 | Milestone | Status | Notes |
 |-----------|--------|-------|
-| 0 — Kernel foundation | **DONE** | Boot, scheduler, context switch, FPU, sleep, ELF loader, region allocator, capability tokens |
-| 1 — IPC + services foundation | **IN PROGRESS** | MsgPack wired into ServerChan; CI workflow; fs_server ELF exists but boot-from-disk wiring incomplete |
+| 0 — Kernel foundation | **DONE** | Boot, scheduler, context switch, FPU, ELF loader, region allocator, capability tokens |
+| 1 — IPC + services foundation | **DONE** | MsgPack wired; boot-from-disk works; `mount` shell command; shell generic launcher; fs_server.elf disk-loadable |
 | 2 — Dispatcher server (CPS) | **PARTIAL** | dispatch_server.elf exists; CPS logic partial; cap-gating not yet enforced |
 | 3 — Zero-copy bulk data | **PARTIAL** | Region allocator done; capGrantRegion / regionAddRef/DecRef not yet implemented |
 | 4 — Stdlib + compiler target | **PARTIAL** | fd table, write(2) shim, osalloc done; --os:nimix target not yet |
-| 5+ — GUI, network, audio | **PLANNED** | virtio-gpu driver file exists; framebuffer init incomplete |
+| 5 — GUI | **IN PROGRESS** | virtio-gpu driver written (MMIO); needs PCI transport + init wiring |
+| 6 — Network | **PARTIAL** | DHCP client added; virtio-net driver exists; net_server not yet |
+| 7 — Audio/media | **PARTIAL** | vendors in tree (dr_libs, stb_vorbis, pl_mpeg); no driver yet |
 
-## Completed this session (session 4)
+## Current work (session 6)
 
-- TW#45 — PS/2 mouse driver: `drivers/ps2_mouse.nim`, IRQ12, 3-byte protocol decode, `mouse.move`/`mouse.click` events, 6 host tests
-- TW#46 — virtio-blk driver: `drivers/virtio/virtio_blk.nim`, 3-descriptor chain, sync read/write, struct layout tests
-- TW#47 — ARP: `drivers/net/arp.nim`, encode/decode, arp_cache, `arpHandleFrame`, `arpBuildRequest/Reply`, 6 host tests
+### Task 1: Update docs (this file + HANDOFF.md) ✓
+### Task 2: Migrate virtio_gpu to PCI transport [→]
 
-## Completed in prior sessions
+`virtio_gpu.nim` currently uses the old direct `pciVirtioFind`/`pciBarDecode` MMIO
+path (same bug that blocked virtio-blk V10). The PCI vtable is generic but
+`virtio_pci_transport.nim` has a module-global `gDev` that can only hold one device.
+Solution: gpu driver owns its own `gGpuPciDev` — same pattern as blk owning
+`gVirtioBlk`. Calls low-level `virtio_pci.nim` functions directly (no shared global).
 
-- TW#37 — CI workflow (marked done, already existed)
-- TW#50 — RTC driver: `drivers/rtc.nim`, ABI `wallClock`/`uptimeSecs`, tests
-- TW#48 → A+B+C+D — Full syscall gate:
-  - A: `syscall_entry` asm stub in `boot_asm.S` (stack swap, dispatch, sysretq)
-  - B: `NimixSyscall` enum (24 entries), `syscallTable[]`, `syscallDispatch`
-  - C: `procSpawnRing3` iretq frame; `abiExit` proper cleanup; `runPieElf` spawns + returns
-  - D: ELF trampoline emits `movabs rax,<nr>; syscall` instead of `jmp <fn>`
-- Orchestration framework: VISION/ARCHITECTURE/BACKLOG/STATE/HANDOFF + project_memory/
-- Test infrastructure:
-  - `tests/test_protocol.nim` — structured serial output (TEST PASS/FAIL/DONE)
-  - `qemu_harness.py --structured` — parses protocol, exits 0/1 for CI
-  - `tests/kernel_tests/main.nim` — ring-0 test ELF (11 tests: region/cap/proc/chan/tick)
-  - `tests/user_tests/main.nim` — ring-3 PIE ELF (7 tests: full syscall ABI)
-  - `make test-structured` — builds testMode kernel, boots in QEMU, runs both ELFs
+After migration: wire `virtioGpuInit()` into `kernel/services/init.nim::initVirtioDevices`.
 
-## Key architectural facts for next session
+Done-check: serial shows `virtio-gpu: ready` and QEMU display window shows output.
 
-- Apps run in ring 3 via `procSpawnRing3` (iretq frame on kstack)
-- ABI calls go: trampoline `syscall` → `syscall_entry` (boot_asm.S) → `syscallDispatch` → vtable
-- `abiExit` properly frees region + kills task + yields (no longer panics)
-- Shell returns immediately after spawning an app (parallel execution)
-- testMode: `-d:testMode` + `make test-structured` runs kernel_tests then user_tests
-- `syscallScratchRsp` and `globalTss` are single-CPU globals (SMP migration plan in DECISIONS.md)
-- `launchElfBytes()` in shell.nim is the public API to spawn a PIE ELF from bytes
+## Open VISION questions — status
 
-## Current frontier: what's unblocked
+| # | Status |
+|---|--------|
+| 1 | Boot disk sequence: **RESOLVED** — shell `mount` command loads servers generically from disk |
+| 2 | Dispatcher IST vs PIT: open, no new signal |
+| 3 | FlatBuffers schema ownership: open, not yet started |
+| 4 | Rump kernel hypercall integration: open, deferred |
+| 5 | SMP CpuLocal struct: open, deferred |
 
-**Layer 2 (CLEAR, no blockers):**
-- TW#3  — Guard pages: needs per-process page tables + CR3 switch (FUZZY, deferred)
-- TW#5  — mmap-style ABI: `nimixMapAnon(size)` (FUZZY)
+## Key architectural facts
 
-**Layer 3 (CLEAR, no blockers):**
-- TW#2  — ELF GLOB_DAT + JUMP_SLOT relocations (enables dynamic linking)
-- TW#24 — stdlib shim: `osenv.nim` stub getenv/putenv
+- Apps run ring 3 via `procSpawnRing3` (iretq frame on kstack)
+- ABI: trampoline `syscall` → `syscall_entry` (boot_asm.S) → `syscallDispatch` → vtable (26 entries)
+- `abiExit`: frees region + kills task + yields
+- Shell: unknown command → tries `<name>.elf` then `<name>.wasm` from mounted disk
+- testMode: `make test-structured` boots `-d:testMode`, runs kernel_tests (ring 0) then user_tests.elf (ring 3)
+- `launchElfBytes(name, ptr, len)` in shell.nim — public API to spawn any PIE ELF
+- `virtio_pci_transport.nim::pciTransport(vendor, device)` — generic PCI vtable constructor
+- VFS layer exists (`fs/vfs.nim` + fatfs/littlefs/lwext4); metadata_db B-tree host-tested green
+- metadata_db kernel heap bug (seq[string] corruption) bypassed via FAT-only mount; deferred
 
-**Test infrastructure remaining (layer 1/2):**
-- TW#73 — testMode boot flag (done structurally; `make test-structured` exists)
+## Build commands
+
+```
+make test              # host unit tests (all green)
+make test-structured   # QEMU in-kernel test run (kernel + user ELFs)
+make build             # all 3 kernel models
+make iso && make qemu  # boot default ISO
+```
 
 ## What each completion unblocks
 
 | Completed | Unblocks |
 |-----------|---------|
-| PS/2 mouse (TW#47) | input_server, GUI input routing, raylib input wiring |
-| Guard pages (TW#4) | Memory safety baseline for all app regions |
-| virtio-blk (TW#48) | Faster disk I/O; virtio pattern for virtio-sound |
-| ARP (TW#49) | DHCP, then net_server, then dispatcher net integration |
-| fs_server boot wiring | Boot-from-disk for all servers; resolves VISION open question #1; enables test phase 2 |
-| dispatch cap-gating (TW#32) | All I/O serialised through dispatcher; invariant enforced |
+| virtio-gpu PCI migration | Display on QEMU; raylib/naylib integration; GUI apps |
+| Dispatcher cap-gating (TW#32) | All I/O serialised through dispatcher; invariant enforced |
+| mapAnon ring-3 verification (TW#65) | Confirm heap ABI works for apps |
+| metadata_db kernel fix | Full VFS with indexed metadata; search-by-tag |
