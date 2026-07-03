@@ -300,6 +300,10 @@ test-arc:
 	$(NIM) c -r $(TEST_FLAGS_ARC) tests/test_actor.nim
 	@echo "=== ARC tests passed ==="
 
+# Actor/CPS performance benchmark (release build; validates dispatcher cost model)
+bench-arc:
+	$(NIM) c -r $(TEST_FLAGS_ARC) -d:release tests/bench_actor.nim
+
 # ── QEMU integration tests (serial pipe harness) ──────────────────
 # Rebuilds nim apps and refreshes disk before booting so exec tests see
 # up-to-date ELFs.
