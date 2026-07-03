@@ -632,3 +632,46 @@ To support files larger than 4GB (the FAT limit) and support flexible metadata t
 3. **Decoupled Architecture:**
    The database runs entirely on top of the VFS block-filesystem abstraction, making it database-independent of the underlying storage format.
 
+
+## CPS actor idiom — suspend/plant/resume; {.cursor.} self-ref (2026-07-03)
+
+### Context
+12 POC iterations (see `experiments/actor_poc/`, memory
+`reference_cps_mechanics.md`) tried a looping actor that pops its own mailbox
+inside the cpsMagic. All variants hit stale re-processing or one-behind
+delivery. Root cause: iterator (yield-out) and actor (handle-in) are duals —
+a break-point placed for "pause when value ready" stops BEFORE the handler
+leg for handle-in, so the handler either never ran or re-ran stale state.
+
+### Decision
+`runtime/actor.nim` uses the idiom from nim-works/cps `examples/coroutine.nim`:
+- `suspend()` cpsMagic is a dumb park — stores `a.suspended = a`, reads nothing.
+- Sender plants the message into `a.pending` BEFORE `resume()`.
+- Body reads via `recv()` (cpsVoodoo) AFTER suspend returns — always fresh.
+- Body shape: `while true: suspend(); handle(recv())`.
+
+Message consumption moved from the magic into the body removes the duality
+mismatch entirely. Verified: `tests/test_actor.nim` — 4 sequential deliveries,
+correct order, no duplication, no loss.
+
+### {.cursor.} on the self-reference
+`suspended* {.cursor.}: Actor` — plain field made an uncollectable ARC ref
+cycle (`CycleCreated` warning; every parked actor leaked). `{.cursor.}` marks
+it a non-owning view: safe because it points at the continuation itself and
+`deliver` nils it before resume — lifetime strictly contained. Warning gone,
+test still green.
+
+### Constraint
+nim-cps requires `--mm:arc --panics:on` — incompatible with the host-test
+default `--mm:refc` (`make test`). Actor test runs standalone:
+```
+nim c --skipParentCfg --os:linux --mm:arc --panics:on --path:. \
+  --nimcache:.nimcache_actor -r tests/test_actor.nim
+```
+(Same class as `make test-arc` dispatcher tests.)
+
+### Rejected alternatives
+- Looping actor with internal mailbox pop in the magic (POCs 1–11) — the
+  duality bug above.
+- ORC instead of {.cursor.} — nim-cps targets arc; cycle collector unnecessary
+  for a lifetime-contained self-view.

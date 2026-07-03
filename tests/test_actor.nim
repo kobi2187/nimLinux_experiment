@@ -1,9 +1,8 @@
 # SPDX-License-Identifier: GPL-2.0
-## Actor receive-loop + scheduler test. MUST compile --mm:arc --panics:on.
-## Proven idiom: body is `while true: receive()`; scheduler pumps when inbox ready.
+## Actor idiomatic-suspend test. MUST compile --mm:arc --panics:on.
+## Pattern: body = while true: suspend(); handle(recv()). Sender plants + resumes.
 import ipc/mailbox
 import runtime/actor
-import runtime/actor_scheduler
 import cps
 
 var log: seq[int]
@@ -11,40 +10,29 @@ var log: seq[int]
 proc mkMsg(b: byte): MailMsg =
   result.len = 1; result.data[0] = b
 
-# Server-loop actor: receive forever, logging each message's first payload byte.
-# Scheduler only pumps when the inbox has a message, so receive always delivers.
+# Server-loop actor: park, then handle the planted message, forever.
 proc worker() {.cps: Actor.} =
   while true:
-    receive()
-    log.add(int(self().pending.data[0]))
+    suspend()
+    log.add(int(recv().data[0]))
 
-proc testActorLoopThroughScheduler() =
-  var s: ActorSched
-  schedInit(s)
-  let inbox = newInbox()
+proc testActorSuspendDeliver() =
   var a = Actor(whelp worker())
-  a.inbox = inbox
-  schedAdd(s, a)
+  resume(a)                          # run to first suspend
+  assert a.isSuspended, "actor should be parked after first suspend"
+  assert log.len == 0, "no message delivered yet"
 
-  # Empty inbox: runOnce pumps nothing.
-  runOnce(s)
-  assert log.len == 0, "no message → no processing"
-
-  discard post(inbox, mkMsg(42))
-  runOnce(s)
+  a.deliver(mkMsg(42))
   assert log == @[42], "first message handled"
+  assert a.isSuspended, "re-armed after handling"
 
-  discard post(inbox, mkMsg(99))
-  runOnce(s)
-  assert log == @[42, 99], "second message handled"
+  a.deliver(mkMsg(99))
+  assert log == @[42, 99], "second message handled, no duplicate"
 
-  # Two messages, two passes drain both.
-  discard post(inbox, mkMsg(7))
-  discard post(inbox, mkMsg(8))
-  runOnce(s)
-  runOnce(s)
-  assert log == @[42, 99, 7, 8], "queued messages drained over passes"
-  echo "PASS: actor receive-loop through scheduler"
+  a.deliver(mkMsg(7))
+  a.deliver(mkMsg(8))
+  assert log == @[42, 99, 7, 8], "sequential deliveries, in order, no loss"
+  echo "PASS: idiomatic actor suspend/deliver"
 
-testActorLoopThroughScheduler()
+testActorSuspendDeliver()
 echo "All actor tests passed."

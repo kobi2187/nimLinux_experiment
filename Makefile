@@ -297,6 +297,7 @@ TEST_FLAGS_ARC = --skipParentCfg --mm:arc --panics:on --path:$(CURDIR) --path:$(
 test-arc:
 	@echo "=== NimixOS ARC Test Suite (dispatcher/CPS) ==="
 	$(NIM) c -r $(TEST_FLAGS_ARC) tests/test_dispatch_logic.nim
+	$(NIM) c -r $(TEST_FLAGS_ARC) tests/test_actor.nim
 	@echo "=== ARC tests passed ==="
 
 # ── QEMU integration tests (serial pipe harness) ──────────────────

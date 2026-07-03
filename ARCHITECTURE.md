@@ -62,6 +62,8 @@
 | Capability system | `kernel/cap/capability.nim` | BUILT | capGrant/Revoke/Check, CapRight enum, CapToken |
 | Cap registry | `kernel/cap/cap_registry.nim` | BUILT | named cap lookup |
 | ServerChan | `ipc/server_chan.nim` | BUILT | named channels, MsgPack wire format, chanSend/Recv/Call |
+| Mailbox | `ipc/mailbox.nim` | BUILT | MPSC ring primitive + named registry (2c1484d) |
+| Actor (CPS) | `runtime/actor.nim` | BUILT | suspend/recv/deliver — idiomatic cps park; body = `while true: suspend(); handle(recv())`; dispatcher's concurrency unit |
 | SIP chan | `ipc/sip_chan.nim` | BUILT | SASOS direct-copy channel |
 | Event server | `kernel/event_server.nim` | BUILT | pub/sub, nimixEventSubscribe/Poll |
 | MsgPack (kernel) | `kernel/ipc/msgpack_chan.nim` | BUILT | hand-rolled, no stdlib, `--os:any` |
@@ -74,7 +76,7 @@
 | virtio-blk (MMIO) | `drivers/virtio/virtio_blk.nim` | BUILT | 3-desc chain, sync r/w; **works only on virtio-MMIO transport** |
 | VirtioTransport seam | `drivers/virtio/virtio_transport.nim` | STUBBED | vtable: probe/negotiate/queueSetup/notify/readConfig/irqLine — frozen API, see DECISIONS 2026-06-27 |
 | virtio-mmio transport | `drivers/virtio/virtio_mmio.nim` | PLANNED | extract existing BAR0+magic path behind VirtioTransport |
-| virtio-pci transport | `drivers/virtio/virtio_pci.nim` | SPAWNED | modern virtio-1.0 PCI cap-walk; sub-project `subprojects/virtio-pci/` |
+| virtio-pci transport | `drivers/virtio/virtio_pci.nim` | BUILT | modern virtio-1.0 PCI cap-walk; blk/gpu/net migrated (4d028b9); sub-project `subprojects/virtio-pci/` |
 | virtio-gpu | `drivers/virtio/virtio_gpu.nim` | PARTIAL | file exists, framebuffer init incomplete |
 | Driver registry | `kernel/driver_registry.nim` | BUILT | register/lookup by name |
 | PS/2 mouse | — | PLANNED | 3/4-byte protocol, mouse.move/click events |
@@ -196,3 +198,5 @@ app: regionOpen(token) → (ptr, len) → direct read → regionClose(token)
 | 2026-06-27 | test-structured harness fixed: skip prompt-wait in --structured; attach disk via virtio-blk-pci; pid_monotonic test corrected | (uncommitted) |
 | 2026-06-27 | Virtio transport split: VirtioTransport vtable + MMIO/PCI backends; virtio-pci SPAWNED | DECISIONS.md §Virtio transport split |
 | 2026-06-27 | VFS layer + B+ Tree metadata filesystem architecture introduced | DECISIONS.md §VFS and Metadata B+ Tree |
+| 2026-07 | virtio gpu/net/blk migrated to PCI transport; virtio-pci sub-project effectively BUILT | git: 4d028b9 |
+| 2026-07-03 | CPS actor primitive landed (`runtime/actor.nim` + `ipc/mailbox.nim`) — dispatcher's concurrency unit | DECISIONS.md §CPS actor idiom |

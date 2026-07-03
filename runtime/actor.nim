@@ -1,68 +1,49 @@
 # SPDX-License-Identifier: GPL-2.0
-## Actor — a CPS continuation that consumes messages from a mailbox in a loop.
+## Actor — a CPS continuation that receives messages via idiomatic cps suspend.
 ##
-## Proven cps idiom (scratchpad POC7/POC10; mirrors nim-works/cps examples/
-## iterator.nim). An actor body is `while true: receive(); handle(pending)`.
+## Pattern from nim-works/cps examples/coroutine.nim (the intended idiom):
+##   - `suspend()` is a dumb park: it stores the continuation in `suspended` and
+##     reads nothing. That is the ONLY thing the magic does.
+##   - the SENDER plants the message into `pending`, THEN calls `resume`.
+##   - the body reads the message with `recv()` AFTER suspend returns — so it is
+##     always fresh. No flags, no counters, no empty-inbox path.
 ##
-## Scheduler-gated: the scheduler pumps an actor ONLY when its inbox is
-## non-empty, so `receive` always pops a real message (never an empty-inbox
-## path — that path can't pause cleanly in cps and caused stale reprocessing).
+## A server actor body is:  while true: suspend(); handle(recv())
 ##
-## `receive` pops one message into `pending` and counts the entry. `pump` runs
-## legs via `trampolineIt`, breaking when receive is entered for the SECOND time
-## (i.e. one full receive+handler iteration has completed and the loop is about
-## to block again). One message consumed and handled per pump.
+## This avoids every hazard of the earlier looping-with-internal-pop model (stale
+## re-processing, one-behind): consume happens in the body after resume, not in
+## the magic. See experiments/actor_poc/ for the trace that proved it.
 ##
 ## MUST compile --mm:arc --panics:on (nim-cps requirement).
 import cps
 import ../ipc/mailbox
 
-const ActorInboxDepth* = 16
-
 type
-  ActorInbox* = ref object
-    ## ref so actors share it without ptr/addr noise.
-    mb*: Mailbox[ActorInboxDepth]
-
   Actor* = ref object of Continuation
-    inbox*:   ActorInbox
-    pending*: MailMsg      ## last message taken by receive
-    entries*: int          ## receive entry count this pump (pump breaks at 2)
+    pending*:   MailMsg   ## message planted by the sender before resume
+    suspended* {.cursor.}: Actor  ## self-view set while parked (nil when running);
+                                  ## cursor: observation, not ownership — avoids ARC ref cycle
 
-proc newInbox*(): ActorInbox =
-  result = ActorInbox()
-  mbInit(result.mb)
+proc recv*(a: Actor): MailMsg {.cpsVoodoo.} =
+  ## Read the message planted before this resume. Call after suspend() returns.
+  a.pending
 
-proc post*(inbox: ActorInbox; msg: MailMsg): bool =
-  ## Deliver a message to an actor's inbox. False if full.
-  mbPost(inbox.mb, msg)
+proc suspend*(a: Actor): Actor {.cpsMagic.} =
+  ## Park: store self so a sender can resume us later. Reads nothing.
+  a.suspended = a
+  nil
 
-proc inboxReady*(inbox: ActorInbox): bool =
-  inbox != nil and not mbIsEmpty(inbox.mb)
+proc resume*(a: Actor) =
+  ## Run the actor until it next suspends (or finishes).
+  discard trampoline(a)
 
-proc self*(a: Actor): Actor {.cpsVoodoo.} =
-  ## Read the running continuation inside a {.cps.} body (to reach `pending`).
-  a
+proc deliver*(a: Actor; msg: MailMsg) =
+  ## Plant a message and resume the parked actor. Precondition: actor suspended.
+  assert a.suspended != nil, "deliver: actor not suspended"
+  let s = a.suspended
+  a.pending = msg
+  s.suspended = nil          # clear before resume so the next suspend re-arms it
+  resume(s)
 
-proc receive*(a: Actor): Actor {.cpsMagic.} =
-  ## Enter a receive. First entry this pump: pop a message (scheduler guarantees
-  ## non-empty) into `pending` and continue to the handler. Second entry: the
-  ## previous message's handler has finished and we're about to block — signal
-  ## the pump to stop by leaving `entries == 2`; return `a` so the continuation
-  ## is preserved at exactly this receive for the next pump.
-  inc a.entries
-  if a.entries == 1:
-    assert a.inbox != nil, "receive: actor has no inbox"
-    let m = mbTryRecv(a.inbox.mb)
-    assert m.hasValue, "receive: pumped with empty inbox"
-    a.pending = m.value
-  a
-
-proc pump*(a: sink Actor): Actor =
-  ## Consume and handle exactly one message. Resets the entry counter, then runs
-  ## legs until receive is entered a second time (one full iteration done).
-  a.entries = 0
-  trampolineIt a:
-    if (Actor it).entries >= 2:
-      break
-  result = a
+proc isSuspended*(a: Actor): bool =
+  a.suspended != nil
