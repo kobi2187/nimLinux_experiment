@@ -6,6 +6,7 @@
 ##            -d:noSignalHandler tests/test_dispatch_logic.nim
 
 import servers/dispatch/dispatch_logic
+import servers/dispatch/dispatch_wire
 import servers/dispatch/priority_queue
 import servers/dispatch/qos_policy
 
@@ -183,5 +184,77 @@ block test_aging_boundary:
   discard pqPop(ds.queue, req)
   assert req.class == rcNormal, "Background should be bumped to Normal after 50 ticks"
   echo "PASS: test_aging_boundary"
+
+# ── Actor-pipeline tests: full deliver → ingest → drain → send path ──────────
+
+var gSent: seq[(string, uint32)]   ## (target channel, decoded op)
+var gSendOk = true
+
+proc recSend(channel: cstring; data: pointer; len: int): int {.nimcall.} =
+  if not gSendOk: return -1
+  var wire = newString(len)
+  copyMem(addr wire[0], data, len)
+  gSent.add(($channel, decodeRequest(wire).op))
+  len
+
+let recIface = DispatchIface(
+  send: recSend, recv: mockRecv, sleep: mockSleep, log: mockLog)
+
+proc deliverReq(a: Actor; op: uint32; pid: uint32) =
+  a.deliver(mkRequestMsg(encodeRequest(op, pid)))
+
+# ── Test 8: requests route through the actor to the right channels ───────────
+
+block test_actor_routes:
+  var ds: DispatchState
+  dispatchInit(ds, recIface)
+  gSent = @[]; gSendOk = true
+
+  var a = newDispatcher(addr ds)
+  a.deliverReq(0x00000001'u32, 1)   # fs
+  a.deliverReq(0x01000002'u32, 2)   # net
+  a.deliverReq(0x02000003'u32, 3)   # media
+  assert gSent == @[("fs", 0x00000001'u32), ("net", 0x01000002'u32),
+                    ("media", 0x02000003'u32)], "each request forwarded to its category channel"
+  assert ds.queue.count == 0, "queue drained after each wake"
+  assert a.isSuspended, "dispatcher re-parked"
+  echo "PASS: test_actor_routes"
+
+# ── Test 9: backpressured drain forwards in priority order on tick ───────────
+
+block test_actor_priority_drain:
+  var ds: DispatchState
+  dispatchInit(ds, recIface)
+  gSent = @[]
+
+  var a = newDispatcher(addr ds)
+  gSendOk = false                    # backpressure: everything queues
+  a.deliverReq(0x04000001'u32, 1)    # log   → rcBackground
+  a.deliverReq(0x02000002'u32, 2)    # media → rcRealtime
+  a.deliverReq(0x00000003'u32, 3)    # fs    → rcNormal
+  assert ds.queue.count == 3, "all requests held under backpressure"
+  assert gSent.len == 0
+
+  gSendOk = true                     # pressure lifts; tick triggers drain
+  a.deliver(mkTickMsg())
+  assert gSent == @[("media", 0x02000002'u32), ("fs", 0x00000003'u32),
+                    ("log", 0x04000001'u32)], "drain follows QoS class order"
+  assert ds.queue.count == 0
+  echo "PASS: test_actor_priority_drain"
+
+# ── Test 10: ticks age queued Background up to Normal ────────────────────────
+
+block test_actor_tick_aging:
+  var ds: DispatchState
+  dispatchInit(ds, recIface)
+  gSent = @[]; gSendOk = false
+
+  var a = newDispatcher(addr ds)
+  a.deliverReq(0x04000001'u32, 9)    # rcBackground, stuck (send failing)
+  for _ in 0 ..< 51:                 # aging fires at AgingInterval=50
+    a.deliver(mkTickMsg())
+  assert ds.queue.count == 1, "still queued while backpressured"
+  assert ds.queue.heap[0].class == rcNormal, "Background aged up to Normal while waiting"
+  echo "PASS: test_actor_tick_aging"
 
 echo "All dispatch_logic tests passed."

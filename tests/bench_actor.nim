@@ -9,6 +9,8 @@
 import std/[monotimes, times, strformat]
 import ipc/mailbox
 import runtime/actor
+import servers/dispatch/dispatch_logic
+import servers/dispatch/dispatch_wire
 import cps
 
 var gAccum: int
@@ -70,6 +72,28 @@ proc benchParkedHeap(n: int) =
   echo &"leak check         : heap growth {growth} B after 10x{n} delivers (want 0)"
   assert growth == 0, "parked-actor heap must be flat — cursor fix regressed?"
 
+var gRouted: int
+
+proc benchSend(ch: cstring; data: pointer; len: int): int {.nimcall.} =
+  inc gRouted; len
+proc benchRecv(ch: cstring; buf: pointer; len: int): int {.nimcall.} = 0
+proc benchSleep(t: uint64) {.nimcall.} = discard
+proc benchLog(m: cstring) {.nimcall.} = discard
+
+proc benchDispatch(ops: int): float =
+  ## Full dispatcher pipeline per request: deliver -> msgpack decode ->
+  ## classify -> pqPush -> drain (peek, msgpack encode, send, pop) -> re-park.
+  var ds: DispatchState
+  dispatchInit(ds, DispatchIface(
+    send: benchSend, recv: benchRecv, sleep: benchSleep, log: benchLog))
+  var a = newDispatcher(addr ds)
+  let msg = mkRequestMsg(encodeRequest(0x00000001'u32, 1))
+  gRouted = 0
+  let t0 = getMonoTime()
+  for _ in 0 ..< ops: a.deliver(msg)
+  result = nsPerOp(t0, getMonoTime(), ops)
+  assert gRouted == ops, "every request must be routed exactly once"
+
 proc benchMailbox(ops: int): float =
   var mb: Mailbox[64]
   mbInit(mb)
@@ -89,5 +113,6 @@ when isMainModule:
   echo &"direct call        : {direct:.1f} ns/msg (baseline)"
   echo &"actor deliver      : {deliver:.1f} ns/msg  ({deliver / max(direct, 0.1):.1f}x baseline)"
   echo &"mailbox post+recv  : {mbox:.1f} ns/msg"
+  echo &"dispatcher pipeline: {benchDispatch(Ops):.1f} ns/req  (deliver->decode->classify->queue->encode->route)"
   benchParkedHeap(Parked)
   echo "BENCH DONE"

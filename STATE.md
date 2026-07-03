@@ -14,9 +14,11 @@ Last updated: 2026-07-03 (session 8, actor merge to master)
 
 ## Now / Next
 
-- [→] Port actor into dispatcher (`servers/dispatch/dispatch_logic.nim`) —
-  FUZZY: integration with priority queue + QoS classes needs a design proposal
-  (cross-cutting; dialogue before building).
+- [x] Dispatcher Stage 1: single-actor run loop in `dispatch_logic.nim`
+  (deliver-driven; peek-then-pop drain preserves aging under backpressure).
+  Bench: 377 ns/req pipeline. Tests 8–10 in test_dispatch_logic. Unblocks:
+  transport wiring (kmod/elf deliver on chan recv + tick).
+- [→] Wire dispatcher actor into kmod/elf transports (taskwarrior task added).
 - [ ] Verify TW#72 V10 boot corruption status (RIP=0x802/0x101e after
   dispatcher init) — **likely stale per user (2026-07-03); verify with
   `make debug-log` / `make debug-gdb` before treating as real.** Blocks open

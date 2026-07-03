@@ -101,7 +101,7 @@
 | Module | Path | Status | Notes |
 |--------|------|--------|-------|
 | ping_server | `servers/ping/` | BUILT | IPC demo — proves full stack |
-| dispatch_server | `servers/dispatch/` | PARTIAL | ELF exists in build/apps; CPS logic partial |
+| dispatch_server | `servers/dispatch/` | PARTIAL | run loop = single CPS actor (deliver-driven, priority drain w/ backpressure); kernel transport wiring pending |
 | fs_server | `apps/nim/` | PARTIAL | ELF exists; channel wiring incomplete |
 | input_server | — | PLANNED | IRQ1 PS2 → key events → event_server |
 | log_server | — | PLANNED | ring buffer, queryable |
@@ -200,3 +200,4 @@ app: regionOpen(token) → (ptr, len) → direct read → regionClose(token)
 | 2026-06-27 | VFS layer + B+ Tree metadata filesystem architecture introduced | DECISIONS.md §VFS and Metadata B+ Tree |
 | 2026-07 | virtio gpu/net/blk migrated to PCI transport; virtio-pci sub-project effectively BUILT | git: 4d028b9 |
 | 2026-07-03 | CPS actor primitive landed (`runtime/actor.nim` + `ipc/mailbox.nim`) — dispatcher's concurrency unit | DECISIONS.md §CPS actor idiom |
+| 2026-07-03 | dispatcher run loop rewritten as single actor; dead ingest/route CPS loops removed; bench: 377ns/req pipeline | DECISIONS.md §Dispatcher Stage 1 |

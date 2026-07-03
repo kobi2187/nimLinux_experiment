@@ -675,3 +675,41 @@ nim c --skipParentCfg --os:linux --mm:arc --panics:on --path:. \
   duality bug above.
 - ORC instead of {.cursor.} — nim-cps targets arc; cycle collector unnecessary
   for a lifetime-contained self-view.
+
+## Dispatcher Stage 1 — single actor run loop; peek-then-pop backpressure (2026-07-03)
+
+### Context
+`dispatch_logic.nim`'s two CPS loops (`ingestRequests`/`dispatchRequests`)
+had no suspend point — under a trampoline they spin forever; they also had
+zero callers. The actor primitive (DECISIONS §CPS actor idiom) provides the
+missing park/wake surface.
+
+### Decision
+ONE long-lived dispatcher actor replaces both loops:
+- body: `while true: suspend(); case kind: request → ingest | tick →
+  dispatchTick; drain()`
+- transport delivers `MailMsg` events: `mkRequestMsg(wire)` / `mkTickMsg()`
+- `drain` forwards queued requests in priority order, **peek-then-pop**: a
+  request is popped only after its send succeeds. Backpressured requests
+  stay queued with their original `arrivalTick`, so QoS aging keeps running
+  while they wait. (First drafted pop-then-requeue — rejected: requeue
+  restamps arrival, resetting the aging clock; caught by test_actor_tick_aging.)
+- send failure (`iface.send < 0`) = backpressure signal; retry on next wake.
+`priority_queue.nim` / `qos_policy.nim` unchanged.
+
+### Benchmark (make bench-arc, release)
+Full pipeline (deliver → msgpack decode → classify → pqPush → drain: peek,
+encode, send, pop → re-park): **~377 ns/request ≈ 2.7M req/s single-threaded**.
+Actor machinery ~60 ns; MsgPack encode+decode ~310 ns. Realtime QoS budget
+(5ms) is ~13,000× the pipeline cost — design carries the performance; no
+micro-tuning warranted.
+
+### Stage 2 (deferred)
+Per-request continuations with reply correlation (DECISIONS' `handleRequest`
+sketch) when request/reply + cap-gating land (Milestone 2). Bench says
+affordable: 328 B + ~60 ns per in-flight request.
+
+### Rejected alternatives
+- Two actors (ingest + route): route has nothing to park on while sends are
+  fire-and-forget — a seam with no payoff.
+- Pop-then-requeue drain: resets aging clock (above).
