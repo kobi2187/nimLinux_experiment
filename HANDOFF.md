@@ -1,6 +1,65 @@
 # HANDOFF.md — Session Exit Note
 
-Last updated: 2026-07-03 (session 8, merged to `master`)
+Last updated: 2026-07-03 (session 8b, dispatcher Stage 1 + roadmap + casfs brainstorm OPEN)
+
+## Session 8b — dispatcher actor, bench, roadmap reset, casfs brainstorm started
+
+**Landed (master, all committed):**
+- `ac0df07` bench: `make bench-arc` — actor deliver ~60ns, mailbox ~62ns,
+  328 B/parked actor (100k scale), zero heap growth over 1M delivers.
+- `34a3592` dispatch Stage 1: single-actor run loop in `dispatch_logic.nim`
+  (deliver-driven: `mkRequestMsg`/`mkTickMsg`; peek-then-pop drain so
+  backpressured requests keep aging). Pipeline 377 ns/req (~2.7M req/s).
+  Tests 8–10 in test_dispatch_logic; ELF `-d:dispatchNoCps` build verified.
+  ADRs: DECISIONS §CPS actor idiom + §Dispatcher Stage 1.
+
+**Decisions converged with user this session:**
+- Roadmap order APPROVED: A) reality audit + virtio-gpu boot verify →
+  B) rasterizer+font → GUI terminal → C) input_server + app_server skeleton →
+  D) media demo → E) scheduler block-on-mailbox/wake-on-deliver + dispatcher
+  transport wiring (parallelizable) → network LAST.
+- CPS in servers: per-server by need (net/fs/media yes eventually; input/log/
+  roster stay plain loops). Continuations NEVER cross IPC boundary.
+- CPU scheduler: keep simple preemptive 3-class ring; one upgrade worth doing
+  = block-on-mailbox/wake-on-deliver (kills `nimixSleep(1)` polling).
+- Filesystem: content-addressable store + fast queries built ON TOP of VFS
+  (not a from-scratch FS). metadata_db B+tree moves to userspace fs_server
+  (kills its kernel seq/string bug by relocation). Key redesign allowed.
+  casfs = SPAWN candidate, but **user wants brainstorm first — IN PROGRESS.**
+- NEW STANDING RULE (saved to auto-memory feedback_nim_ecosystem): scour Nim
+  ecosystem (awesome-nim, GitHub, forum.nim-lang, nimble) before building;
+  build-decisions must name rejected Nim libs.
+
+**casfs brainstorm state (superpowers:brainstorming, step: context done, ecosystem survey INCOMPLETE):**
+- Context read: `fs/metadata_db.nim` (382 ln, in-memory B+tree, string keys →
+  uint64 fileId, 4K page serialization, probe/search split);
+  `fs/vfs.nim` (92 ln prefix router); fatfs BUILT; littlefs/lwext4 stubs 44 ln.
+- Proposed shape (user tentatively ok, wants to understand deeper): 3 layers in
+  userspace fs_server — (1) CAS blob store, hash-named files on underlying FS,
+  (2) name→hash namespace, (3) query index (B+tree, redesigned keys). Immutable
+  blobs = safe zero-copy region caps. Whole-file hashing first; chunking only
+  if needed.
+- Ecosystem survey BLOCKED mid-run: WebSearch/WebFetch session limit (resets
+  22:10 Asia/Jerusalem). Candidate libs FROM MODEL MEMORY — ALL UNCONFIRMED,
+  verify on nimble/GitHub before relying: `blake3` wrappers, nim-lang/
+  `checksums` (SHA2/SHA3), `nimcrypto` (pure Nim), `limdb`/`nimdbx` (LMDB/
+  libmdbx wrappers), `tiny_sqlite`. Survey must also check pure-Nim vs
+  C-wrapper fit for --os:standalone ELF.
+- OPEN QUESTIONS to drive next brainstorm round (one at a time):
+  1. Is casfs the PRIMARY namespace (everything content-addressed, git-style
+     name→hash repointing on write) or a SIDE store for assets/media next to
+     plain FS paths? ← most load-bearing, ask first.
+  2. Mutability model apps see (rewrite = new hash + repoint vs explicit
+     immutable blobs).
+  3. Query semantics needed: exact tag, range, live queries (BeOS-style via
+     event_server), full-text?
+  4. Blob GC: refcount vs mark-sweep vs defer.
+
+**Where to resume:** re-run ecosystem survey (web limit reset), then continue
+brainstorm with question 1 above. Skill flow: superpowers:brainstorming →
+design doc → writing-plans. Roadmap Phase A (gpu boot verify + doc-reality
+audit — audio/input drivers exist in commits `4d028b9`/`385f410` but docs say
+PLANNED) can run before/parallel to brainstorm.
 
 ## Session 8 — {.cursor.} fix, actor promoted to lib, merged to master
 
