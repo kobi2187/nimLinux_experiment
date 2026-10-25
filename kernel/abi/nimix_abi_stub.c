@@ -14,6 +14,12 @@ FILE* stderr = &_stderr_stub;
 int fprintf(FILE* f, const char* fmt, ...) { (void)f; (void)fmt; return 0; }
 size_t fwrite(const void* p, size_t s, size_t n, FILE* f) { (void)p;(void)s;(void)n;(void)f; return 0; }
 int fflush(FILE* f) { (void)f; return 0; }
+/* syncio error-path helpers — pulled in by --os:any apps (dispatch_server) */
+int ferror(FILE* f) { (void)f; return 0; }
+void clearerr(FILE* f) { (void)f; }
+static int _errno_stub;
+int* __errno_location(void) { return &_errno_stub; }
+char* strerror(int e) { (void)e; return (char*)""; }
 size_t strlen(const char* s) { size_t n=0; while(s[n]) n++; return n; }
 void exit(int code) { (void)code; while(1); }
 

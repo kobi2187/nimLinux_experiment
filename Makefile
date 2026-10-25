@@ -115,9 +115,10 @@ build/apps/mount_test.elf: apps/mount_test.nim kernel/abi/nimix_abi_stub.c build
 	@mkdir -p build/apps
 	$(NIM_APP) -o:$@ $<
 
-build/apps/dispatch_server.elf: servers/dispatch/dispatch_server_elf.nim servers/dispatch/dispatch_logic.nim servers/dispatch/priority_queue.nim servers/dispatch/qos_policy.nim servers/dispatch/dispatch_wire.nim build/nimix_abi_stub.o
+build/apps/dispatch_server.elf: servers/dispatch/dispatch_server_elf.nim servers/dispatch/dispatch_logic.nim servers/dispatch/priority_queue.nim servers/dispatch/qos_policy.nim servers/dispatch/dispatch_wire.nim runtime/actor.nim ipc/mailbox.nim build/nimix_abi_stub.o
 	@mkdir -p build/apps
-	$(NIM_APP) --path:$(CURDIR)/servers/dispatch --path:$(CURDIR)/apps/nim -d:dispatchNoCps -o:$@ $<
+	$(subst --os:standalone,--os:any,$(NIM_APP)) --panics:on \
+		--path:$(CURDIR)/servers/dispatch --path:$(CURDIR)/apps/nim -o:$@ $<
 
 build/apps/fs_server.elf: servers/fs/fs_server_elf.nim servers/fs/fs_logic.nim servers/dispatch/dispatch_wire.nim build/nimix_abi_stub.o
 	@mkdir -p build/apps

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0
 ## Dispatcher PIE ELF server — listens on "dispatch" channel, runs CPS loop.
-## Compiled with --os:standalone --mm:arc.
+## Compiled with --os:any --mm:arc --panics:on: nim-cps needs
+## getCurrentException, which system.nim omits under --os:standalone.
 
 import dispatch_logic
 import nimix_common   # write, nimixWrite, nimixExit, nimixGetArgs
@@ -35,8 +36,9 @@ proc appMain*() {.exportc.} =
     log:   elfLog
   )
   dispatchInit(gState, iface)
+  let actor = newDispatcher(addr gState)
   write("dispatcher: ready on 'dispatch' channel\n")
-  # Main loop: tick the dispatcher every quantum
+  # Main loop: one pump per quantum (inbound requests → actor, then tick)
   while true:
-    dispatchTick(gState)
+    discard dispatchPump(addr gState, actor)
     nimixSleep(1)   # yield every tick
