@@ -292,6 +292,8 @@ test:
 	$(NIM) c -r $(TEST_FLAGS) -d:noKernelHardware tests/test_syscall_table.nim
 	$(NIM) c -r $(TEST_FLAGS) -d:noKernelHardware tests/test_elf_loader.nim
 	$(NIM) c -r $(TEST_FLAGS) -d:noKernelHardware tests/test_vfs_btree.nim
+	$(NIM) c -r $(TEST_FLAGS) tests/test_bit_intrinsics.nim
+	$(NIM) c -r $(TEST_FLAGS) tests/test_littlefs_wearleveling.nim
 	@echo "=== All tests passed ==="
 
 TEST_FLAGS_ARC = --skipParentCfg --mm:arc --panics:on --path:$(CURDIR) --path:$(CURDIR)/apps/nim --nimblePath:$(HOME)/.nimble/pkgs2 -d:noSignalHandler
@@ -300,6 +302,7 @@ test-arc:
 	@echo "=== NimixOS ARC Test Suite (dispatcher/CPS) ==="
 	$(NIM) c -r $(TEST_FLAGS_ARC) tests/test_dispatch_logic.nim
 	$(NIM) c -r $(TEST_FLAGS_ARC) tests/test_actor.nim
+	$(NIM) c -r $(TEST_FLAGS_ARC) --threads:on tests/test_mpsc_ring.nim
 	@echo "=== ARC tests passed ==="
 
 # Actor/CPS performance benchmark (release build; validates dispatcher cost model)
