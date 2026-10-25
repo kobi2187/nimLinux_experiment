@@ -53,11 +53,13 @@ proc tokenSerial*(t: CapToken): uint32 = uint32(uint64(t) shr 32)
 proc capGrant*(pid: uint32; right: CapRight): CapToken =
   ## Mint a new capability token for `pid` with `right`.
   ## Returns NullCap if table is full.
+  ## Serial 0 is never minted: makeToken(0, slot 0) == NullCap. Checked before
+  ## minting so a zero-initialised table (capTableInit never called) is valid.
   for i in 0 ..< MaxCaps:
     if not gCapTable.entries[i].valid:
+      if gCapTable.nextSerial == 0: gCapTable.nextSerial = 1
       let tok = makeToken(gCapTable.nextSerial, i)
       inc gCapTable.nextSerial
-      if gCapTable.nextSerial == 0: gCapTable.nextSerial = 1  # skip 0
       gCapTable.entries[i] = CapEntry(token: tok, pid: pid, right: right, valid: true, regionSlot: -1)
       return tok
   NullCap

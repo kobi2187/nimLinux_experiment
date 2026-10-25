@@ -94,6 +94,15 @@ proc testGrantCheckSucceeds() =
   assert capCheck(tok, capIpc), "capGrant+capCheck must succeed"
   echo "PASS: capGrant+capCheck succeeds"
 
+proc testGrantOnZeroInitTable() =
+  ## The kernel never calls capTableInit: a zero-initialised table must still
+  ## mint a non-null first token (serial 0 + slot 0 would encode NullCap).
+  gCapTable = default(CapTable)
+  let tok = capGrant(7, capIpc)
+  assert not isNull(tok), "first grant on zero-init table must be non-null"
+  assert capCheck(tok, capIpc), "first grant on zero-init table must check"
+  echo "PASS: capGrant on zero-initialised table"
+
 when isMainModule:
   testNullCapIsNull()
   testDifferentTokensNotEqual()
@@ -108,5 +117,6 @@ when isMainModule:
   testDoubleRevokeIsSafe()
   testCapGrantFullTableReturnsNullCap()
   testNullCapFailsCapCheck()
+  testGrantOnZeroInitTable()
   testGrantCheckSucceeds()
   echo "All capability tests passed."
