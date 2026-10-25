@@ -24,6 +24,8 @@ when defined(amd64) or defined(x86_64):
 
 when defined(testMode):
   import ../../tests/kernel_tests/main as kernelTests
+  import ../../kernel/process_table   # procSleepUntil, procTable
+  import ../../drivers/pit            # pitTicks
   const userTestsElf = staticRead("../../build/apps/user_tests.elf")
 
 # ═══════════════════════════════════════════════════════════════════════════

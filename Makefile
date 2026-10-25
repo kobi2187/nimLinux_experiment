@@ -15,11 +15,11 @@
 #   make clean     # remove build artifacts
 #
 # Config:
-#   NIM      = path to nim compiler (default: /home/kl/apps/Nim/bin/nim)
+#   NIM      = path to nim compiler (default: nim on PATH)
 #   OVMF     = path to OVMF.fd     (default: /usr/share/ovmf/OVMF.fd)
 #   QEMU_MEM = memory in MB        (default: 256)
 
-NIM     ?= /home/kl/apps/Nim/bin/nim
+NIM     ?= nim
 OVMF    ?= /usr/share/ovmf/OVMF.fd
 QEMU_MEM ?= 256
 
@@ -147,8 +147,9 @@ build: $(addprefix build/kernel-,$(KERNEL_MODELS))
 release:
 	$(MAKE) build DANGER=-d:danger
 
-# Build targets for each kernel model
-build/kernel-%:
+# Build targets for each kernel model. FORCE: the rules list no Nim sources,
+# so without it a stale kernel is never rebuilt (nim's own cache keeps it fast).
+build/kernel-%: FORCE
 	$(NIM) $(NIM_FLAGS) -d:kernelModel=$* $(KERNEL_SRC)
 	mv build/main $@
 
@@ -248,7 +249,7 @@ disk-ls:
 
 # ── Unit tests (host, no QEMU needed) ────────────────────────────
 # Uses --skipParentCfg to bypass kernel nim.cfg (-nostdlib, kernel.ld, etc.)
-TEST_FLAGS = --skipParentCfg --mm:refc --path:$(CURDIR) -d:noSignalHandler
+TEST_FLAGS = --skipParentCfg --mm:refc --path:$(CURDIR) --nimblePath:$(HOME)/.nimble/pkgs2 -d:noSignalHandler
 
 test:
 	@echo "=== NimixOS Test Suite ==="
@@ -324,7 +325,7 @@ $(TESTMODE_ISO): build/kernel-test
 	grub-mkrescue -o $(TESTMODE_ISO) iso/ 2>/dev/null
 	rm -rf iso
 
-build/kernel-test:
+build/kernel-test: FORCE
 	$(NIM) $(NIM_FLAGS) -d:kernelModel=monolithic -d:testMode $(KERNEL_SRC)
 	mv build/main $@
 
@@ -363,3 +364,5 @@ debug-qmp: $(ISO_OUT) disk-add-apps
 # ── Clean ─────────────────────────────────────────────────────────
 clean:
 	rm -rf build/main build/kernel-* $(ISO_OUT) $(ISO_ALL_OUT) nimcache/ build/ iso/ qemu-debug/
+
+FORCE:

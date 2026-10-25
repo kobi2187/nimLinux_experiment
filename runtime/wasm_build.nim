@@ -9,7 +9,9 @@
 ##   d_m3HasFloat=0  — disable float ops (saves ~20KB, we don't need them yet)
 ##   d_m3VerboseErrorMessages=0 — no printf in error paths
 
-const wasm3Src = "/home/kl/prog/nimLinux_experiment/vendor/wasm3/source"
+# Repo-relative: strip "runtime/wasm_build.nim" off this file's absolute path.
+const wasm3Src = currentSourcePath()[0 .. ^("runtime/wasm_build.nim".len + 1)] &
+  "vendor/wasm3/source"
 const wasm3Flags = "-I" & wasm3Src &
   " -Dd_m3HasFloat=0" &
   " -Dd_m3VerboseErrorMessages=0" &
@@ -18,12 +20,12 @@ const wasm3Flags = "-I" & wasm3Src &
 
 {.passC: wasm3Flags.}
 
-{.compile: "/home/kl/prog/nimLinux_experiment/vendor/wasm3/source/m3_bind.c".}
-{.compile: "/home/kl/prog/nimLinux_experiment/vendor/wasm3/source/m3_code.c".}
-{.compile: "/home/kl/prog/nimLinux_experiment/vendor/wasm3/source/m3_compile.c".}
-{.compile: "/home/kl/prog/nimLinux_experiment/vendor/wasm3/source/m3_core.c".}
-{.compile: "/home/kl/prog/nimLinux_experiment/vendor/wasm3/source/m3_env.c".}
-{.compile: "/home/kl/prog/nimLinux_experiment/vendor/wasm3/source/m3_exec.c".}
-{.compile: "/home/kl/prog/nimLinux_experiment/vendor/wasm3/source/m3_function.c".}
-{.compile: "/home/kl/prog/nimLinux_experiment/vendor/wasm3/source/m3_module.c".}
-{.compile: "/home/kl/prog/nimLinux_experiment/vendor/wasm3/source/m3_parse.c".}
+{.compile: "../vendor/wasm3/source/m3_bind.c".}
+{.compile: "../vendor/wasm3/source/m3_code.c".}
+{.compile: "../vendor/wasm3/source/m3_compile.c".}
+{.compile: "../vendor/wasm3/source/m3_core.c".}
+{.compile: "../vendor/wasm3/source/m3_env.c".}
+{.compile: "../vendor/wasm3/source/m3_exec.c".}
+{.compile: "../vendor/wasm3/source/m3_function.c".}
+{.compile: "../vendor/wasm3/source/m3_module.c".}
+{.compile: "../vendor/wasm3/source/m3_parse.c".}

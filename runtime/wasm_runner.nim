@@ -33,7 +33,8 @@ type
 
 # ── wasm3 C API ───────────────────────────────────────────────────────────────
 
-{.passC: "-I/home/kl/prog/nimLinux_experiment/vendor/wasm3/source".}
+{.passC: "-I" & currentSourcePath()[0 .. ^("runtime/wasm_runner.nim".len + 1)] &
+  "vendor/wasm3/source".}
 
 proc m3_NewEnvironment(): M3Env
   {.importc: "m3_NewEnvironment", header: "wasm3.h".}
