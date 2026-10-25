@@ -8,6 +8,7 @@
 |--------|------|--------|-----------|
 | CPU primitives | `arch/x86_64/cpu_primitives.nim` | BUILT | inline procs for CR regs, MSRs, I/O ports, hlt/sti/cli |
 | Atomic ops | `arch/common/atomics.nim` | BUILT | load/store/CAS/fetch-op with memory ordering |
+| Bit intrinsics | `arch/common/bit_intrinsics.nim` | BUILT (no callers) | countTrailingZeros, popcount, findFirstFreeInWordOpt (ccfeb6d) |
 | Core types | `core/types.nim` | BUILT | PhysAddr, VirtAddr, Result[T,E], Option[T] |
 | Serial I/O | `core/serial.nim` | BUILT | serialWrite, serialPrint |
 | Logging | `core/log.nim` | BUILT | klog(level, msg), log_types |
@@ -63,6 +64,7 @@
 | Cap registry | `kernel/cap/cap_registry.nim` | BUILT | named cap lookup |
 | ServerChan | `ipc/server_chan.nim` | BUILT | named channels, MsgPack wire format, chanSend/Recv/Call |
 | Mailbox | `ipc/mailbox.nim` | BUILT | MPSC ring primitive + named registry (2c1484d) |
+| MPSC ring (lock-free) | `ipc/mpsc_ring.nim` | BUILT (no callers) | Vyukov bounded MPSC; candidate SMP backend behind Mailbox's interface (ccfeb6d) |
 | Actor (CPS) | `runtime/actor.nim` | BUILT | suspend/recv/deliver — idiomatic cps park; body = `while true: suspend(); handle(recv())`; dispatcher's concurrency unit |
 | SIP chan | `ipc/sip_chan.nim` | BUILT | SASOS direct-copy channel |
 | Event server | `kernel/event_server.nim` | BUILT | pub/sub, nimixEventSubscribe/Poll |
@@ -76,7 +78,8 @@
 | virtio-blk (MMIO) | `drivers/virtio/virtio_blk.nim` | BUILT | 3-desc chain, sync r/w; **works only on virtio-MMIO transport** |
 | VirtioTransport seam | `drivers/virtio/virtio_transport.nim` | STUBBED | vtable: probe/negotiate/queueSetup/notify/readConfig/irqLine — frozen API, see DECISIONS 2026-06-27 |
 | virtio-mmio transport | `drivers/virtio/virtio_mmio.nim` | PLANNED | extract existing BAR0+magic path behind VirtioTransport |
-| virtio-pci transport | `drivers/virtio/virtio_pci.nim` | BUILT | modern virtio-1.0 PCI cap-walk; blk/gpu/net migrated (4d028b9); sub-project `subprojects/virtio-pci/` |
+| virtio-pci transport | `drivers/virtio/virtio_pci.nim` | BUILT | modern virtio-1.0 PCI cap-walk; blk/gpu/net migrated (4d028b9); **all CommonCfg/notify/ISR access via volatile `cfgGet`/`cfgSet`/`commonKick`/`isrRead`** (V10b); sub-project `subprojects/virtio-pci/` |
+| virtio-blk (PCI) | `drivers/virtio/virtio_blk.nim` | BUILT | verified in QEMU 8.2: FAT mount + ELF load from disk (V10b) |
 | virtio-gpu | `drivers/virtio/virtio_gpu.nim` | PARTIAL | file exists, framebuffer init incomplete |
 | Driver registry | `kernel/driver_registry.nim` | BUILT | register/lookup by name |
 | PS/2 mouse | — | PLANNED | 3/4-byte protocol, mouse.move/click events |
@@ -88,9 +91,10 @@
 
 | Module | Path | Status | Notes |
 |--------|------|--------|-------|
-| VFS Layer | `fs/vfs.nim` | PLANNED | Virtual File System routing prefixes to specific drivers |
+| VFS Layer | `fs/vfs.nim` | PARTIAL | prefix router over FSDriver vtable; FatFs registered |
 | FatFs (vendor) | `fs/fatfs.nim` + vendor | BUILT | FAT16/32 read/write driver |
 | littlefs driver | `fs/littlefs.nim` | PLANNED | littlefs driver mapping sectors |
+| littlefs_wearleveling | `fs/littlefs_wearleveling.nim` | BUILT (no callers) | 16 KB in-RAM toy FS at `/lfs_wl/` — NOT littlefs; keep-as-test-double vs delete is open (DECISIONS 2026-10-25) |
 | lwext4 driver | `fs/lwext4.nim` | PLANNED | lwext4 driver for ext4 large files |
 | Metadata B+ Tree | `fs/metadata_db.nim` | PLANNED | Pure Nim B+ Tree for flexible tags |
 | fs_server ELF | `build/apps/fs_server.elf` | PARTIAL | binary exists; boot-from-disk wiring incomplete |
@@ -101,7 +105,7 @@
 | Module | Path | Status | Notes |
 |--------|------|--------|-------|
 | ping_server | `servers/ping/` | BUILT | IPC demo — proves full stack |
-| dispatch_server | `servers/dispatch/` | PARTIAL | run loop = single CPS actor (deliver-driven, priority drain w/ backpressure); kernel transport wiring pending |
+| dispatch_server | `servers/dispatch/` | PARTIAL | run loop = single CPS actor; `dispatchPump` = recv→actor→tick per quantum; strict `tryDecodeRequest` for untrusted input. ELF variant runs the actor (`--os:any --panics:on`), loads+spawns in QEMU; **receives nothing yet — no `dispatch` channel registered**; kmod variant not wired |
 | fs_server | `apps/nim/` | PARTIAL | ELF exists; channel wiring incomplete |
 | input_server | — | PLANNED | IRQ1 PS2 → key events → event_server |
 | log_server | — | PLANNED | ring buffer, queryable |
@@ -177,6 +181,8 @@ app: regionOpen(token) → (ptr, len) → direct read → regionClose(token)
 | Seam | Tension | Expected move |
 |------|---------|--------------|
 | Syscall gate | Currently no-op — all apps run ring 0 | Task 48: real ring-3 transition, ABI vtable dispatch |
+| Channel creation from userspace | Only kmods can `serverChanRegister`; ELF servers (dispatch) can't own a channel | Add a `chanCreate` ABI call or kernel pre-registration — cross-cutting (ABI vtable), dialogue first |
+| CPS in the kernel | nim-cps needs `--panics:on`; kernel build lacks it | Needed for dispatch_kmod; decide with the human before changing kernel flags |
 | Boot sequence | disk mount timing vs server spawn | Milestone 1: resolve open question #1 |
 | Virtio transport | blk driver is MMIO-only; QEMU attaches virtio-blk-pci | SPAWN virtio-pci behind VirtioTransport vtable (2026-06-27); blk+net migrate to vtable |
 | virtio-gpu | driver exists partially; app_server not yet | Milestone 5 |
@@ -201,3 +207,6 @@ app: regionOpen(token) → (ptr, len) → direct read → regionClose(token)
 | 2026-07 | virtio gpu/net/blk migrated to PCI transport; virtio-pci sub-project effectively BUILT | git: 4d028b9 |
 | 2026-07-03 | CPS actor primitive landed (`runtime/actor.nim` + `ipc/mailbox.nim`) — dispatcher's concurrency unit | DECISIONS.md §CPS actor idiom |
 | 2026-07-03 | dispatcher run loop rewritten as single actor; dead ingest/route CPS loops removed; bench: 377ns/req pipeline | DECISIONS.md §Dispatcher Stage 1 |
+| 2026-10-25 | virtio-pci CommonCfg/notify/ISR access made volatile; blk(pci) works end-to-end (V10 root cause) | DECISIONS.md §V10b |
+| 2026-10-25 | dispatcher: transport pump + strict untrusted decode; ELF variant runs CPS via `--os:any` | DECISIONS.md §Dispatcher transport pump |
+| 2026-10-25 | ccfeb6d modules recorded (mpsc_ring, bit_intrinsics, littlefs_wearleveling) — unwired | DECISIONS.md §Review of ccfeb6d modules |

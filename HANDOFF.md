@@ -1,6 +1,34 @@
 # HANDOFF.md — Session Exit Note
 
-Last updated: 2026-07-03 (session 8, merged to `master`)
+Last updated: 2026-10-25 (session 9, branch `ccr-56330414-wo65nx`, cloud container)
+
+## Session 9 — V10 root cause, dispatcher pump, cap + build fixes
+
+Fresh container had no toolchain; installed Nim 2.2.4, nim-cps 0.11.4,
+msgpack4nim 0.4.4, QEMU 8.2 + OVMF + grub/xorriso/mtools/dosfstools. First full
+QEMU verification in months showed the disk path dead: every virtio-blk(pci)
+request timed out. QEMU's own view (`info virtio-queue-status`) showed the device
+held avail=used=0; disassembly showed GCC moved the `queue_enable` store ahead of
+the avail/used stores. Fix: volatile access for all virtio-pci registers
+(DECISIONS §V10b). Disk mounts, ELFs load.
+
+Also: dispatcher `dispatchPump` + strict `tryDecodeRequest` (a malformed app
+message used to be a fatal AssertionDefect); dispatcher ELF now runs the CPS actor
+via `--os:any`; first-capability-is-NullCap bug fixed (structured suite 24/24);
+repo-relative vendor paths; kernel Make targets no longer stale; testMode kernel
+compiles again; ccfeb6d's three orphan tests wired into make targets.
+
+**Next (highest leverage):** TW#65 — ring-3 apps never run and the shell stops
+answering after the first ring-3 spawn. It is now the single blocker behind every
+remaining QEMU harness failure and behind observing the dispatcher ELF actually run.
+Then dialogue: how the `"dispatch"` channel gets created (ABI `chanCreate` vs kernel
+pre-registration) and whether the kernel build takes `--panics:on` for dispatch_kmod.
+
+**Repro setup in a fresh container:** Nim tarball from nim-lang.org on PATH;
+`nimble install https://github.com/nim-works/cps msgpack4nim`;
+`git submodule update --init vendor/wasm3 vendor/printf` (vendor/arsenal has no
+.gitmodules entry); `make iso disk`, then
+`python3 tests/qemu_harness.py --iso nimixos.iso --bios /usr/share/ovmf/OVMF.fd --disk disk.img --virtio-blk`.
 
 ## Session 8 — {.cursor.} fix, actor promoted to lib, merged to master
 

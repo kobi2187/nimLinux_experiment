@@ -713,3 +713,97 @@ affordable: 328 B + ~60 ns per in-flight request.
 - Two actors (ingest + route): route has nothing to park on while sends are
   fire-and-forget — a seam with no payoff.
 - Pop-then-requeue drain: resets aging clock (above).
+
+## V10b — virtio-pci CommonCfg needs volatile access; root cause of blk timeouts (2026-10-25)
+
+### Context
+Every virtio-blk(pci) request timed out (`used.idx` never advanced), so `mount`,
+`ls`, `exec` — the whole disk path — were dead. The V10 "uncached DMA ring" fix
+had not cured it; the author's own `qemu_test.log` also stops at the first sector
+read.
+
+### Evidence (QEMU 8.2, TCG)
+- `-trace virtio_*`: status reaches 15 (DRIVER_OK) and QEMU *receives* both
+  notifies, but never pops a buffer.
+- HMP `info virtio-queue-status`: device holds `desc=0x19d8000` (correct) but
+  **`avail=0, used=0`**. QEMU latches all three ring addresses on the
+  `queue_enable=1` write.
+- `objdump` of `commonQueueSetup`: GCC emitted select → descLo → **enable** →
+  descHi → avail (merged 64-bit) → used. Plain stores through `ptr` to a struct
+  are reorderable/mergeable/eliminable; an uncached mapping only stops CPU
+  caching, not the compiler. `writeGuestFeatures`' first `select=0` is likewise a
+  dead store the compiler may drop.
+
+### Decision (SURVEY: adopt `std/volatile`, the Nim analogue of Linux readl/writel)
+- `cfgGet`/`cfgSet` templates in `virtio_pci.nim`; every CommonCfg access in
+  virtio_pci, the PCI transport, gpu, net, snd, input goes through them.
+- `notifyWrite` = compiler barrier + volatile 16-bit store (Linux virtio_wmb +
+  iowrite16); `isrRead` volatile (a discarded plain load is deleted outright, yet
+  the read is what acks the IRQ); `deviceConfigRead32` volatile.
+- `commonKick` selects the queue before reading `queue_notify_off` — that field
+  reads back for the *selected* queue and QEMU derives the kicked queue from the
+  doorbell address, so the old code could kick the wrong queue (net RX after TX
+  setup). Latent; fixed in the same pass.
+
+### Result
+`mount` → "FAT volume mounted"; ELFs load from disk. QEMU harness 4/11 → 5/11
+(remaining failures cascade from the pre-existing post-ring-3-spawn hang, TW#65).
+
+### Rejected
+- `asm volatile("" ::: "memory")` between every store — works, but one forgotten
+  barrier silently reintroduces the bug; per-access volatile is local and auditable.
+- Marking the `common` pointer target `{.volatile.}` — Nim applies it to the
+  variable, not pointee fields.
+
+## Dispatcher transport pump + strict untrusted decode (2026-10-25)
+
+### Decision
+- `dispatchPump(ds, actor)` in `dispatch_logic.nim`: one quantum = drain up to
+  `PumpMaxPerQuantum` (64) messages from `iface.recv("dispatch")` into the actor,
+  then deliver one tick. Transport-neutral — kmod and ELF variants share it. A
+  recv that fills the buffer may be truncated (`abiChanRecv` copies min) → dropped.
+- `tryDecodeRequest` in `dispatch_wire.nim`: strict hand decoder for
+  `[uint, uint]`. msgpack4nim validates shape with `assert` → AssertionDefect →
+  fatal under `--panics:on`, so one malformed app message killed the dispatcher
+  (caught by a new test). `decodeRequest` kept for trusted callers.
+- ELF variant builds with `--os:any --panics:on` (CPS on): nim-cps references
+  `getCurrentException`, which system.nim omits for `hostOS == "standalone"`.
+  Four libc no-ops added to `nimix_abi_stub.c` (ferror, clearerr, strerror,
+  __errno_location) for syncio error paths — same pattern as the existing
+  fwrite/fflush stubs. Verified: links with only `_start` unresolved (like every
+  app), RELATIVE relocs only, loads + spawns in ring 3 in QEMU.
+
+### Not done — cross-cutting, needs dialogue
+- No `"dispatch"` ServerChan is ever registered and the ABI has no way for an ELF
+  to register one: the ELF dispatcher receives nothing until a `chanCreate` ABI
+  call (or kernel-side pre-registration) exists.
+- kmod variant: running CPS in the kernel needs `--panics:on` on the kernel build
+  and a boot hook; deferred.
+
+## Capability table valid when zero-initialised (2026-10-25)
+`capTableInit` is never called by the kernel, so `nextSerial` started at 0 and the
+first grant minted `makeToken(0, 0) == NullCap` (in-kernel tests
+`cap_grant_not_null`/`cap_check_right` failed). `capGrant` now skips serial 0
+*before* minting, making the zero value valid without an init call. Regression
+test `testGrantOnZeroInitTable` (fails before, passes after). Structured suite 24/24.
+
+## Build portability + stale-kernel trap (2026-10-25)
+- Hardcoded `/home/kl/prog/...` paths in `fs/fatfs.nim`, `runtime/wasm_*.nim`
+  replaced with `{.compile.}` paths relative to the module and `currentSourcePath`
+  -derived `-I` flags; Makefile `NIM ?= nim`; nimble path in `TEST_FLAGS`.
+- `build/kernel-%` and `build/kernel-test` listed no prerequisites, so edits never
+  rebuilt them (`make iso` booted a stale kernel; `make test-structured` ran an old
+  one). Both now depend on `FORCE`; nim's own cache keeps rebuilds fast.
+- `kernel/init/main.nim` testMode branch lost its `process_table`/`pit` imports in
+  the c6d7425 refactor and no longer compiled; restored.
+
+## Review of ccfeb6d modules (2026-10-25)
+`ipc/mpsc_ring.nim` (Vyukov bounded MPSC), `arch/common/bit_intrinsics.nim`,
+`fs/littlefs_wearleveling.nim` landed with no callers and no ADR. Tests pass and
+are now wired into `make test` / `make test-arc`. Flags for the human:
+- `mpsc_ring` duplicates `ipc/mailbox.nim`'s role; it is the natural SMP backend
+  for Mailbox behind Mailbox's unchanged interface — swap when SMP (open question
+  #5) starts, not before (single-CPU cost with no benefit today).
+- `littlefs_wearleveling` is a 16 KB in-RAM toy FS registered at `/lfs_wl/`, not
+  littlefs. It conflicts with §VFS (vendor real littlefs/lwext4) and had no SURVEY.
+  Keep as a VFS test double or delete — human's call.
