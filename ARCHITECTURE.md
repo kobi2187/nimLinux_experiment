@@ -63,6 +63,7 @@
 | Cap registry | `kernel/cap/cap_registry.nim` | BUILT | named cap lookup |
 | ServerChan | `ipc/server_chan.nim` | BUILT | named channels, MsgPack wire format, chanSend/Recv/Call |
 | Mailbox | `ipc/mailbox.nim` | BUILT | MPSC ring primitive + named registry (2c1484d) |
+| MPSC ring (lock-free) | `ipc/mpsc_ring.nim` | BUILT | lock-free variant + bit intrinsics (ccfeb6d); not yet consumed by mailbox |
 | Actor (CPS) | `runtime/actor.nim` | BUILT | suspend/recv/deliver — idiomatic cps park; body = `while true: suspend(); handle(recv())`; dispatcher's concurrency unit |
 | SIP chan | `ipc/sip_chan.nim` | BUILT | SASOS direct-copy channel |
 | Event server | `kernel/event_server.nim` | BUILT | pub/sub, nimixEventSubscribe/Poll |
@@ -77,12 +78,13 @@
 | VirtioTransport seam | `drivers/virtio/virtio_transport.nim` | STUBBED | vtable: probe/negotiate/queueSetup/notify/readConfig/irqLine — frozen API, see DECISIONS 2026-06-27 |
 | virtio-mmio transport | `drivers/virtio/virtio_mmio.nim` | PLANNED | extract existing BAR0+magic path behind VirtioTransport |
 | virtio-pci transport | `drivers/virtio/virtio_pci.nim` | BUILT | modern virtio-1.0 PCI cap-walk; blk/gpu/net migrated (4d028b9); sub-project `subprojects/virtio-pci/` |
-| virtio-gpu | `drivers/virtio/virtio_gpu.nim` | PARTIAL | file exists, framebuffer init incomplete |
+| virtio-gpu | `drivers/virtio/virtio_gpu.nim` | BUILT | PCI transport; `virtio-gpu(pci): ready` verified in QEMU 2026-07-16 (Makefile now attaches `-device virtio-gpu-pci`) |
+| virtio-snd | `drivers/virtio/virtio_snd.nim` | BUILT | PCM out 44.1kHz stereo S16LE, virtioSndPlay (4d028b9); QEMU device not attached by default |
+| virtio-input | `drivers/virtio/virtio_input.nim` | BUILT | evdev event queue, onEvent callback, coexists with PS/2 (4d028b9); QEMU device not attached by default |
 | Driver registry | `kernel/driver_registry.nim` | BUILT | register/lookup by name |
-| PS/2 mouse | — | PLANNED | 3/4-byte protocol, mouse.move/click events |
-| RTC / CMOS | — | PLANNED | nimixUptime + nimixWallClock |
-| virtio-blk | — | PLANNED | replace ATA PIO diskio.c |
-| virtio-sound | — | PLANNED | PCM output queue, virtio spec 5.14 |
+| PS/2 mouse | `drivers/ps2_mouse.nim` | BUILT | 3-byte packet decode, mouse.move/click events (20b52b8); test_ps2_mouse |
+| RTC / CMOS | `drivers/rtc.nim` | BUILT | rtcReadDateTime/rtcUptimeSecs + ABI wallClock/uptimeSecs (031491f); test_rtc |
+| Net protocols | `drivers/net/` | PARTIAL | ethernet/ipv4/udp BUILT; arp.nim + dhcp.nim landed (20b52b8) but untested |
 
 ### Filesystem
 
@@ -90,7 +92,7 @@
 |--------|------|--------|-------|
 | VFS Layer | `fs/vfs.nim` | PLANNED | Virtual File System routing prefixes to specific drivers |
 | FatFs (vendor) | `fs/fatfs.nim` + vendor | BUILT | FAT16/32 read/write driver |
-| littlefs driver | `fs/littlefs.nim` | PLANNED | littlefs driver mapping sectors |
+| littlefs driver | `fs/littlefs.nim` | PLANNED | 44-line stub; wear-leveling layer BUILT (`fs/littlefs_wearleveling.nim`, ccfeb6d) |
 | lwext4 driver | `fs/lwext4.nim` | PLANNED | lwext4 driver for ext4 large files |
 | Metadata B+ Tree | `fs/metadata_db.nim` | PLANNED | Pure Nim B+ Tree for flexible tags |
 | fs_server ELF | `build/apps/fs_server.elf` | PARTIAL | binary exists; boot-from-disk wiring incomplete |
@@ -101,12 +103,12 @@
 | Module | Path | Status | Notes |
 |--------|------|--------|-------|
 | ping_server | `servers/ping/` | BUILT | IPC demo — proves full stack |
-| dispatch_server | `servers/dispatch/` | PARTIAL | run loop = single CPS actor (deliver-driven, priority drain w/ backpressure); kernel transport wiring pending |
+| dispatch_server | `servers/dispatch/` | BUILT (ELF) | CPS actor run loop + `dispatchPump` no-CPS transport; ELF polls "dispatch" channel (2026-07-16); kernel pre-creates well-known channels; kmod variant (TW#28) still PLANNED |
 | fs_server | `apps/nim/` | PARTIAL | ELF exists; channel wiring incomplete |
 | input_server | — | PLANNED | IRQ1 PS2 → key events → event_server |
 | log_server | — | PLANNED | ring buffer, queryable |
 | roster_server | — | PLANNED | tracks running apps (name, pid, cap) |
-| audio_server | — | PLANNED | virtio-sound + miniaudio CUSTOM backend |
+| audio_server | `servers/media/audio_server_elf.nim` | PARTIAL | media ELF + sndPlay ABI (385f410); audio_logic host-tested; decode libs (dr_libs/stb_vorbis) not yet wired |
 | app_server | — | PLANNED | window handles, z-order, input routing |
 
 ### Runtime / Loader
@@ -131,7 +133,7 @@
 | Module | Path | Status | Notes |
 |--------|------|--------|-------|
 | Software rasterizer | — | PLANNED | drawRect/Line/fillRect/putPixel/blitBitmap into uint32* |
-| Font rendering | — | PLANNED | stb_truetype + bitmap fallback |
+| Font rendering | `drivers/graphics/font_render.nim` | PARTIAL | 65-line bitmap start (20b52b8); stb_truetype not wired, no test |
 | app_server / WM | — | PLANNED | windows as region caps, BeOS-style |
 | Terminal emulator | — | PLANNED | VT100 subset in a GUI window |
 | Desktop env | — | PLANNED | background, icons, taskbar (BeOS Tracker minimal) |
@@ -179,7 +181,7 @@ app: regionOpen(token) → (ptr, len) → direct read → regionClose(token)
 | Syscall gate | Currently no-op — all apps run ring 0 | Task 48: real ring-3 transition, ABI vtable dispatch |
 | Boot sequence | disk mount timing vs server spawn | Milestone 1: resolve open question #1 |
 | Virtio transport | blk driver is MMIO-only; QEMU attaches virtio-blk-pci | SPAWN virtio-pci behind VirtioTransport vtable (2026-06-27); blk+net migrate to vtable |
-| virtio-gpu | driver exists partially; app_server not yet | Milestone 5 |
+| virtio-gpu | driver BUILT + boot-verified; raylib/rasterizer not yet consuming `virtioGpuFbPtr()`/`virtioGpuPresent()` | Roadmap Phase B |
 | FlatBuffers schema location | per-server vs shared `schemas/` | Open question #3, resolves at Milestone 2 |
 | Rump kernel / OS threads for drivers | blocked on irqSubscribe + userspace DMA | Long-term; don't touch yet |
 
@@ -201,3 +203,6 @@ app: regionOpen(token) → (ptr, len) → direct read → regionClose(token)
 | 2026-07 | virtio gpu/net/blk migrated to PCI transport; virtio-pci sub-project effectively BUILT | git: 4d028b9 |
 | 2026-07-03 | CPS actor primitive landed (`runtime/actor.nim` + `ipc/mailbox.nim`) — dispatcher's concurrency unit | DECISIONS.md §CPS actor idiom |
 | 2026-07-03 | dispatcher run loop rewritten as single actor; dead ingest/route CPS loops removed; bench: 377ns/req pipeline | DECISIONS.md §Dispatcher Stage 1 |
+| 2026-07-09 | lock-free MPSC ring + littlefs wear-leveling + bit intrinsics landed (unwired) | git: ccfeb6d |
+| 2026-07-16 | doc-reality audit: virtio gpu/snd/input BUILT (4d028b9), audio_server PARTIAL (385f410), ps2_mouse+RTC BUILT, arp/dhcp/font_render landed untested (20b52b8); gpu boot verified `virtio-gpu(pci): ready`; Makefile attaches virtio-gpu-pci | this session |
+| 2026-07-16 | dispatcher ELF transport wired: `dispatchPump` (recv→ingest→tick→drain) + kernel pre-creates well-known channels (dispatch/fs/net/media/input/log) | this session |

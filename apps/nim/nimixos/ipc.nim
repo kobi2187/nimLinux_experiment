@@ -9,9 +9,9 @@ export wire_types
 proc nimixChanSend(name: cstring; data: pointer; len: int): int {.importc, cdecl.}
 proc nimixChanRecv(name: cstring; buf: pointer; len: int): int {.importc, cdecl.}
 
-proc ipcRequest*(channel: string; op: uint32; pid: uint32): int =
+proc ipcRequest*(channel: string; op: uint32; pid: uint32; payload = ""): int =
   ## Send a typed request to a channel. Returns 0=ok, negative=error.
-  let encoded = pack(WireRequest(op: op, pid: pid))
+  let encoded = pack(WireRequest(op: op, pid: pid, payload: payload))
   nimixChanSend(channel.cstring, cast[pointer](unsafeAddr encoded[0]), encoded.len)
 
 proc ipcRecvReply*(channel: string): WireReply =

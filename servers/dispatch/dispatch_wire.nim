@@ -6,8 +6,8 @@ import msgpack4nim
 import nimixos/wire_types
 export wire_types
 
-proc encodeRequest*(op: uint32; pid: uint32): string =
-  pack(WireRequest(op: op, pid: pid))
+proc encodeRequest*(op: uint32; pid: uint32; payload = ""): string =
+  pack(WireRequest(op: op, pid: pid, payload: payload))
 
 proc decodeRequest*(data: string): WireRequest =
   unpack(data, result)

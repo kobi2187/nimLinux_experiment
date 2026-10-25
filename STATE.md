@@ -1,8 +1,17 @@
 # STATE.md — Current Status
 
-Last updated: 2026-07-03 (session 8, actor merge to master)
+Last updated: 2026-07-16 (session 9, Phase A: gpu boot verified + doc audit)
 
 ## Just landed
+
+- **Roadmap Phase A DONE**: virtio-gpu boot verified — serial shows
+  `virtio-gpu(pci): ready` once the device is attached; root cause of earlier
+  "not found" was QEMU cmdline (no `-device virtio-gpu-pci`), not the driver.
+  Makefile qemu/qemu-all/qemu-gui/qemu-debug now attach `$(GPU_DEVICE)`.
+  Doc audit: ARCHITECTURE updated — virtio gpu/snd/input BUILT (4d028b9),
+  audio_server PARTIAL (385f410), mpsc_ring + littlefs wear-leveling landed
+  unwired (ccfeb6d). Note: `build/kernel-%` has no source deps — force rebuild
+  with `rm build/kernel-monolithic` when sources change.
 
 - **CPS actor primitive** (`runtime/actor.nim` + `tests/test_actor.nim`) —
   idiomatic suspend/plant/resume; `{.cursor.}` on the self-ref kills the ARC
@@ -22,15 +31,23 @@ Last updated: 2026-07-03 (session 8, actor merge to master)
   on web-limit, resume with namespace question. Roadmap A–E approved:
   gpu verify → rasterizer/font → GUI terminal → input/app_server → media →
   scheduler block/wake — network last.
-- [ ] Roadmap Phase A: `make iso && make qemu` — confirm `virtio-gpu: ready`;
-  audit docs vs commits 4d028b9/385f410 (audio+input drivers exist, docs stale).
+- [x] Roadmap Phase A: gpu boot verified + doc audit (2026-07-16, see Just landed).
+  Audit also found BUILT-but-undocumented: ps2_mouse (TW#49), rtc (TW#50),
+  arp/dhcp/font_render (untested, 20b52b8) — Layer 1 effectively done.
+- [x] Dispatcher ELF transport wired: `dispatchPump` in dispatch_logic
+  (recv→ingest→tick→drain, test 11); ELF main loop pumps; kernel pre-creates
+  well-known channels (dispatch/fs/net/media/input/log) in initIPC. Boot
+  verified: `Well-known channels created` on serial. Remaining: kmod variant
+  (TW#28) + end-to-end app→dispatch→fs_server test (TW#33, needs fs_server
+  channel wiring).
+- [→] Roadmap Phase B: software rasterizer + font onto `virtioGpuFbPtr()` seam
+  (TW#60/#61), then GUI terminal.
 - [ ] Wire dispatcher actor into kmod/elf transports (taskwarrior task added).
 - [ ] Verify TW#72 V10 boot corruption status (RIP=0x802/0x101e after
   dispatcher init) — **likely stale per user (2026-07-03); verify with
   `make debug-log` / `make debug-gdb` before treating as real.** Blocks open
   question #1 (boot-from-disk) if real.
-- [ ] virtio-gpu done-check: `make iso && make qemu`, confirm serial
-  `virtio-gpu: ready` (session 6 migration unverified).
+- [x] virtio-gpu done-check: `virtio-gpu(pci): ready` confirmed (2026-07-16).
 - [ ] raylib/naylib PLATFORM_CUSTOM wiring onto `virtioGpuFbPtr()` /
   `virtioGpuPresent()` seam.
 

@@ -5,10 +5,10 @@
 
 import priority_queue
 import qos_policy
+import dispatch_wire
 
 when not defined(dispatchNoCps):
   import cps
-  import dispatch_wire
   import ../../runtime/actor
   import ../../ipc/mailbox
   export actor, mailbox
@@ -37,6 +37,7 @@ type DispatchState* = object
 
 const DispatchChannel* = "dispatch"
 const AgingInterval*   = 50'u64   ## run aging every 50 ticks
+const MaxWireLen*      = 256      ## matches ServerMsgMaxLen (ipc/server_chan.nim)
 
 proc dispatchInit*(ds: var DispatchState; iface: DispatchIface) =
   pqInit(ds.queue)
@@ -53,7 +54,61 @@ proc dispatchTick*(ds: var DispatchState) =
     applyAging(ds.queue, ds.tickNow)
     ds.lastAge = ds.tickNow
 
-# ── Dispatcher actor (excluded from --os:standalone ELF build for now) ───────
+# ── Pure ingest/route/drain (shared by actor and no-CPS transports) ──────────
+
+proc dispatchIngest*(ds: var DispatchState; wire: string) =
+  ## Decode an encoded WireRequest, classify it, enqueue it.
+  let wreq = decodeRequest(wire)
+  let class = classifyRequest(wreq.op, false)
+  var req = DispatchRequest(
+    op:          wreq.op,
+    callerPid:   wreq.pid,
+    payload:     wreq.payload,
+    class:       class,
+    deadline:    assignDeadline(class, ds.tickNow),
+    payloadSlot: -1
+  )
+  discard pqPush(ds.queue, req, ds.tickNow)
+
+proc routeTarget(op: uint32): cstring =
+  ## Top byte of op = category (0=fs, 1=net, 2=media, 3=input).
+  case op shr 24
+  of 0'u32: "fs"
+  of 1'u32: "net"
+  of 2'u32: "media"
+  of 3'u32: "input"
+  else: "log"
+
+proc route(ds: var DispatchState; req: DispatchRequest): bool =
+  ## Forward one request to its target server. False on send failure.
+  let fwd = encodeRequest(req.op, req.callerPid, req.payload)
+  ds.iface.send(routeTarget(req.op), cast[pointer](unsafeAddr fwd[0]), fwd.len) >= 0
+
+proc dispatchDrain*(ds: var DispatchState) =
+  ## Forward queued requests in priority order until empty or backpressured.
+  ## Peek-then-pop: a backpressured request stays queued with its original
+  ## arrivalTick, so the aging clock keeps running while it waits.
+  while ds.queue.count > 0:
+    if not route(ds, pqPeek(ds.queue)[]):
+      break
+    var req: DispatchRequest
+    discard pqPop(ds.queue, req)
+
+proc dispatchPump*(ds: var DispatchState): int =
+  ## Transport pump for no-CPS scaffolds: drain the "dispatch" channel into
+  ## the priority queue, advance one tick, forward. Returns requests ingested.
+  var buf: array[MaxWireLen, byte]
+  while true:
+    let n = ds.iface.recv(DispatchChannel, addr buf[0], buf.len)
+    if n <= 0: break
+    var wire = newString(n)
+    copyMem(addr wire[0], addr buf[0], n)
+    dispatchIngest(ds, wire)
+    inc result
+  dispatchTick(ds)
+  dispatchDrain(ds)
+
+# ── Dispatcher actor (CPS builds; ELF scaffold uses dispatchPump instead) ────
 #
 # One long-lived actor is the whole run loop. The transport delivers a MailMsg
 # per event (request arrived / scheduler tick); the actor ingests, then drains
@@ -77,55 +132,19 @@ when not defined(dispatchNoCps):
     result.data[0] = MsgKindTick
     result.len = 1
 
-  proc ingest(ds: ptr DispatchState; msg: MailMsg) =
-    ## Decode a request message, classify it, enqueue it.
-    var wire = newString(int(msg.len) - 1)
-    copyMem(addr wire[0], unsafeAddr msg.data[1], wire.len)
-    let wreq = decodeRequest(wire)
-    let class = classifyRequest(wreq.op, false)
-    var req = DispatchRequest(
-      op:          wreq.op,
-      callerPid:   wreq.pid,
-      class:       class,
-      deadline:    assignDeadline(class, ds.tickNow),
-      payloadSlot: -1
-    )
-    discard pqPush(ds.queue, req, ds.tickNow)
-
-  proc routeTarget(op: uint32): cstring =
-    ## Top byte of op = category (0=fs, 1=net, 2=media, 3=input).
-    case op shr 24
-    of 0'u32: "fs"
-    of 1'u32: "net"
-    of 2'u32: "media"
-    of 3'u32: "input"
-    else: "log"
-
-  proc route(ds: ptr DispatchState; req: DispatchRequest): bool =
-    ## Forward one request to its target server. False on send failure.
-    let fwd = encodeRequest(req.op, req.callerPid)
-    ds.iface.send(routeTarget(req.op), cast[pointer](unsafeAddr fwd[0]), fwd.len) >= 0
-
-  proc drain(ds: ptr DispatchState) =
-    ## Forward queued requests in priority order until empty or backpressured.
-    ## Peek-then-pop: a backpressured request stays queued with its original
-    ## arrivalTick, so the aging clock keeps running while it waits.
-    while ds.queue.count > 0:
-      if not route(ds, pqPeek(ds.queue)[]):
-        break
-      var req: DispatchRequest
-      discard pqPop(ds.queue, req)
-
   proc dispatcherBody(ds: ptr DispatchState) {.cps: Actor.} =
     while true:
       suspend()
       let msg = recv()
       assert msg.len >= 1, "dispatcher: empty MailMsg"
       case msg.data[0]
-      of MsgKindRequest: ingest(ds, msg)
+      of MsgKindRequest:
+        var wire = newString(int(msg.len) - 1)
+        copyMem(addr wire[0], unsafeAddr msg.data[1], wire.len)
+        dispatchIngest(ds[], wire)
       of MsgKindTick:    dispatchTick(ds[])
       else: assert false, "dispatcher: unknown msg kind"
-      drain(ds)
+      dispatchDrain(ds[])
 
   proc newDispatcher*(ds: ptr DispatchState): Actor =
     ## Whelp the dispatcher actor, run it to its first park. Feed it with

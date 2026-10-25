@@ -36,7 +36,7 @@ proc appMain*() {.exportc.} =
   )
   dispatchInit(gState, iface)
   write("dispatcher: ready on 'dispatch' channel\n")
-  # Main loop: tick the dispatcher every quantum
+  # Main loop: poll "dispatch" channel, ingest + tick + drain, yield.
   while true:
-    dispatchTick(gState)
+    discard dispatchPump(gState)
     nimixSleep(1)   # yield every tick

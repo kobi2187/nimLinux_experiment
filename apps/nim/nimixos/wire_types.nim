@@ -4,8 +4,10 @@
 
 type
   WireRequest* = object
-    op*:  uint32
-    pid*: uint32
+    op*:      uint32
+    pid*:     uint32
+    payload*: string   ## op-specific data, e.g. path for fs.read (MsgPack
+                       ## length-prefixes it on the wire — no manual framing)
 
   WireReply* = object
     token*: uint64

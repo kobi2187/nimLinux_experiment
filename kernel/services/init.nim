@@ -160,6 +160,19 @@ proc initModules*() =
 # Stage 4: IPC Infrastructure
 # ═══════════════════════════════════════════════════════════════════════════
 
+# Well-known channels: dispatcher listens on "dispatch" and forwards to the
+# category channels. Pre-created kernel-side because ELF servers have no
+# chanCreate ABI — they only recv/send on existing channels.
+# "reply" = shared reply path for request/reply flows (single outstanding
+# request; per-caller channels when concurrency needs them).
+const WellKnownChannels = ["dispatch", "fs", "net", "media", "input", "log", "reply"]
+var gWellKnownChans: array[WellKnownChannels.len, ServerChan]
+
+proc createWellKnownChannels() =
+  for i, name in WellKnownChannels:
+    gWellKnownChans[i] = serverChanCreate(name)
+    serverChanRegister(gWellKnownChans[i])
+
 proc initIPC*() =
   ## Setup region allocator + ServerChan registry.
   regionAllocInit()
@@ -170,6 +183,9 @@ proc initIPC*() =
 
   serverChanRegistryInit()
   klog(llInfo, "[SERVICES] ✓ ServerChan registry ready")
+
+  createWellKnownChannels()
+  klog(llInfo, "[SERVICES] ✓ Well-known channels created")
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Stage 5: Syscall Gate

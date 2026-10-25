@@ -18,6 +18,7 @@ type
     arrivalTick*: uint64       ## when request was enqueued
     callerPid*:   uint32
     op*:          uint32       ## operation code (fs.read, net.send, etc.)
+    payload*:     string       ## op-specific data (e.g. path), forwarded verbatim
     payloadSlot*: int          ## region slot for bulk data (-1 = none)
 
   PriorityQueue* = object

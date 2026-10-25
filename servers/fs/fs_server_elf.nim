@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: GPL-2.0
 ## fs_server — userspace ELF scaffold (ring-3 PIE)
 ##
-## Listens on "fs" channel. Receives a path (cstring in msg), calls fsLogicRead,
-## sends back FsReadReply as 24 bytes (token:u64 + base:u64 + len:i32 + err:i32).
+## Listens on "fs" channel. Receives a MsgPack WireRequest (payload = path),
+## calls fsLogicRead, sends a MsgPack WireReply on the "reply" channel.
+## ponytail: single shared "reply" channel = one outstanding request at a
+## time; upgrade to per-caller reply channels when concurrent apps need it.
 
 import fs_logic
 import dispatch_wire
@@ -16,6 +18,7 @@ proc nimixChanRecv(name: cstring; buf: pointer; len: int): int {.importc, cdecl.
 proc nimixGrantRegion(slot: int; right: uint32): uint64 {.importc, cdecl.}
 proc nimixAllocRegion(size: int): pointer {.importc, cdecl.}
 proc nimixFreeRegion(p: pointer; size: int) {.importc, cdecl.}
+proc nimixSleep(ticks: uint64) {.importc, cdecl.}
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -69,16 +72,22 @@ proc appMain*() {.exportc.} =
     grantCap:  elfGrant
   )
   write("fs_server: ready on 'fs' channel\n")
-  var msgBuf: array[256, char]
+  var msgBuf: array[256, byte]
   while true:
     let n = nimixChanRecv("fs", addr msgBuf[0], msgBuf.len)
     if n > 0:
-      let path = cast[cstring](addr msgBuf[0])
-      let reply = fsLogicRead(gIface, path, 0'u32, 4 * 1024 * 1024)
+      var wire = newString(n)
+      copyMem(addr wire[0], addr msgBuf[0], n)
+      let req = decodeRequest(wire)
+      var path = req.payload
+      path.add('\0')   # fsLogicRead takes a cstring
+      let reply = fsLogicRead(gIface, cast[cstring](addr path[0]),
+                              req.pid, 4 * 1024 * 1024)
       let repData = encodeReply(WireReply(
         token: reply.token,
         base:  reply.base,
         len:   int32(reply.len),
         err:   int32(reply.err)
       ))
-      discard nimixChanSend("fs", cast[pointer](unsafeAddr repData[0]), repData.len)
+      discard nimixChanSend("reply", cast[pointer](unsafeAddr repData[0]), repData.len)
+    nimixSleep(1)   # yield; cooperative world has no block-on-recv yet
