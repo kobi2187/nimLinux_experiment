@@ -86,3 +86,8 @@ defect the danger build silently survived. Tracked as its own (smaller, scoped t
 testMode early path) task — bisect with serial checkpoints/asserts when picked up.
 Does NOT block normal OS debugging: `make build` + `make iso` boot to shell with
 checks live.
+
+## 2026-10-25 — V10 root cause: non-volatile CommonCfg stores (parent ADR V10b)
+Additive API in `virtio_pci.nim`: `cfgGet`/`cfgSet` (volatile CommonCfg access),
+`notifyWrite`, `commonKick` (select-then-read notify_off), `isrRead`. Existing
+procs keep their signatures. Root cause and evidence: parent DECISIONS.md §V10b.

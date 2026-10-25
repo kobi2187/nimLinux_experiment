@@ -71,9 +71,7 @@ proc inMapCap(loc: VirtioCapLoc): uint64 =
   uint64(mapDeviceMmio(PhysAddr(phys), uint64(loc.length)))
 
 proc inNotify(queueIdx: uint16) =
-  let qno = gInputDev.common.queueNotifyOff
-  let at  = notifyAddr(gInputDev.notifyBase, qno, gInputDev.notifyMult)
-  cast[ptr uint16](at)[] = queueIdx
+  commonKick(gInputDev.common, gInputDev.notifyBase, gInputDev.notifyMult, queueIdx)
 
 # ── RX buffer pre-post ────────────────────────────────────────────────────────
 
@@ -110,7 +108,7 @@ proc virtioInputInit*(): bool =
   gInput.evQueue = virtqueueInitNoWire(0, mem)
   gInput.qMem    = mem
   gInput.irqLine = inCfgReader(PciRegIrqLine)
-  gInputDev.common.queueSelect = 0
+  cfgSet(gInputDev.common, queueSelect, 0)
   if not commonQueueSetup(gInputDev.common, 0'u16, phys,
                           phys + availRingOffset(), phys + usedRingOffset()):
     klog(llError, "virtio-input: queue setup failed"); return false

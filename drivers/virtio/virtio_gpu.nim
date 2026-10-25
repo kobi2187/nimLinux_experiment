@@ -70,9 +70,7 @@ proc gpuMapCap(loc: VirtioCapLoc): uint64 =
 
 proc gpuNotify() =
   if gGpu.usePci:
-    let qno = gGpuDev.common.queueNotifyOff
-    let at  = notifyAddr(gGpuDev.notifyBase, qno, gGpuDev.notifyMult)
-    cast[ptr uint16](at)[] = 0'u16
+    commonKick(gGpuDev.common, gGpuDev.notifyBase, gGpuDev.notifyMult, 0'u16)
   else:
     virtqueueKick(gGpu.controlq)
 

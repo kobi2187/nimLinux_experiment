@@ -98,9 +98,7 @@ proc sndMapCap(loc: VirtioCapLoc): uint64 =
   uint64(mapDeviceMmio(PhysAddr(phys), uint64(loc.length)))
 
 proc sndNotify(queueIdx: uint16) =
-  let qno = gSndDev.common.queueNotifyOff
-  let at  = notifyAddr(gSndDev.notifyBase, qno, gSndDev.notifyMult)
-  cast[ptr uint16](at)[] = queueIdx
+  commonKick(gSndDev.common, gSndDev.notifyBase, gSndDev.notifyMult, queueIdx)
 
 # ── Control command helper ────────────────────────────────────────────────────
 
@@ -133,7 +131,7 @@ proc sndCtlCmd(cmd: pointer; cmdLen: uint32): uint32 =
 
 proc sndSetupQueue(idx: uint16; mem: pointer): Virtqueue =
   let phys = translatePhys(mem)
-  gSndDev.common.queueSelect = idx
+  cfgSet(gSndDev.common, queueSelect, idx)
   discard commonQueueSetup(gSndDev.common, idx, phys,
                            phys + availRingOffset(), phys + usedRingOffset())
   virtqueueInitNoWire(uint32(idx), mem)

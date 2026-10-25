@@ -81,16 +81,14 @@ proc netMapCap(loc: VirtioCapLoc): uint64 =
 
 proc netNotify(queueIdx: uint16) =
   if gVirtioNet.usePci:
-    let qno = gNetDev.common.queueNotifyOff
-    let at  = notifyAddr(gNetDev.notifyBase, qno, gNetDev.notifyMult)
-    cast[ptr uint16](at)[] = queueIdx
+    commonKick(gNetDev.common, gNetDev.notifyBase, gNetDev.notifyMult, queueIdx)
   else:
     if queueIdx == 0: virtqueueKick(gVirtioNet.rxQueue)
     else:             virtqueueKick(gVirtioNet.txQueue)
 
 proc netAckIrq() =
   if gVirtioNet.usePci:
-    if gNetDev.isrBase != 0: discard cast[ptr uint8](gNetDev.isrBase)[]
+    if gNetDev.isrBase != 0: discard isrRead(gNetDev.isrBase)
   else:
     let base = gVirtioNet.mmioBase
     mmioWrite32(base, VirtioRegInterruptAck, mmioRead32(base, VirtioRegInterruptStatus))
@@ -150,12 +148,12 @@ proc netInitPci(): bool =
   let rxq = virtqueueInitNoWire(0, rxMem)
   let txq = virtqueueInitNoWire(1, txMem)
   # Set queue 0 (rx)
-  gNetDev.common.queueSelect = 0
+  cfgSet(gNetDev.common, queueSelect, 0)
   if not commonQueueSetup(gNetDev.common, 0'u16, rxPhys,
                           rxPhys + availRingOffset(), rxPhys + usedRingOffset()):
     klog(llError, "virtio-net(pci): rxq setup failed"); return false
   # Set queue 1 (tx)
-  gNetDev.common.queueSelect = 1
+  cfgSet(gNetDev.common, queueSelect, 1)
   if not commonQueueSetup(gNetDev.common, 1'u16, txPhys,
                           txPhys + availRingOffset(), txPhys + usedRingOffset()):
     klog(llError, "virtio-net(pci): txq setup failed"); return false
