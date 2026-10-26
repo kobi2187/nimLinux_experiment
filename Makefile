@@ -97,17 +97,18 @@ NIM_APP = $(NIM) c --skipParentCfg --skipUserCfg \
           --os:standalone --mm:arc --threads:off --cpu:amd64 --noMain \
           -d:StandaloneHeapSize=1048576 -d:nimAllocPagesViaMalloc \
           -d:noSignalHandler -d:nimNoLentIterators \
-          --passC:"-ffreestanding -fno-stack-protector -mno-red-zone -fPIC" \
+          --passC:"-ffreestanding -fno-stack-protector -mno-red-zone -fPIC -fno-omit-frame-pointer" \
           --passC:"-I$(CURDIR)/kernel/abi" \
           --passL:"-nostdlib -pie $(CURDIR)/build/nimix_abi_stub.o" \
           --path:$(CURDIR) \
           --path:$(CURDIR)/apps/nim \
           --nimblePath:$(HOME)/.nimble/pkgs2
 
+NIM_TOOLS = ps kill stats ls top fault
+
 nim-apps: build/apps/ping_server.elf \
-          build/apps/ps.elf build/apps/kill.elf \
-          build/apps/stats.elf build/apps/ls.elf \
-          build/apps/top.elf build/apps/dispatch_server.elf \
+          $(addprefix build/apps/,$(addsuffix .elf,$(NIM_TOOLS))) \
+          build/apps/dispatch_server.elf \
           build/apps/fs_server.elf build/apps/user_tests.elf
 	@sh tests/check_heap_alignment.sh $^
 
@@ -121,25 +122,10 @@ build/apps/ping_server.elf: servers/ping/ping_server_elf.nim servers/ping/ping_l
 	@mkdir -p build/apps
 	$(NIM_APP) --path:$(CURDIR)/servers/ping --path:$(CURDIR)/apps/nim -o:$@ $<
 
-build/apps/ps.elf: apps/nim/ps/ps.nim kernel/abi/nimix_abi_stub.c build/nimix_abi_stub.o
+# System tools: apps/nim/<name>/<name>.nim → build/apps/<name>.elf
+$(addprefix build/apps/,$(addsuffix .elf,$(NIM_TOOLS))): build/apps/%.elf: apps/nim/$$*/$$*.nim kernel/abi/nimix_abi_stub.c build/nimix_abi_stub.o
 	@mkdir -p build/apps
-	$(NIM_APP) --path:$(CURDIR)/apps/nim/ps -o:$@ $<
-
-build/apps/kill.elf: apps/nim/kill/kill.nim kernel/abi/nimix_abi_stub.c build/nimix_abi_stub.o
-	@mkdir -p build/apps
-	$(NIM_APP) --path:$(CURDIR)/apps/nim/kill -o:$@ $<
-
-build/apps/stats.elf: apps/nim/stats/stats.nim kernel/abi/nimix_abi_stub.c build/nimix_abi_stub.o
-	@mkdir -p build/apps
-	$(NIM_APP) --path:$(CURDIR)/apps/nim/stats -o:$@ $<
-
-build/apps/ls.elf: apps/nim/ls/ls.nim kernel/abi/nimix_abi_stub.c build/nimix_abi_stub.o
-	@mkdir -p build/apps
-	$(NIM_APP) --path:$(CURDIR)/apps/nim/ls -o:$@ $<
-
-build/apps/top.elf: apps/nim/top/top.nim build/nimix_abi_stub.o
-	@mkdir -p build/apps
-	$(NIM_APP) --path:$(CURDIR)/apps/nim/top -o:$@ $<
+	$(NIM_APP) --path:$(CURDIR)/apps/nim/$* -o:$@ $<
 
 build/apps/mount_test.elf: apps/mount_test.nim kernel/abi/nimix_abi_stub.c build/nimix_abi_stub.o
 	@mkdir -p build/apps
@@ -284,7 +270,7 @@ $(DISK):
 # Regular apps (.wasm) + system tools and servers (.elf) + sample data.
 disk-add-apps: apps/ping/ping.wasm apps/pingpong/pingpong.wasm nim-apps wasm-apps
 	MTOOLS_SKIP_CHECK=1 mcopy -oi $(DISK) apps/ping/ping.wasm apps/pingpong/pingpong.wasm $(WASM_APPS) ::
-	MTOOLS_SKIP_CHECK=1 mcopy -oi $(DISK) build/apps/ps.elf build/apps/kill.elf build/apps/stats.elf build/apps/ls.elf build/apps/top.elf build/apps/dispatch_server.elf build/apps/fs_server.elf build/apps/ping_server.elf build/apps/user_tests.elf ::
+	MTOOLS_SKIP_CHECK=1 mcopy -oi $(DISK) $(addprefix build/apps/,$(addsuffix .elf,$(NIM_TOOLS))) build/apps/dispatch_server.elf build/apps/fs_server.elf build/apps/ping_server.elf build/apps/user_tests.elf ::
 	MTOOLS_SKIP_CHECK=1 mcopy -oi $(DISK) apps/data/notes.txt ::
 
 # Add a single file: make disk-add FILE=myapp.wasm

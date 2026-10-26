@@ -10,8 +10,10 @@ VM, then checks that effect on the host — not the guest's word for it:
     net    devtest net    → QEMU filter-dump pcap: our UDP marker frame
     input  QMP keys a, b  → guest prints evdev codes 30/48 (down + up)
 
-Crash tests boot once per fault and check the serial crash report: vector,
-registers, a backtrace, and that tools/symbolize.py names the faulting proc.
+Crash tests check the serial crash report — vector, registers, a backtrace
+that tools/symbolize.py resolves to the faulting proc — and the policy:
+a ring-3 fault (fault.elf) kills only that task and the system carries on;
+a kernel-mode fault (devtest crash-*) halts, one boot per fault.
 
     python3 tests/qemu_devices.py                 # devices + crashes
     python3 tests/qemu_devices.py --only devices  # or: crashes
@@ -196,26 +198,64 @@ CRASHES = [
 ]
 
 
+def named_frame(serial: str, tables, names) -> str:
+    """The first symbolized backtrace frame naming one of `names`."""
+    assert "backtrace:" in serial, "no backtrace"
+    named = "".join(symbolize.symbolize(serial.splitlines(keepends=True), tables))
+    names = names if isinstance(names, tuple) else (names,)
+    hits = [l for l in named.splitlines() if "<-" in l and any(f"<- {p}" in l for p in names)]
+    assert hits, f"{names} not in symbolized frames:\n{named[-800:]}"
+    return hits[0].split("<-")[1].strip()
+
+
 def test_crashes(tmp, iso, bios, kernel) -> list:
+    """Kernel-mode faults: report + backtrace, then the machine halts."""
     results = []
     for arg, evidence, proc in CRASHES:
         g = boot(tmp, iso=iso, bios=bios, devices=("blk",))
         try:
             out = g.run(f"devtest {arg}", timeout=20, until="=== halted")
             assert evidence in out, f"no '{evidence}' in: {out[-400:]}"
-            assert "backtrace:" in out, "no backtrace"
-            named = "".join(symbolize.symbolize(out.splitlines(keepends=True),
-                                                [symbolize.SymTab(kernel)]))
-            frames = [l for l in named.splitlines() if "<-" in l]
-            names = proc if isinstance(proc, tuple) else (proc,)
-            hits = [l for l in frames if any(f"<- {p}" in l for p in names)]
-            assert hits, f"{names} not in symbolized frames:\n{named[-800:]}"
-            hit = hits[0]
-            results.append((arg, True, hit.split("<-")[1].strip()))
+            results.append((arg, True, named_frame(out, [symbolize.SymTab(kernel)], proc)))
         except Exception as e:                 # noqa: BLE001
             results.append((arg, False, str(e)))
         finally:
             g.close()
+    return results
+
+
+USER_FAULTS = [
+    # (fault.elf arg, serial evidence, proc the symbolizer must name)
+    ("",   "CPU EXCEPTION 14 (Page Fault) in USER mode", "nullWrite"),
+    ("ud", "CPU EXCEPTION 6 (Invalid Opcode) in USER mode", "invalidOpcode"),
+]
+
+
+def test_user_faults(tmp, iso, bios, kernel) -> list:
+    """Ring-3 faults kill only the faulting task: one boot survives them all."""
+    results = []
+    app = os.path.join(ROOT, "build/apps/fault.elf")
+    g = boot(tmp, iso=iso, bios=bios, devices=("blk",))
+    try:
+        for arg, evidence, proc in USER_FAULTS:
+            name = f"user-fault{('-' + arg) if arg else ''}"
+            try:
+                out = g.run(f"fault {arg}".strip(), timeout=30, until="system continues")
+                assert evidence in out, f"no '{evidence}' in: {out[-400:]}"
+                bias = int(symbolize.BIAS_LINE.findall(out)[-1], 16)
+                tables = [symbolize.SymTab(kernel), symbolize.SymTab(app, bias)]
+                results.append((name, True, named_frame(out, tables, proc)))
+            except Exception as e:             # noqa: BLE001
+                results.append((name, False, str(e)))
+        try:
+            assert "NimixOS" in g.run("version"), "shell dead after user faults"
+            ps = g.run("ps", until="app exit code")
+            assert "fault.elf" not in ps, f"faulted task still listed:\n{ps[-400:]}"
+            results.append(("survives", True, "shell alive, faulted tasks gone, region reused"))
+        except Exception as e:                 # noqa: BLE001
+            results.append(("survives", False, str(e)))
+    finally:
+        g.close()
     return results
 
 
@@ -232,6 +272,7 @@ def main():
         if a.only in (None, "devices"):
             results += test_devices(tmp, a.iso, a.bios)
         if a.only in (None, "crashes"):
+            results += test_user_faults(tmp, a.iso, a.bios, a.kernel)
             results += test_crashes(tmp, a.iso, a.bios, a.kernel)
     for name, ok, msg in results:
         print(f"{'PASS' if ok else 'FAIL'}: {name:12} {msg}")

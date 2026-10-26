@@ -10,17 +10,19 @@ import ./serial
 
 const MaxFrames* = 24
 
-proc frameStep*(frame: uint64): tuple[ok: bool; next, ret: uint64] =
-  ## One unwind step with sanity checks (pure: testable on the host).
-  ## A frame must be 8-aligned, canonical-low and non-null; stacks grow down,
-  ## so the caller's frame lies above this one and not absurdly far away.
-  if frame == 0 or (frame and 7) != 0 or frame >= 0x0000_8000_0000_0000'u64:
+const CanonicalLowEnd* = 0x0000_8000_0000_0000'u64
+
+proc frameStep*(frame: uint64; lo = 0'u64; hi = CanonicalLowEnd): tuple[ok: bool; next, ret: uint64] =
+  ## One unwind step with sanity checks. A frame must be 8-aligned, non-null
+  ## and lie in [lo, hi - 16) — for a user task, its own region: a corrupt user
+  ## rbp must never make the kernel fault while reporting the crash.
+  if frame == 0 or (frame and 7) != 0 or frame < lo or frame + 16 > hi:
     return (false, 0'u64, 0'u64)
   let next = cast[ptr uint64](frame)[]
   let ret  = cast[ptr uint64](frame + 8)[]
   (true, next, ret)
 
-proc printBacktrace*(rip, rbp: uint64) =
+proc printBacktrace*(rip, rbp: uint64; lo = 0'u64; hi = CanonicalLowEnd) =
   ## rip = 0: called from a panic (no faulting instruction) — frames only.
   defaultSerial.putString("backtrace:\n")
   if rip != 0:
@@ -30,7 +32,7 @@ proc printBacktrace*(rip, rbp: uint64) =
   var frame = rbp
   var n = 1
   while n < MaxFrames:
-    let s = frameStep(frame)
+    let s = frameStep(frame, lo, hi)
     if not s.ok or s.ret == 0: break
     defaultSerial.putString("  #")
     defaultSerial.putInt(int64(n))

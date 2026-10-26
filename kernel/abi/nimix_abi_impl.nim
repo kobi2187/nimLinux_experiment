@@ -61,6 +61,32 @@ proc abiExit*(code: int) {.nimcall, noreturn.} =
   # The dead task is out of every ring; the next tick switches away for good.
   while true: waitForTick()
 
+# ── Faults in user tasks ──────────────────────────────────────────────────────
+# Installed as kern/interrupts.userFaultKill/userStackBounds by initSyscallGate.
+
+proc abiKillFaultingTask*() {.nimcall.} =
+  ## A ring-3 task faulted (report already printed). The kernel's own state is
+  ## untouched, so end just this task exactly like exit: release what it owns,
+  ## drop it from the scheduler, and never return to it.
+  let t = addr procTable.tasks[currentSlot()]
+  defaultSerial.putString("=== killed pid ")
+  defaultSerial.putInt(int64(t.pid))
+  defaultSerial.putString(" (")
+  for c in t.name:
+    if c == '\0': break
+    defaultSerial.putChar(c)
+  defaultSerial.putString(") — system continues (symbolize: tools/symbolize.py --app) ===\n")
+  releaseCurrentTask()
+  discard procKill(currentSlot())
+  while true: waitForTick()
+
+proc abiCurrentTaskBounds*(): tuple[lo, hi: uint64] {.nimcall.} =
+  ## The faulting task's own region: the only memory its frames may live in.
+  let slot = procTable.tasks[currentSlot()].regionSlot
+  if slot < 0: return (0'u64, 0'u64)
+  let base = regionBase(RegionHandle(slot))
+  (base, base + RegionSize)
+
 # ── IPC: named channel ────────────────────────────────────────────────────────
 
 proc abiChanSend*(name: cstring; data: pointer; dataLen: int): int {.nimcall.} =
