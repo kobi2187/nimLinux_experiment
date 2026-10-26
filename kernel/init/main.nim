@@ -45,6 +45,10 @@ proc runKernel*(bootInfo: ptr BootInfo) =
   klog(llInfo, "[MAIN] Step 2: KERNEL MODEL")
   klog(llInfo, "[MAIN] ════════════════════════════════════════════════")
   klog(llInfo, "[MAIN] Selecting kernel model: " & KernelModel)
+  # The process table is the preemptive scheduler behind the PIT handler in
+  # EVERY model; only monolithic used to initialise it (micro/sasos booted
+  # with current=0 and all ring heads 0 instead of -1).
+  procTableInit()
   when IsMonolithic:
     initMonolithicModel()
   elif IsSasos:
@@ -100,6 +104,9 @@ proc kernelMain*(magicReg: uint32, infoPtr: pointer) {.exportc.} =
 
   earlyPutString("[BOOT] Calling runKernel...\n")
   runKernel(addr bootInfo)
+  # runKernel ends in the shell loop and never returns; if it does, say so
+  # (boot_asm then halts) rather than stopping silently.
+  earlyPutString("[BOOT] runKernel returned - kernel halted\n")
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Standalone Test Entry (local testing without bootloader)

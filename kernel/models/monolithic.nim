@@ -161,9 +161,6 @@ proc initMonolithicModel*() =
   ## Populate the global scheduler and ipc vtables.
   ## Must be called once during kernel init before any task or IPC operations.
 
-  # Initialise process table (three-class ring scheduler)
-  procTableInit()
-
   # Zero out channel table
   for i in 0 ..< MaxChannels:
     channels[i].isOpen = false
