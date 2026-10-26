@@ -32,6 +32,8 @@ import ../../drivers/rtc
 import ../../kern/interrupts
 import ../../arch/x86_64/syscall_gate
 import ../../fs/fatfs
+import ../../fs/fatfs_write   # registerFatFs
+import ../../fs/ramfs         # registerRamFs
 import ../../shell/shell
 
 when defined(amd64) or defined(x86_64):
@@ -171,6 +173,12 @@ proc initIPC*() =
   serverChanRegistryInit()
   klog(llInfo, "[SERVICES] ✓ ServerChan registry ready")
 
+proc initFilesystems*() =
+  ## Register VFS drivers (mounting stays lazy, on first use). Order matters:
+  ## the first driver is the default for paths matching no prefix ("/").
+  registerFatFs()   # /fat/ and default
+  registerRamFs()   # /ram/
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Stage 5: Syscall Gate
 # ═══════════════════════════════════════════════════════════════════════════
@@ -234,6 +242,7 @@ proc initServices*() =
   initBuiltinDrivers()
   initModules()
   initVirtioDevices()
+  initFilesystems()
 
   # Stage 4
   klog(llInfo, "[SERVICES] Stage 4: IPC infrastructure")

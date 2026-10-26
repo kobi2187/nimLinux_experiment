@@ -6,9 +6,8 @@
 ##
 ## Boot sequence:
 ##   1. Kernel loads this as PIE, patches ABI stubs, calls appMain()
-##   2. appMain reads capability token from args (passed as uint64 string)
-##   3. Server loop: nimixChanRecv("ping_server") → pingLogicHandleMsg
-##   4. Reply uses nimixCapSend if token valid, nimixChanSend otherwise
+##   2. appMain creates "ping_server" (nimixChanCreate → receive capability)
+##   3. Server loop: nimixCapRecv → pingLogicHandleMsg (replies as "pong" events)
 
 import ping_logic
 import nimix_entry
@@ -17,10 +16,9 @@ import nimix_entry
 
 proc nimixWrite(buf: pointer; len: int) {.importc, cdecl.}
 proc nimixExit(code: int) {.importc, cdecl, noreturn.}
-proc nimixGetArgs(buf: pointer; len: int): int {.importc, cdecl.}
-proc nimixChanRecv(name: cstring; buf: pointer; bufLen: int): int {.importc, cdecl.}
-proc nimixCapSend(name: cstring; tok: uint64; data: pointer; dataLen: int): int {.importc, cdecl.}
-proc nimixChanSend(name: cstring; data: pointer; dataLen: int): int {.importc, cdecl.}
+proc nimixChanCreate(name: cstring): uint64 {.importc, cdecl.}
+proc nimixCapRecv(tok: uint64; buf: pointer; len: int): int {.importc, cdecl.}
+proc nimixYield() {.importc, cdecl.}
 proc nimixEventPublish(topic: cstring; data: pointer; dataLen: int) {.importc, cdecl.}
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -32,15 +30,6 @@ proc writeCStr(s: cstring) =
   var i = 0
   while s[i] != '\0': inc i
   if i > 0: nimixWrite(cast[pointer](s), i)
-
-## Parse a decimal uint64 from a cstring; returns 0 on failure.
-proc parseU64(p: cstring; n: int): uint64 =
-  var v: uint64 = 0
-  for i in 0 ..< n:
-    let c = p[i]
-    if c < '0' or c > '9': return 0
-    v = v * 10 + uint64(ord(c) - ord('0'))
-  v
 
 # ── PingServerIface wired to kernel ABI ───────────────────────────────────────
 
@@ -60,8 +49,6 @@ proc elfPutChar(c: char) {.nimcall.} =
 
 var ps: PingServer
 var msgBuf:  array[256, byte]
-var argsBuf: array[64, byte]
-var capTok:  uint64 = 0
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
@@ -74,27 +61,17 @@ proc appMain*() {.exportc.} =
   )
   pingLogicInit(ps, iface)
 
-  # Read capability token from kernel-supplied args (decimal uint64 string).
-  let argsLen = nimixGetArgs(addr argsBuf[0], argsBuf.len)
-  if argsLen > 0:
-    capTok = parseU64(cast[cstring](addr argsBuf[0]), argsLen)
+  # Own the channel (microkernel: the server creates its endpoint and
+  # receives through the capability). In kernel models that already run the
+  # ping kmod the name is taken — then this ELF is redundant and exits.
+  let recvCap = nimixChanCreate(PingServerName)
+  if recvCap == 0:
+    writeStr("ping_server_elf: 'ping_server' already served (kmod) - exiting\n")
+    nimixExit(1)
+  writeStr("ping_server_elf: ready on 'ping_server'\n")
 
-  if capTok != 0:
-    writeStr("ping_server_elf: got capToken, using capSend\n")
-  else:
-    writeStr("ping_server_elf: no capToken, falling back to chanSend\n")
-
-  writeStr("ping_server_elf: entering server loop\n")
-
-  # Server loop: block on named channel, handle each message.
+  # Replies go out as "pong" events from pingLogicHandleMsg (elfPublish).
   while true:
-    let n = nimixChanRecv(PingServerName, addr msgBuf[0], msgBuf.len)
-    if n > 0:
-      pingLogicHandleMsg(ps, addr msgBuf[0], n)
-
-      # Reply: use capability-authenticated send when we hold a valid token.
-      let reply: cstring = "pong!"
-      if capTok != 0:
-        discard nimixCapSend("pong", capTok, cast[pointer](reply), 5)
-      else:
-        discard nimixChanSend("pong", cast[pointer](reply), 5)
+    let n = nimixCapRecv(recvCap, addr msgBuf[0], msgBuf.len)
+    if n > 0: pingLogicHandleMsg(ps, addr msgBuf[0], n)
+    else: nimixYield()   # idle: give the CPU away

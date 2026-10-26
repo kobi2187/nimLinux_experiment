@@ -11,13 +11,16 @@ import virtio_blk
 import ../../core/debug
 
 proc nimixBlkReady(): cint {.exportc, cdecl.} =
-  earlyPutString("[TRACE diskio] nimixBlkReady, ready="); earlyPutInt(if gVirtioBlkReady: 1 else: 0); earlyPutString("\n")
+  when defined(virtioTrace):  # -d:virtioTrace: per-request trace
+    earlyPutString("[TRACE diskio] nimixBlkReady, ready="); earlyPutInt(if gVirtioBlkReady: 1 else: 0); earlyPutString("\n")
   if gVirtioBlkReady: 1 else: 0
 
 proc nimixBlkRead(sector: uint64; buf: pointer): cint {.exportc, cdecl.} =
-  earlyPutString("[TRACE diskio] nimixBlkRead sector="); earlyPutInt(int64(sector)); earlyPutString("\n")
+  when defined(virtioTrace):  # -d:virtioTrace: per-request trace
+    earlyPutString("[TRACE diskio] nimixBlkRead sector="); earlyPutInt(int64(sector)); earlyPutString("\n")
   let ok = virtioBlkRead(sector, buf)
-  earlyPutString("[TRACE diskio] nimixBlkRead done, ok="); earlyPutInt(if ok: 1 else: 0); earlyPutString("\n")
+  when defined(virtioTrace):  # -d:virtioTrace: per-request trace
+    earlyPutString("[TRACE diskio] nimixBlkRead done, ok="); earlyPutInt(if ok: 1 else: 0); earlyPutString("\n")
   if ok: 0 else: -1
 
 proc nimixBlkWrite(sector: uint64; buf: pointer): cint {.exportc, cdecl.} =
