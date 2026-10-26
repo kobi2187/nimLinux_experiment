@@ -26,25 +26,28 @@ type
     ## CPU context saved on exception.
     ## Field order MUST match the assembly push sequence in isr_common_stub exactly.
     ##
-    ## Stack layout at nimInterruptDispatch entry (RSP → rax, low addr first):
-    ##   [pushed by isr_common_stub]  rax rbx rcx rdx rsi rdi rbp r8..r15
+    ## Stack layout at nimInterruptDispatch entry (RSP → r15, low addr first).
+    ## isr_common_stub pushes rax first and r15 last, so r15 is at the LOWEST
+    ## address (this order was once declared reversed: every GPR read back as
+    ## a different register — ctx.rbp was r9).
+    ##   [pushed by isr_common_stub]  r15 r14 .. r8 rbp rdi rsi rdx rcx rbx rax
     ##   [pushed by entry stub]       vectorNum  errorCode
     ##   [pushed by CPU on interrupt] rip cs rflags rsp ss
-    rax*:      uint64
-    rbx*:      uint64
-    rcx*:      uint64
-    rdx*:      uint64
-    rsi*:      uint64
-    rdi*:      uint64
-    rbp*:      uint64
-    r8*:       uint64
-    r9*:       uint64
-    r10*:      uint64
-    r11*:      uint64
-    r12*:      uint64
-    r13*:      uint64
-    r14*:      uint64
     r15*:      uint64
+    r14*:      uint64
+    r13*:      uint64
+    r12*:      uint64
+    r11*:      uint64
+    r10*:      uint64
+    r9*:       uint64
+    r8*:       uint64
+    rbp*:      uint64
+    rdi*:      uint64
+    rsi*:      uint64
+    rdx*:      uint64
+    rcx*:      uint64
+    rbx*:      uint64
+    rax*:      uint64
     vectorNum*: uint64       ## Interrupt/exception vector number (pushed second)
     errorCode*: uint64       ## Error code pushed first (or fake 0)
     rip*:      uint64        ## CPU interrupt frame: instruction pointer
@@ -63,6 +66,13 @@ type
     eeStackOverflow     ## Kernel stack overflow
 
   ExceptionHandler* = proc(ctx: ptr ExceptionContext): void {.nimcall.}
+
+# The layout is a contract with isr_common_stub (arch/x86_64/boot_asm.S).
+static:
+  doAssert offsetOf(ExceptionContext, r15) == 0
+  doAssert offsetOf(ExceptionContext, rax) == 14 * 8
+  doAssert offsetOf(ExceptionContext, vectorNum) == 15 * 8
+  doAssert offsetOf(ExceptionContext, rip) == 17 * 8
 
 # ═══════════════════════════════════════════════════════════════════════════
 # IDT (Interrupt Descriptor Table) Structures
@@ -383,18 +393,17 @@ proc putReg(name: cstring; v: uint64) =
   defaultSerial.putString("=0x")
   defaultSerial.putHex(v)
 
-proc fatalExceptionHandler*(ctx: ptr ExceptionContext) =
-  ## Crash report on serial — vector, error code, CR2, every register and a
-  ## frame-pointer backtrace (tools/symbolize.py names the frames) — then halt.
-  ## Returning instead would iretq onto the faulting instruction and loop.
-  {.emit: "asm volatile(\"cli\");".}
-  let vec = int(ctx.vectorNum and 31)
-  defaultSerial.putString("\n=== CPU EXCEPTION ")
-  defaultSerial.putInt(int64(ctx.vectorNum))
-  defaultSerial.putString(" (")
-  defaultSerial.putString(ExceptionNames[vec])
-  defaultSerial.putString(if (ctx.cs and 3) == 3: ") in USER mode ===\n"
-                          else: ") in kernel mode ===\n")
+type
+  UserFaultKill* = proc() {.nimcall.}
+    ## Ends the current task for good (never returns). Set by the task layer.
+  UserStackBounds* = proc(): tuple[lo, hi: uint64] {.nimcall.}
+    ## Memory the current user task may own — bounds the backtrace walk.
+
+var
+  userFaultKill*: UserFaultKill
+  userStackBounds*: UserStackBounds
+
+proc printRegisters(ctx: ptr ExceptionContext) =
   putReg("err", ctx.errorCode); putReg("  cr2", readCr2()); putReg("  cr3", readCr3())
   defaultSerial.putChar('\n')
   putReg("rip", ctx.rip); putReg("  rsp", ctx.rsp); putReg("  rbp", ctx.rbp)
@@ -407,7 +416,34 @@ proc fatalExceptionHandler*(ctx: ptr ExceptionContext) =
   putReg("  r13", ctx.r13); defaultSerial.putChar('\n')
   putReg("r14", ctx.r14); putReg("  r15", ctx.r15); putReg("  cs", ctx.cs)
   putReg("  ss", ctx.ss); defaultSerial.putChar('\n')
-  printBacktrace(ctx.rip, ctx.rbp)
+
+proc printCrashReport(ctx: ptr ExceptionContext; user: bool) =
+  ## Vector, registers and a frame-pointer backtrace (tools/symbolize.py
+  ## names the frames; --app for a user task).
+  defaultSerial.putString("\n=== CPU EXCEPTION ")
+  defaultSerial.putInt(int64(ctx.vectorNum))
+  defaultSerial.putString(" (")
+  defaultSerial.putString(ExceptionNames[int(ctx.vectorNum and 31)])
+  defaultSerial.putString(if user: ") in USER mode ===\n" else: ") in kernel mode ===\n")
+  printRegisters(ctx)
+  if user and userStackBounds != nil:
+    let b = userStackBounds()
+    printBacktrace(ctx.rip, ctx.rbp, b.lo, b.hi)
+  elif user:
+    printBacktrace(ctx.rip, 0'u64)          # bounds unknown: don't walk user memory
+  else:
+    printBacktrace(ctx.rip, ctx.rbp)
+
+proc fatalExceptionHandler*(ctx: ptr ExceptionContext) =
+  ## A fault in a user task kills that task — the kernel's own state is
+  ## intact, so everything else keeps running. A fault in kernel mode means
+  ## shared kernel state may be corrupt: report and halt. Returning instead
+  ## would iretq onto the faulting instruction and loop.
+  {.emit: "asm volatile(\"cli\");".}
+  let user = (ctx.cs and 3) == 3
+  printCrashReport(ctx, user)
+  if user and userFaultKill != nil:
+    userFaultKill()                         # never returns
   defaultSerial.putString("=== halted (symbolize: tools/symbolize.py <serial log>) ===\n")
   while true:
     {.emit: "asm volatile(\"cli; hlt\");".}

@@ -248,7 +248,8 @@ stack_top:
  * We push all GPRs, call the Nim dispatcher, pop, iretq.
  *
  * Stack layout at nimInterruptDispatch call (RSP = &rax, low addr first):
- *   rax rbx rcx rdx rsi rdi rbp r8..r15  <- pushed here (15 regs × 8 = 120 bytes)
+ *   r15..r8 rbp rdi rsi rdx rcx rbx rax  <- pushed here, rax first (15 regs × 8 = 120 bytes)
+ *                                          (kern/interrupts.ExceptionContext mirrors this)
  *   vector_num (uint64)                   <- pushed by entry stub (second)
  *   error_code (uint64)                   <- pushed by entry stub or fake 0 (first)
  *   rip cs rflags rsp ss                  <- pushed by CPU on interrupt
