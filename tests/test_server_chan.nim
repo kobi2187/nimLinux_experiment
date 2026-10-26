@@ -48,6 +48,21 @@ proc testLookup() =
   assert serverChanName(found[]) == "lookup_test"
   echo "PASS: channel registry lookup"
 
+proc testOwnedChannels() =
+  serverChanRegistryInit()
+  let ch = serverChanAllocOwned("dispatch", 0xABCD'u64)
+  assert ch != nil, "owned channel created"
+  assert serverChanFind("dispatch") == ch, "registered by name for senders"
+  assert serverChanFindByCap(0xABCD'u64) == ch, "found by its receive cap"
+  assert serverChanFindByCap(0x1234'u64) == nil, "wrong cap finds nothing"
+  assert serverChanFindByCap(0) == nil, "null cap finds nothing"
+  assert serverChanAllocOwned("dispatch", 0x9999'u64) == nil, "name squatting refused"
+  assert serverChanAllocOwned("", 0x9999'u64) == nil, "empty name refused"
+  for i in 1 ..< MaxOwnedChans:
+    assert serverChanAllocOwned(cstring("s" & $i), uint64(100 + i)) != nil
+  assert serverChanAllocOwned("overflow", 0x7777'u64) == nil, "pool exhaustion refused"
+  echo "PASS: server-owned channels"
+
 when isMainModule:
   testCreateAndName()
   testSendRecv()
@@ -55,3 +70,4 @@ when isMainModule:
   testCapacity()
   testLookup()
   echo "All server channel tests passed."
+  testOwnedChannels()

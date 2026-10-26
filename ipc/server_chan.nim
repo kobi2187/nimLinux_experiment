@@ -15,6 +15,7 @@ const
   ServerMsgMaxLen*   = 256   ## Max payload bytes per message
   ServerChanNameLen* = 64    ## Max channel name length
   MaxServerChans*    = 32    ## Max registered channels
+  MaxOwnedChans*     = 8     ## Pool for channels created by userspace servers
 
 type
   ServerMsg* = object
@@ -27,6 +28,7 @@ type
     head:  int
     tail:  int
     count: int
+    recvCap*: uint64   ## receive capability token; 0 = kernel-owned (plain recv)
 
   ## Minimal Option type — avoids std/options dependency under --os:any.
   MaybeMsg* = object
@@ -36,11 +38,14 @@ type
 var
   registry:      array[MaxServerChans, ptr ServerChan]
   registryCount: int = 0
+  ownedPool:     array[MaxOwnedChans, ServerChan]
+  ownedUsed:     array[MaxOwnedChans, bool]
 
 proc serverChanRegistryInit*() =
   ## Reset the global channel registry (call once at kernel init or in tests).
   registryCount = 0
   for i in 0..<MaxServerChans: registry[i] = nil
+  for i in 0..<MaxOwnedChans: ownedUsed[i] = false
 
 proc fillName(dst: var array[ServerChanNameLen, char], src: string) =
   let lim = if src.len < ServerChanNameLen - 1: src.len else: ServerChanNameLen - 1
@@ -87,10 +92,55 @@ proc serverChanRegister*(ch: var ServerChan) =
     registry[registryCount] = addr ch
     inc registryCount
 
-proc serverChanFind*(name: string): ptr ServerChan =
-  ## Look up a channel by name. Returns nil if not found.
+proc nameEq(stored: array[ServerChanNameLen, char]; name: cstring): bool =
+  ## Allocation-free compare of a stored (NUL-terminated, truncated) name.
+  for i in 0 ..< ServerChanNameLen:
+    if stored[i] != name[i]: return false
+    if stored[i] == '\0': return true
+  false
+
+proc serverChanFind*(name: cstring): ptr ServerChan =
+  ## Look up a channel by name. Returns nil if not found. Allocation-free:
+  ## the kernel IPC path must not depend on the kernel string heap.
+  if name == nil: return nil
   for i in 0..<registryCount:
-    if registry[i] != nil and serverChanName(registry[i][]) == name:
+    if registry[i] != nil and nameEq(registry[i].name, name):
+      return registry[i]
+  nil
+
+proc serverChanFind*(name: string): ptr ServerChan =
+  serverChanFind(name.cstring)
+
+# ── Server-owned channels (microkernel: servers own their endpoints) ──────────
+# A userspace server creates its channel and receives through a capability; the
+# kernel only provides the mailbox. Names are first-come: a taken name fails.
+
+proc serverChanAllocOwned*(name: cstring; recvCap: uint64): ptr ServerChan =
+  ## Create + register a channel bound to `recvCap` (must be non-zero).
+  ## nil when the name is empty or taken, or the pool / registry is full.
+  ## Allocation-free (kernel path): the name is copied byte by byte.
+  assert recvCap != 0, "owned channel needs a receive capability"
+  if name == nil or name[0] == '\0' or serverChanFind(name) != nil or
+     registryCount >= MaxServerChans:
+    return nil
+  for i in 0..<MaxOwnedChans:
+    if not ownedUsed[i]:
+      ownedUsed[i] = true
+      let ch = addr ownedPool[i]
+      zeroMem(ch, sizeof(ServerChan))
+      var n = 0
+      while n < ServerChanNameLen - 1 and name[n] != '\0':
+        ch.name[n] = name[n]; inc n
+      ch.recvCap = recvCap
+      serverChanRegister(ch[])
+      return ch
+  nil
+
+proc serverChanFindByCap*(recvCap: uint64): ptr ServerChan =
+  ## The channel a receive capability is bound to, or nil.
+  if recvCap == 0: return nil
+  for i in 0..<registryCount:
+    if registry[i] != nil and registry[i].recvCap == recvCap:
       return registry[i]
   nil
 
