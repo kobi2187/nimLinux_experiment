@@ -17,6 +17,7 @@
 ## Only the final PCM crosses into the kernel; encoded data + decode stay in userspace.
 
 import audio_logic
+import nimix_entry
 
 # ── Kernel ABI (weak stubs patched by the ELF loader at spawn) ─────────────────
 
@@ -90,6 +91,7 @@ proc encodeReply(r: MediaReply; out: ptr UncheckedArray[uint8]): int =
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 proc appMain*() {.exportc.} =
+  nimixAppInit()   # module init first: --noMain skips it (nimix_entry)
   write("audio_server: starting\n")
   let iface = AudioIface(play: elfPlay, drain: elfDrain, wait: elfWait,
                          stop: elfStop, volume: elfVolume)

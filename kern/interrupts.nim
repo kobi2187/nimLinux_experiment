@@ -377,6 +377,8 @@ proc defaultPageFaultHandler*(ctx: ptr ExceptionContext) =
   kprint("EXCEPTION: Page Fault\n")
   kprint("  Error Code: 0x")
   kprintHex(ctx.errorCode)
+  kprint("\n  CR2 (fault address): 0x")
+  kprintHex(readCr2())
   kprint("\n  RIP: 0x")
   kprintHex(ctx.rip)
   kprint("\n")

@@ -1,9 +1,11 @@
 # NimixOS ls app — list directory contents.
 import nimix_common
+import nimix_entry
 
 proc nimixFsReadDir(path: cstring; buf: pointer; len: int): int {.importc, cdecl.}
 
 proc appMain*() {.exportc.} =
+  nimixAppInit()   # module init first: --noMain skips it (nimix_entry)
   var argbuf: array[256, char]
   let n = nimixGetArgs(addr argbuf[0], argbuf.len)
   let path: cstring = if n > 0: cast[cstring](addr argbuf[0]) else: "/"

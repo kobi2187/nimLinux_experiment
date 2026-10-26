@@ -10,6 +10,7 @@
 
 {.define: nimixUserspace.}
 import ../../tests/test_protocol
+import nimix_entry
 
 # ── ABI imports (weak stubs patched by ELF loader with syscall trampolines) ──
 
@@ -118,6 +119,7 @@ proc testMapAnon() =
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 proc appMain() {.exportc.} =
+  nimixAppInit()   # module init first: --noMain skips it (nimix_entry)
   testSuiteStart("user_tests")
 
   testWrite()

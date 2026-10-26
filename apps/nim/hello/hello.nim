@@ -10,10 +10,13 @@ proc write(s: string) =
   if s.len > 0:
     nimixWrite(unsafeAddr s[0], s.len)
 
+import nimix_entry
+
 proc appMain() {.exportc.} =
   ## Entry point called by the kernel loader after relocating us.
   ## The kernel calls nimixAppMain() — not NimMain() — to avoid
   ## colliding with Nim's own generated NimMain symbol.
+  nimixAppInit()   # module init first: --noMain skips it (nimix_entry)
   write("Hello from a NimixOS Nim app!\n")
   write("Running as PIE -- loader placed me anywhere it liked.\n")
   nimixExit(0)

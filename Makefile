@@ -28,7 +28,7 @@ QEMU_MEM ?= 256
 # and surface real defects on serial via panicoverride. Opt into the optimized,
 # unchecked build with:  make DANGER=-d:danger   (or the `release` target).
 DANGER ?=
-NIM_FLAGS = c --os:any --mm:arc -d:StandaloneHeapSize=16777216 \
+NIM_FLAGS = c --os:any --mm:arc -d:StandaloneHeapSize=16777216 --passC:-fdata-sections \
             -d:release $(DANGER) -d:kernelFull --noMain --outdir:build \
             --nimblePath:nimcache
 
@@ -52,17 +52,20 @@ CLANG_WASM = clang --target=wasm32 -nostdlib -Wl,--no-entry \
              -Wl,--export=_start -Wl,--allow-undefined -O2
 
 # ── Compile Nim userspace apps (PIE, --os:standalone) ────────────────────────
+# --threads:off: NimixOS has fibers/actors, not OS threads, and sets up no TLS.
+# With threads on, threadvars compile to %fs-relative loads (FS base = 0) and
+# every app page-faulted on its first error-flag access.
 # These are native Nim binaries that link against the kernel ABI.
 # Always compiled as PIE so the SASOS loader can place them anywhere.
 # Weak stub .o — provides nimixWrite/nimixExit/etc as weak symbols so the linker
 # resolves them. The kernel loader overwrites them with jmp <real_addr> at runtime.
-build/nimix_abi_stub.o: kernel/abi/nimix_abi_stub.c
+build/nimix_abi_stub.o: kernel/abi/nimix_abi_stub.c kernel/abi/nimix_page_arena.h
 	@mkdir -p build
 	gcc -c -fPIC -ffreestanding -fno-stack-protector -o $@ $<
 
 NIM_APP = $(NIM) c --skipParentCfg --skipUserCfg \
-          --os:standalone --mm:arc --cpu:amd64 --noMain \
-          -d:StandaloneHeapSize=1048576 \
+          --os:standalone --mm:arc --threads:off --cpu:amd64 --noMain \
+          -d:StandaloneHeapSize=1048576 -d:nimAllocPagesViaMalloc \
           -d:noSignalHandler -d:nimNoLentIterators \
           --passC:"-ffreestanding -fno-stack-protector -mno-red-zone -fPIC" \
           --passC:"-I$(CURDIR)/kernel/abi" \
@@ -76,6 +79,7 @@ nim-apps: build/apps/hello.elf build/apps/ping_server.elf \
           build/apps/stats.elf build/apps/ls.elf \
           build/apps/top.elf build/apps/dispatch_server.elf \
           build/apps/fs_server.elf build/apps/user_tests.elf
+	@sh tests/check_heap_alignment.sh $^
 
 NIM_APP_TEST = $(NIM_APP) -d:nimixUserspace
 
@@ -115,9 +119,12 @@ build/apps/mount_test.elf: apps/mount_test.nim kernel/abi/nimix_abi_stub.c build
 	@mkdir -p build/apps
 	$(NIM_APP) -o:$@ $<
 
+# cps tracing off: debug builds otherwise give EVERY continuation a 4096-entry
+# trace deque — sized for a host malloc, not a 1 MB static app heap.
 build/apps/dispatch_server.elf: servers/dispatch/dispatch_server_elf.nim servers/dispatch/dispatch_logic.nim servers/dispatch/priority_queue.nim servers/dispatch/qos_policy.nim servers/dispatch/dispatch_wire.nim runtime/actor.nim ipc/mailbox.nim build/nimix_abi_stub.o
 	@mkdir -p build/apps
 	$(subst --os:standalone,--os:any,$(NIM_APP)) --panics:on \
+		-d:cpsTraceDeque=false -d:cpsStackFrames=false \
 		--path:$(CURDIR)/servers/dispatch --path:$(CURDIR)/apps/nim -o:$@ $<
 
 build/apps/fs_server.elf: servers/fs/fs_server_elf.nim servers/fs/fs_logic.nim servers/dispatch/dispatch_wire.nim build/nimix_abi_stub.o
@@ -143,6 +150,7 @@ apps/ping/ping_embedded.nim: apps/ping/ping.wasm
 # ── Compile kernel ────────────────────────────────────────────────
 # Default `build` keeps runtime checks ON (DANGER empty) for observable defects.
 build: $(addprefix build/kernel-,$(KERNEL_MODELS))
+	@sh tests/check_heap_alignment.sh $^
 
 # Optimized, unchecked build (production). Runtime checks compiled out.
 release:
@@ -293,6 +301,7 @@ test:
 	$(NIM) c -r $(TEST_FLAGS) -d:noKernelHardware tests/test_elf_loader.nim
 	$(NIM) c -r $(TEST_FLAGS) -d:noKernelHardware tests/test_vfs_btree.nim
 	$(NIM) c -r $(TEST_FLAGS) tests/test_bit_intrinsics.nim
+	$(NIM) c -r $(TEST_FLAGS) tests/test_user_window.nim
 	$(NIM) c -r $(TEST_FLAGS) tests/test_ramfs.nim
 	@echo "=== All tests passed ==="
 

@@ -19,6 +19,7 @@ import ../fs/fatfs
 import ../apps/ping/ping_embedded
 import ../apps/pingpong/pingpong_embedded
 import ../kernel/abi/app_args
+import ../mm/user_window
 import ../arch/x86_64/syscall_gate
 import ../mm/region_allocator
 import ../mm/sip_heap
@@ -224,31 +225,13 @@ proc cmdRun(filename: cstring) =
   if r != wasmOk:
     kprint("WASM execution failed\n")
 
-proc buildAbiPatches(): array[20, AbiPatch] =
-  ## Build the ABI patch table — each entry maps a weak stub name to its
-  ## NimixSyscall ordinal. The ELF loader overwrites stubs with
-  ## `movabs rax, <nr>; syscall` so apps issue the right syscall number.
-  proc p(name: cstring; nr: uint64): AbiPatch = AbiPatch(name: name, nr: nr)
-  result[0]  = p("nimixWrite",          ord(scWrite).uint64)
-  result[1]  = p("nimixExit",           ord(scExit).uint64)
-  result[2]  = p("nimixAllocRegion",    ord(scAllocRegion).uint64)
-  result[3]  = p("nimixFreeRegion",     ord(scFreeRegion).uint64)
-  result[4]  = p("nimixChanSend",       ord(scChanSend).uint64)
-  result[5]  = p("nimixChanRecv",       ord(scChanRecv).uint64)
-  result[6]  = p("nimixEventPublish",   ord(scEventPublish).uint64)
-  result[7]  = p("nimixEventSubscribe", ord(scEventSubscribe).uint64)
-  result[8]  = p("nimixEventPoll",      ord(scEventPoll).uint64)
-  result[9]  = p("nimixGetArgs",        ord(scGetArgs).uint64)
-  result[10] = p("nimixProcList",       ord(scProcList).uint64)
-  result[11] = p("nimixSchedStats",     ord(scSchedStats).uint64)
-  result[12] = p("nimixProcKillPid",    ord(scProcKillPid).uint64)
-  result[13] = p("nimixFsReadDir",      ord(scFsReadDir).uint64)
-  result[14] = p("nimixFsRead",         ord(scFsRead).uint64)
-  result[15] = p("nimixFsWrite",        ord(scFsWrite).uint64)
-  result[16] = p("nimixUptimeSecs",     ord(scUptimeSecs).uint64)
-  result[17] = p("nimixWallClock",      ord(scWallClock).uint64)
-  result[18] = p("nimixMapAnon",        ord(scMapAnon).uint64)
-  result[19] = p("nimixFreeAnon",       ord(scFreeAnon).uint64)
+proc buildAbiPatches(): array[NimixSyscallCount, AbiPatch] =
+  ## Build the ABI patch table — every syscall's weak stub name mapped to its
+  ## NimixSyscall ordinal, from the single NimixSyscallSymbol table. The ELF
+  ## loader overwrites stubs with `movabs rax, <nr>; syscall`. (A hand-kept
+  ## list here once covered 20 of 28 calls: nimixSleep/Yield silently no-op'd.)
+  for sc in NimixSyscall:
+    result[ord(sc)] = AbiPatch(name: NimixSyscallSymbol[sc], nr: ord(sc).uint64)
 
 proc runPieElf(filename: cstring; dataBuf: ptr byte; nbytes: int; appArgs: cstring) =
   ## Load and run a PIE (ET_DYN) ELF. Allocates a region, patches ABI stubs,
@@ -276,8 +259,11 @@ proc runPieElf(filename: cstring; dataBuf: ptr byte; nbytes: int; appArgs: cstri
   # User stack: top 64 KB of the 4 MB region (above ELF + heap).
   let userStackTop = base + RegionSize - 16
   setAppArgs(int(slot), appArgs)
+  if not appRegionUserAccess(slot, true):
+    kprint("Region not user-mappable\n"); regionFree(slot); return
   let procSlot = procSpawnRing3(filename, loaded.appMain, userStackTop, int32(slot))
   if procSlot < 0:
+    discard appRegionUserAccess(slot, false)
     kprint("procSpawnRing3 failed\n"); regionFree(slot); return
   kprint("App spawned in ring 3\n")
   # Shell returns immediately; app runs in parallel via the preemptive scheduler.

@@ -14,7 +14,7 @@
 ##
 ## MSR layout (AMD64 Vol 2 §6.1.1):
 ##   STAR[47:32] = KernelCS  → CS on syscall entry
-##   STAR[63:48] = UserDS-8  → CS/SS on sysret
+##   STAR[63:48] = KernelDS  → sysret: SS = +8 (UserDS), CS = +16 (UserCS)
 ##   LSTAR       = syscall_entry RIP
 ##   SFMASK      = clears IF on entry (bit 9)
 
@@ -59,8 +59,30 @@ type NimixSyscall* = enum
   scFreeAnon       = 25
   scSndPlay        = 26
   scSndDrain       = 27
+  scChanCreate     = 28
+  scCapRecv        = 29
 
-const NimixSyscallCount* = 28   ## total number of syscalls
+const NimixSyscallCount* = 30   ## total number of syscalls
+
+const NimixSyscallSymbol*: array[NimixSyscall, cstring] = [
+  ## App-side ABI symbol for each syscall — the ONE list the ELF loader patches
+  ## from. Names match the weak stubs in kernel/abi/nimix_abi_stub.c
+  ## (test_syscall_table cross-checks them).
+  scWrite: "nimixWrite", scExit: "nimixExit",
+  scAllocRegion: "nimixAllocRegion", scFreeRegion: "nimixFreeRegion",
+  scChanSend: "nimixChanSend", scChanRecv: "nimixChanRecv",
+  scEventPublish: "nimixEventPublish", scEventSubscribe: "nimixEventSubscribe",
+  scEventPoll: "nimixEventPoll", scGetArgs: "nimixGetArgs",
+  scProcList: "nimixProcList", scSchedStats: "nimixSchedStats",
+  scProcKillPid: "nimixProcKillPid", scFsReadDir: "nimixFsReadDir",
+  scFsRead: "nimixFsRead", scFsWrite: "nimixFsWrite",
+  scCapSend: "nimixCapSend", scChanCall: "nimixChanCall",
+  scSleep: "nimixSleep", scYield: "nimixYield",
+  scSysInfo: "nimixSysInfo", scGrantRegion: "nimixGrantRegion",
+  scUptimeSecs: "nimixUptimeSecs", scWallClock: "nimixWallClock",
+  scMapAnon: "nimixMapAnon", scFreeAnon: "nimixFreeAnon",
+  scSndPlay: "nimixSndPlay", scSndDrain: "nimixSndDrain",
+  scChanCreate: "nimixChanCreate", scCapRecv: "nimixCapRecv"]
 
 # ── Dispatch table ────────────────────────────────────────────────────────────
 # Raw function pointers indexed by NimixSyscall ordinal.
@@ -99,6 +121,8 @@ proc syscallTableInit*() =
   syscallTable[25] = cast[uint64](v.freeAnon)
   syscallTable[26] = cast[uint64](v.sndPlay)
   syscallTable[27] = cast[uint64](v.sndDrain)
+  syscallTable[28] = cast[uint64](v.chanCreate)
+  syscallTable[29] = cast[uint64](v.capRecv)
 
 proc syscallDispatch*(nr, a0, a1, a2, a3: uint64): uint64 {.exportc: "syscallDispatch", cdecl.} =
   ## Called from syscall_entry asm stub. Dispatches by nr through syscallTable.
@@ -118,8 +142,8 @@ proc syscallDispatch*(nr, a0, a1, a2, a3: uint64): uint64 {.exportc: "syscallDis
 #   [0] 0x00  Null
 #   [1] 0x08  64-bit code, ring 0   (kernel CS)
 #   [2] 0x10  64-bit data, ring 0   (kernel DS)
-#   [3] 0x18  64-bit code, ring 3   (user CS)
-#   [4] 0x20  64-bit data, ring 3   (user DS)
+#   [3] 0x18  64-bit data, ring 3   (user DS) — data before code: SYSRETQ
+#   [4] 0x20  64-bit code, ring 3   (user CS)   layout (SS=base+8, CS=base+16)
 #   [5] 0x28  TSS descriptor low    (16-byte, filled at runtime)
 #   [6] 0x30  TSS descriptor high   (upper 32 bits of base)
 
@@ -127,8 +151,8 @@ var gdtTable* {.exportc.}: array[7, uint64] = [
   0x0000000000000000'u64,   # [0] Null
   0x0020980000000000'u64,   # [1] 64-bit code, ring 0
   0x0000920000000000'u64,   # [2] 64-bit data, ring 0
-  0x0020F80000000000'u64,   # [3] 64-bit code, ring 3
-  0x0000F20000000000'u64,   # [4] 64-bit data, ring 3
+  0x0000F20000000000'u64,   # [3] 64-bit data, ring 3
+  0x0020F80000000000'u64,   # [4] 64-bit code, ring 3
   0x0000000000000000'u64,   # [5] TSS low   (filled by installTssDescriptor)
   0x0000000000000000'u64,   # [6] TSS high  (filled by installTssDescriptor)
 ]
@@ -194,8 +218,8 @@ proc syscallGateInit*() =
 
   # 5. Configure syscall MSRs
   #    STAR[47:32] = KernelCS  → on syscall: CS=KernelCS, SS=KernelCS+8 (=KernelDS)
-  #    STAR[63:48] = UserDS-8  → on sysret:  CS=base+16 (=UserCS), SS=base+8 (=UserDS)
-  let star = (uint64(UserDS - 8) shl 48) or (uint64(KernelCS) shl 32)
+  #    STAR[63:48] = KernelDS (0x10) → on sysret: SS=0x18|3 (=UserDS), CS=0x20|3 (=UserCS)
+  let star = (uint64(KernelDS) shl 48) or (uint64(KernelCS) shl 32)
   writeMsr(MSR_STAR,   star)
   writeMsr(MSR_LSTAR,  cast[uint64](syscall_entry))
   writeMsr(MSR_SFMASK, 0x200'u64)  # clear IF on syscall entry

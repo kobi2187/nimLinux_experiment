@@ -6,6 +6,7 @@
 
 import fs_logic
 import dispatch_wire
+import nimix_entry
 
 # ── Kernel ABI (resolved by loader at runtime via stub patching) ──────────────
 
@@ -60,6 +61,7 @@ var gIface: FsIface
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 proc appMain*() {.exportc.} =
+  nimixAppInit()   # module init first: --noMain skips it (nimix_entry)
   write("fs_server: starting\n")
   gIface = FsIface(
     readFile:  elfReadFile,

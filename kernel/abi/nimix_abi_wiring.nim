@@ -1,16 +1,16 @@
 # SPDX-License-Identifier: GPL-2.0
 ## Shared ABI vtable wiring — imported by every kernel model.
 ##
-## Each model calls wireSharedAbi(av) to fill the procs that are identical
-## across monolithic/microkernel/sasos, then sets av.allocRegion and
-## av.freeRegion itself before assigning nimixAbi = av.
+## Each model calls wireSharedAbi(av) to fill the ABI (identical across
+## monolithic/microkernel/sasos), then assigns nimixAbi = av.
 
 import nimix_abi
 import nimix_abi_impl
 
 proc wireSharedAbi*(av: var NimixAbiVTable) =
   ## Wire all shared ABI procs into av.
-  ## Caller must set av.allocRegion / av.freeRegion for its memory model.
+  av.allocRegion    = abiAllocRegion
+  av.freeRegion     = abiFreeRegion
   av.write          = abiWrite
   av.exit           = abiExit
   av.chanSend       = abiChanSend
@@ -37,3 +37,5 @@ proc wireSharedAbi*(av: var NimixAbiVTable) =
   av.freeAnon       = abiFreeAnon
   av.sndPlay        = abiSndPlay
   av.sndDrain       = abiSndDrain
+  av.chanCreate     = abiChanCreate
+  av.capRecv        = abiCapRecv

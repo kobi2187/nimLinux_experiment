@@ -53,6 +53,7 @@ when defined(kernelFull):
   import ../drivers/pic
   import ../kernel/process_table
   import ../arch/x86_64/tss
+  import ../core/log
 
   # Assembly helpers declared here; defined in boot_asm.S
   proc preemptiveSwitch(oldRsp: ptr uint64; newRsp: uint64) {.importc, cdecl.}
@@ -72,8 +73,18 @@ when defined(kernelFull):
     let next = procPickNext(procTable)
     if next < 0 or next == procTable.current:
       return  # no switch needed
+    if procTable.tasks[next].rsp == 0:
+      # Never switch to a context that was never saved (would `ret` to 0).
+      klogInt(llError, "pit: refusing switch to task with rsp=0, slot=", int64(next))
+      klogInt(llError, "pit:   its pid=", int64(procTable.tasks[next].pid))
+      klogInt(llError, "pit:   current slot=", int64(procTable.current))
+      return
 
     let prev = procTable.current
+    if prev >= 0 and procTable.tasks[prev].used and not kstackIntact(prev):
+      # Loud, not silent: an overflowed kstack has already written into the
+      # neighbouring procTable entries.
+      klogInt(llError, "pit: kernel stack overflow in task slot=", int64(prev))
     procTable.current = next
     procTable.tasks[next].state = ptsRunning
     inc procTable.tasks[next].switches
@@ -81,7 +92,10 @@ when defined(kernelFull):
 
     # Save outgoing task's FPU state (lazy: only if it used FPU)
     if prev >= 0 and procTable.tasks[prev].used:
-      procTable.tasks[prev].state = ptsReady
+      # Only a Running task goes back to Ready. A Blocked one (sleeping, out of
+      # its ring) must stay Blocked so procWakeExpired re-inserts it.
+      if procTable.tasks[prev].state == ptsRunning:
+        procTable.tasks[prev].state = ptsReady
       fxSave(addr procTable.tasks[prev].fpuState[0])
       procTable.tasks[prev].fpuValid = true
 
@@ -90,7 +104,7 @@ when defined(kernelFull):
       fxRestore(addr procTable.tasks[next].fpuState[0])
 
     # Update TSS rsp0 so the next IRQ while this task runs uses its kernel stack
-    globalTss.rsp0 = cast[uint64](addr procTable.tasks[next].kstack[4095])
+    globalTss.rsp0 = kstackTop(next)
 
     # Preemptive RSP swap: we are inside isr_common_stub's GPR save area.
     # ctx points at rax on the stack (= current RSP inside the ISR frame).

@@ -11,6 +11,7 @@
 ##   4. Reply uses nimixCapSend if token valid, nimixChanSend otherwise
 
 import ping_logic
+import nimix_entry
 
 # ── Kernel ABI (all resolved by loader at runtime via stub patching) ──────────
 
@@ -65,6 +66,7 @@ var capTok:  uint64 = 0
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 proc appMain*() {.exportc.} =
+  nimixAppInit()   # module init first: --noMain skips it (nimix_entry)
   let iface = PingServerIface(
     log:     elfLog,
     publish: elfPublish,

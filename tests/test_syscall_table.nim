@@ -7,6 +7,8 @@
 
 import ../arch/x86_64/syscall_gate
 import ../kernel/abi/nimix_abi as abimod
+import ../runtime/elf_loader
+import std/strutils
 
 # Minimal stub vtable so syscallTableInit has something to read
 proc stubWrite(buf: pointer; len: int) {.nimcall.} = discard
@@ -37,6 +39,8 @@ proc stubMapAnon(size: int): pointer {.nimcall.} = nil
 proc stubFreeAnon(p: pointer; size: int) {.nimcall.} = discard
 proc stubSndPlay(pcm: pointer; byteLen: int): int {.nimcall.} = 0
 proc stubSndDrain(): int {.nimcall.} = 0
+proc stubChanCreate(name: cstring): uint64 {.nimcall.} = 0
+proc stubCapRecv(tok: uint64; buf: pointer; len: int): int {.nimcall.} = 0
 
 proc fillStubVtable() =
   var v: abimod.NimixAbiVTable
@@ -68,6 +72,8 @@ proc fillStubVtable() =
   v.freeAnon       = stubFreeAnon
   v.sndPlay        = stubSndPlay
   v.sndDrain       = stubSndDrain
+  v.chanCreate     = stubChanCreate
+  v.capRecv        = stubCapRecv
   abimod.nimixAbi = v
 
 proc testEnumOrdinals() =
@@ -99,7 +105,9 @@ proc testEnumOrdinals() =
   assert ord(scFreeAnon)       == 25
   assert ord(scSndPlay)        == 26
   assert ord(scSndDrain)       == 27
-  assert NimixSyscallCount == 28
+  assert ord(scChanCreate)     == 28
+  assert ord(scCapRecv)        == 29
+  assert NimixSyscallCount == 30
   echo "PASS: syscall enum ordinals"
 
 proc testTableFilled() =
@@ -120,10 +128,34 @@ proc testTableMatchesVtable() =
   assert syscallTable[ord(scFreeAnon)]    == cast[uint64](stubFreeAnon)
   assert syscallTable[ord(scSndPlay)]     == cast[uint64](stubSndPlay)
   assert syscallTable[ord(scSndDrain)]    == cast[uint64](stubSndDrain)
+  assert syscallTable[ord(scChanCreate)]  == cast[uint64](stubChanCreate)
+  assert syscallTable[ord(scCapRecv)]     == cast[uint64](stubCapRecv)
   echo "PASS: syscallTable pointers match vtable fields"
+
+proc testSymbolsMatchCStubs() =
+  ## Every patchable symbol must exist as a weak stub, or apps calling it get
+  ## an unpatched (no-op) stub — or fail to link.
+  const stubSrc = staticRead("../kernel/abi/nimix_abi_stub.c")
+  var seen: seq[string]
+  for sc in NimixSyscall:
+    let name = $NimixSyscallSymbol[sc]
+    assert name notin seen, "duplicate ABI symbol " & name
+    seen.add name
+    assert (" " & name & "(") in stubSrc, "no weak stub in nimix_abi_stub.c for " & name
+  echo "PASS: all " & $NimixSyscallCount & " ABI symbols have weak C stubs"
+
+proc testTrampolineBytes() =
+  ## movabs rax, nr ; mov r10, rcx ; syscall ; ret — a complete 16-byte function.
+  var buf: array[SyscallTrampolineLen, uint8]
+  emitSyscallTrampoline(cast[uint64](addr buf[0]), uint64(ord(scCapRecv)))
+  assert buf == [0x48'u8, 0xB8, 29, 0, 0, 0, 0, 0, 0, 0,
+                 0x49, 0x89, 0xCA, 0x0F, 0x05, 0xC3], "trampoline encoding"
+  echo "PASS: syscall trampoline encoding"
 
 when isMainModule:
   testEnumOrdinals()
   testTableFilled()
   testTableMatchesVtable()
+  testSymbolsMatchCStubs()
+  testTrampolineBytes()
   echo "All syscall table tests passed."

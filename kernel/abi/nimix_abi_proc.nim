@@ -38,7 +38,7 @@ proc abiProcList*(buf: pointer; len: int): int {.nimcall.} =
 
   let totalTicks = procTable.stats.uptimeTicks
   for i in 0 ..< MaxTasks:
-    let t = procTable.tasks[i]
+    let t = addr procTable.tasks[i]   # never copy a Task: it holds a 16 KB kstack
     if not t.used: continue
     emitU(uint64(t.pid)); emit(" ")
     case t.class

@@ -105,6 +105,13 @@ type
       ## (buffers submitted but not yet consumed). A streaming caller polls this
       ## to apply backpressure: when sndPlay returns -2, drain then retry.
 
+    # ── IPC: server-owned channels (capability receive) ───────────────────────
+    chanCreate*:  proc(name: cstring): uint64 {.nimcall.}
+      ## Create a named channel owned by the caller; returns its receive
+      ## capability (0 = name taken / no slot). Senders still use chanSend(name).
+    capRecv*:     proc(tok: uint64; buf: pointer; bufLen: int): int {.nimcall.}
+      ## Receive on the channel bound to `tok`. Bytes, -1 empty, -3 bad token.
+
 var nimixAbi*: NimixAbiVTable
   ## Global ABI vtable. Set once at boot by the chosen kernel model init.
   ## Apps never call this directly — the ELF loader patches weak stubs with
