@@ -92,7 +92,7 @@
 
 | Module | Path | Status | Notes |
 |--------|------|--------|-------|
-| VFS Layer | `fs/vfs.nim` | PARTIAL | prefix router over FSDriver vtable; FatFs registered |
+| VFS Layer | `fs/vfs.nim` | BUILT | prefix router; FatFs (default `/`) + ramfs (`/ram/`) registered at boot |
 | FatFs (vendor) | `fs/fatfs.nim` + vendor | BUILT | FAT16/32 read/write driver |
 | littlefs driver | `fs/littlefs.nim` | PLANNED | littlefs driver mapping sectors |
 | ramfs | `fs/ramfs.nim` | BUILT (no callers) | RAM block FS at `/ram/`, VFS test double (renamed from littlefs_wearleveling, DECISIONS 2026-10-26) |
@@ -107,7 +107,7 @@
 |--------|------|--------|-------|
 | ping_server | `servers/ping/` | BUILT | IPC demo — proves full stack |
 | dispatch_server | `servers/dispatch/` | PARTIAL | CPS actor + `dispatchPump`; ELF owns `dispatch` via `chanCreate` and receives by capability — RUNS in ring 3 alongside apps (QEMU). Next: real clients + target servers (fs) |
-| fs_server | `apps/nim/` | PARTIAL | ELF exists; channel wiring incomplete |
+| fs_server | `servers/fs/` | BUILT | ELF; owns `fs`; request `topic\0path\0` → event reply (≤508 B inline) |
 | input_server | — | PLANNED | IRQ1 PS2 → key events → event_server |
 | log_server | — | PLANNED | ring buffer, queryable |
 | roster_server | — | PLANNED | tracks running apps (name, pid, cap) |
@@ -119,7 +119,9 @@
 | Module | Path | Status | Notes |
 |--------|------|--------|-------|
 | ELF loader | `runtime/elf_loader.nim` | BUILT | PIE + R_X86_64_RELATIVE; GLOB_DAT/JUMP_SLOT planned |
-| WASM runner | `runtime/wasm_runner.nim` | BUILT | WASM app execution |
+| WASM runner | `runtime/wasm_runner.nim` | BUILT | wasm3; capability-gated `env.*` host calls (+`args_get`); runtime + subscriptions freed per run |
+| WASM app SDK | `apps/wasm/` | BUILT | Nim → wasm32 regular apps (`hello`, `cat`); imports only NimixOS host calls |
+| Task cleanup | `kernel/abi/task_cleanup.nim` | BUILT | exit/kill release region, user window, owned channels + caps, event subscriptions |
 | ABI stub | `kernel/abi/nimix_abi_stub.c` | BUILT | weak symbols for nimixWrite/Exit/etc |
 | ABI vtable | `kernel/abi/nimix_abi.nim` | PARTIAL | 23 calls; syscall gate dispatch is no-op |
 
@@ -127,7 +129,7 @@
 
 | Module | Path | Status | Notes |
 |--------|------|--------|-------|
-| Shell | `shell/shell.nim` | BUILT | serial shell, built-ins + execApp for ELF commands |
+| Shell | `shell/shell.nim` | BUILT | serial shell; bare names resolve on disk (`name`/`.elf`/`.wasm`), launched by magic with args |
 | fd table | `kernel/abi/fd_table.nim` | BUILT | fd 0/1/2 → serial ABI |
 | stdlib shim | `runtime/stdlib_shim.nim` | BUILT | osalloc, write(2) → nimixWrite |
 
@@ -214,3 +216,5 @@ app: regionOpen(token) → (ptr, len) → direct read → regionClose(token)
 | 2026-10-26 | Ring 3 works end to end (11 root causes: syscall path, scheduler, user window, heap alignment) | DECISIONS.md §Ring-3 bring-up |
 | 2026-10-26 | Server-owned channels: `chanCreate`→receive cap, `capRecv`; dispatcher owns `dispatch` | DECISIONS.md §Decision principles |
 | 2026-10-26 | All models allocate app memory from the app's region; dispatch_kmod/kernel CPS PARKED | DECISIONS.md §Decision principles |
+| 2026-10-26 | Regular apps = WASM (Nim SDK), system tools + servers = ELF; shell resolves bare names | DECISIONS.md §Apps are WASM |
+| 2026-10-26 | Task resources released on exit and kill; kernel built --panics:on; all 3 models 16/16 | DECISIONS.md §Apps are WASM |

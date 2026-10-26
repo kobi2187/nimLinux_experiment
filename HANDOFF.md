@@ -1,6 +1,26 @@
 # HANDOFF.md — Session Exit Note
 
-Last updated: 2026-10-26 (session 9b, branch `ccr-56330414-wo65nx`, cloud container)
+Last updated: 2026-10-26 (session 9c, branch `ccr-56330414-wo65nx`, cloud container)
+
+## Session 9c — "make it all work": WASM apps, ELF system, every model green
+
+Human: "Just make it all work. Regular apps are wasm, servers and system are
+elf." Done and verified: 16/16 QEMU suite on all three kernel models, 41/41
+structured, host + ARC + new WASM host tests. Key pieces: shell runs bare
+names from disk; Nim → WASM app SDK (`apps/wasm/`, modules import only
+NimixOS host calls); `cat.wasm` reads files through `fs_server.elf`;
+exit/kill release everything a task owns; micro/sasos fixed (procTableInit);
+kernel `--panics:on` with fatal text on serial. See DECISIONS §Apps are WASM.
+
+**Next:** Phase A virtio-gpu verify; put the dispatcher into the app path;
+larger WASM file reads; consider moving wasm3 into a userspace ELF host.
+
+**Toolchain for a fresh container:** Nim 2.2.4 tarball; `nimble install
+https://github.com/nim-works/cps msgpack4nim`; apt `qemu-system-x86 ovmf
+grub-pc-bin grub-efi-amd64-bin xorriso mtools dosfstools clang lld wasi-libc`;
+`pip install wasmtime`; `git submodule update --init vendor/wasm3 vendor/printf`.
+Then: `make test test-arc build nim-apps wasm-apps test-wasm disk
+test-structured test-qemu-models OVMF=/usr/share/ovmf/OVMF.fd`.
 
 ## Session 9b — ring 3 end to end, decisions resolved, origin/main merged
 

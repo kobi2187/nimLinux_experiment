@@ -866,3 +866,39 @@ Structured 41/41 (user_tests 17/17 — first ring-3 suite run); harness 10/11;
 dispatcher + apps concurrent, zero faults. Known open: `ls` → fsReadDir("/")
 fails (FS layer); kernel string compare failed before the heap fix — kernel
 strings should be re-verified (metadata_db sharp edge).
+
+## Apps are WASM, system + servers are ELF; everything works end to end (2026-10-26)
+Human: "Regular apps are wasm, servers and system are elf." Implemented:
+
+- **Shell** resolves a bare name on disk: `name`, `name.elf`, `name.wasm`;
+  launches by magic (`\x7fELF` / `\0asm`), passes args to both. The hard-coded
+  ls/ps/stats/kill commands are gone (they are just ELF tools now).
+- **Nim → WASM app SDK** (`apps/wasm/`): `--cpu:wasm32` via clang +
+  wasm32-wasi *headers only* (apt wasi-libc); `nimix_wasm_rt.c` supplies the
+  libc corner Nim needs, so a module imports ONLY `env.*` NimixOS calls —
+  enforced by `tests/test_wasm_apps.py`. Same entry rules as ELF apps
+  (NimMain first; page-aligned arena via nimAllocPagesViaMalloc; 1 MB — Nim's
+  first page request is ~516 KB). SURVEY: rejected linking WASI libc (would
+  import wasi_snapshot_preview1 — ambient OS authority the sandbox must not
+  have) and writing apps in C (keeps the OS one language).
+- **Client/server pattern for WASM apps** (already used by pingpong): send to
+  a server channel (needs CapIpc), reply as an event on a client topic.
+  fs_server protocol: `"<topic>\0<path>\0"` → event: int32 status + ≤508 B.
+  Larger reads → zero-copy region caps once WASM can map regions (seam).
+- **Servers own channels** (`chanCreate`/`capRecv`) and yield when idle.
+- **Ownership-scoped cleanup** (`kernel/abi/task_cleanup.nim`): exit AND kill
+  release region + user window, owned channels + their capabilities, and event
+  subscriptions; WASM modules release their subscriptions when they end. Fixes:
+  killed server could never restart; subscriptions leaked (256-run limit).
+- **Every model works**: procTableInit was monolithic-only → micro/sasos
+  booted with a corrupt scheduler table and kernelMain silently returned.
+- **Kernel `--panics:on`** + `rtl_stubs` stderr → serial: a failed check now
+  prints and halts instead of unwinding silently out of kernelMain (that is
+  how the microkernel failure hid). Overrides the 2026-10-26 "PARKED" note for
+  a different reason: fatal-and-visible kernel defects, not CPS.
+- VFS drivers registered at boot (FatFs default `/`, ramfs `/ram/`) — `ls`.
+- wasm3 runtime/env freed per run (leaked every launch), 64 KB value stack.
+- Per-request virtio TRACE output gated behind `-d:virtioTrace`.
+
+Verified: host + ARC + WASM host tests; structured 41/41; QEMU harness
+16/16 on microkernel, SASOS and monolithic; kill/restart/duplicate scenarios.
