@@ -96,7 +96,7 @@
 | Module | Path | Status | Notes |
 |--------|------|--------|-------|
 | QEMU launcher | `tools/nimix_qemu.py` | BUILT | only QEMU command-line builder + QMP client; used by all tests and `make qemu*` |
-| Crash report | `kern/interrupts.nim` `fatalExceptionHandler`, `core/backtrace.nim` | BUILT | regs + frame-pointer backtrace on serial, then halt |
+| Crash report | `kern/interrupts.nim` `fatalExceptionHandler`, `core/backtrace.nim` | BUILT | regs + frame-pointer backtrace on serial; user fault → kill task (hook installed by `initSyscallGate`), kernel fault → halt |
 | Symbolizer | `tools/symbolize.py` | BUILT | serial log → function names (kernel + PIE apps) |
 | Kernel log ring | `core/klog_ring.nim` | BUILT | last 16 KB of klog; `dmesg`, gdb `nimix-dmesg` |
 | gdb helpers | `tools/gdb/nimix.gdb` | BUILT | `make gdb-attach` |
@@ -234,3 +234,4 @@ app: regionOpen(token) → (ptr, len) → direct read → regionClose(token)
 | 2026-10-26 | Regular apps = WASM (Nim SDK), system tools + servers = ELF; shell resolves bare names | DECISIONS.md §Apps are WASM |
 | 2026-10-26 | Task resources released on exit and kill; kernel built --panics:on; all 3 models 16/16 | DECISIONS.md §Apps are WASM |
 | 2026-10-26 | One QEMU launcher; gpu/snd/net/input verified on the host; shared-IRQ + queue-size fixes; serial crash reports, symbolizer, dmesg, gdb helpers, valgrind/ASan targets | DECISIONS.md §QEMU integration |
+| 2026-10-26 | Ring-3 faults kill only the task; ExceptionContext GPR order fixed (was reversed) | DECISIONS.md §User-mode faults |

@@ -18,8 +18,9 @@ fixed), `make qemu-debug` + `make gdb-attach` (tools/gdb/nimix.gdb). See
 DECISIONS §QEMU integration.
 
 **Next (roadmap B):** rasterizer + font on the verified virtio-gpu → GUI
-terminal; input_server consuming topic `input` (C). User-mode faults still
-halt the machine — kill the task instead (needs the fault → task path).
+terminal; input_server consuming topic `input` (C). Done since: ring-3
+faults kill only the task (DECISIONS §User-mode faults); trap-frame register
+order fixed.
 
 ## Session 9c — "make it all work": WASM apps, ELF system, every model green
 

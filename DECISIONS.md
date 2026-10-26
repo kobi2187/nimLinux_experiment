@@ -968,3 +968,36 @@ nimix-dmesg, nimix-sym, nimix-app for PIE apps, nimix-breaks).
 
 Verified: `make test`, `test-arc`, `test-valgrind`, `test-asan` clean;
 `test-devices` 7/7; `test-structured` 41/41; `test-qemu-models` 16/16 × 3.
+
+## User-mode faults kill the task, not the machine (2026-10-26)
+
+Human asked whether crashes halting the system follow from the joined address
+space and the absence of OS threads. They do not. A ring-3 fault traps into
+ring 0 on the task's own kernel stack with `cs & 3 == 3`; the kernel's state
+is untouched, so the task can be ended exactly like `exit` (release region,
+channels, caps, subscriptions; `procKill`; never resume it) whatever the
+concurrency model. The shared address space weakens *isolation* (per-app CR3,
+VISION open question 6), not *recovery*: only the running app's region is
+user-accessible, so a stray user access faults instead of corrupting others.
+Kernel-mode faults still halt — shared kernel state may be corrupt, and the
+SASOS model's type-safe "apps" run in ring 0, so that is the honest policy.
+WASM apps never reach this path (wasm3 traps are soft errors).
+
+Mechanism: `kern/interrupts` exposes `userFaultKill` / `userStackBounds`
+hooks (no dependency on the process table); `initSyscallGate` — where ring 3
+becomes possible — installs `abiKillFaultingTask` / `abiCurrentTaskBounds`.
+The user backtrace only follows frames inside the task's own region, so a
+corrupt user rbp cannot make the kernel fault while reporting. Rejected:
+installing the hooks from `wireSharedAbi` (drags the IDT asm into host tests
+that import a model).
+
+Found on the way: **`ExceptionContext` declared the 15 GPRs in reverse** of
+`isr_common_stub`'s push order, so every register read from a trap frame was
+another register (ctx.rbp was r9; kernel backtraces only worked by luck).
+Fixed and pinned with compile-time `offsetOf` checks. Ring-3 spawn and the
+sched/* copies were order-independent, so nothing else moved.
+Apps now build with frame pointers; `fault.elf` (system tool) faults on
+purpose; the Makefile's per-tool rules became one pattern rule (`NIM_TOOLS`).
+
+Verified: `make test-devices` 10/10 (two user faults in one boot, shell alive,
+region reused, frames symbolized to nullWrite/invalidOpcode via --app).

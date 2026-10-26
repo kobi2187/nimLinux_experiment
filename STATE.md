@@ -22,7 +22,7 @@ Last updated: 2026-10-26 (session 9d, branch `ccr-56330414-wo65nx`)
 ## Verified (Nim 2.2.4, QEMU 8.2.2 TCG, OVMF)
 
 `make test` ✅ · `test-arc` ✅ · `test-valgrind` ✅ · `test-asan` ✅ ·
-`test-wasm` ✅ · `test-devices` **7/7** · `test-structured` **41/41** ·
+`test-wasm` ✅ · `test-devices` **10/10** · `test-structured` **41/41** ·
 `test-qemu-models` **16/16 × 3 models**.
 
 ## Now / Next
@@ -33,7 +33,7 @@ block-on-mailbox/wake-on-deliver + dispatcher transport — network last.
 
 - [x] Phase A: virtio-gpu verified (screendump pixels) — plus snd/net/input.
 - [ ] Phase B: rasterizer + font on virtio-gpu → GUI terminal.
-- [ ] User-mode CPU faults kill the task instead of halting the machine.
+- [x] User-mode CPU faults kill the task (system continues); kernel faults halt.
 - [ ] Dispatcher in the app path: apps → `dispatch` → servers (today WASM apps
   talk to servers directly; route via dispatcher with QoS + cap-gating, M2).
 - [ ] Larger file reads for WASM apps (region caps into linear memory, or
