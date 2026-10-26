@@ -19,6 +19,7 @@ export options
 type
   SubEntry = object
     active:  bool
+    owner:   uint32   ## subscribing task's pid (0 = kernel / in-kernel WASM)
     topic:   array[MaxTopicLen, char]
     buf:     array[MaxPendingPerToken, Event]
     head:    int
@@ -52,13 +53,21 @@ proc fillTopic(dst: var array[MaxTopicLen, char], src: cstring) =
       break
     dst[i] = src[i]
 
-proc eventSubscribe*(topic: cstring): EventToken =
+proc eventSubscribe*(topic: cstring; owner: uint32 = 0): EventToken =
   ## Register interest in a topic. Returns an EventToken for polling.
   ## Returns EventToken(0) (invalid) if the subscriber table is full.
-  if subCount >= MaxSubscribers:
-    return EventToken(0)
-  let idx = subCount
-  inc subCount
+  ## Released slots are reused (they leaked before: 256 runs and done).
+  var idx = -1
+  for i in 0 ..< subCount:
+    if not subscriptions[i].active:
+      idx = i
+      break
+  if idx < 0:
+    if subCount >= MaxSubscribers:
+      return EventToken(0)
+    idx = subCount
+    inc subCount
+  subscriptions[idx].owner   = owner
   subscriptions[idx].active  = true
   subscriptions[idx].count   = 0
   subscriptions[idx].head    = 0
@@ -66,6 +75,21 @@ proc eventSubscribe*(topic: cstring): EventToken =
   subscriptions[idx].seqNext = 0
   fillTopic(subscriptions[idx].topic, topic)
   EventToken(uint32(idx + 1))  # 1-based; 0 = invalid
+
+proc eventUnsubscribe*(token: EventToken) =
+  ## Release one subscription; its slot is reused by later subscribers.
+  let idx = int(uint32(token)) - 1
+  if idx >= 0 and idx < subCount:
+    subscriptions[idx].active = false
+    subscriptions[idx].count  = 0
+
+proc eventReleaseOwner*(owner: uint32) =
+  ## Release every subscription held by a task that has exited or was killed.
+  if owner == 0: return
+  for i in 0 ..< subCount:
+    if subscriptions[i].active and subscriptions[i].owner == owner:
+      subscriptions[i].active = false
+      subscriptions[i].count  = 0
 
 proc eventPublish*(topic: cstring, data: pointer, dataLen: int) =
   ## Emit an event to all subscribers of `topic`.

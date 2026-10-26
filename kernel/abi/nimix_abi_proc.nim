@@ -3,6 +3,7 @@
 ## Provides: abiGetArgs, abiProcList, abiSchedStats, abiProcKillPid.
 
 import ../../kernel/process_table
+import task_cleanup
 import ../../mm/region_allocator
 import app_args
 
@@ -77,7 +78,7 @@ proc abiProcKillPid*(pid: uint32): int {.nimcall.} =
   ## Kill a task by PID. Frees its region. Returns 0=ok, -1=not found.
   let slot = procFindPid(pid)
   if slot < 0: return -1
-  let regionSlot = procTable.tasks[slot].regionSlot
+  let regionSlot = int(procTable.tasks[slot].regionSlot)
   discard procKill(slot)
-  if regionSlot >= 0: regionFree(RegionHandle(regionSlot))
+  releaseTaskResources(pid, regionSlot)   # same cleanup as a normal exit
   0

@@ -90,6 +90,14 @@ proc capGrantRegion*(slot: int; pid: uint32; right: CapRight): CapToken =
   regionAddRef(h)
   tok
 
+proc capOwner*(tok: CapToken): uint32 =
+  ## PID the (valid) token was granted to; 0 if invalid or revoked.
+  if tok.isNull: return 0
+  let slot = tokenSlot(tok)
+  if slot < 0 or slot >= MaxCaps: return 0
+  let e = gCapTable.entries[slot]
+  if e.valid and e.token == tok: e.pid else: 0
+
 proc capCheck*(tok: CapToken; right: CapRight): bool =
   ## Returns true iff tok is valid, not revoked, and grants `right`.
   if tok.isNull: return false

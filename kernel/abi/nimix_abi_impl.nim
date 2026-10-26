@@ -14,6 +14,7 @@ import ../../kernel/process_table
 import ../../mm/sip_heap
 import ../../mm/region_allocator
 import ../../mm/user_window
+import task_cleanup
 import ../../arch/x86_64/cpu_primitives
 import ../../drivers/pit
 import ../../drivers/rtc
@@ -40,12 +41,10 @@ proc waitForTick() =
   hlt()
   cli()
 
-proc freeCurrentRegion() =
-  ## Release the region slot owned by the current task (if any).
-  let regionSlot = procTable.tasks[currentSlot()].regionSlot
-  if regionSlot >= 0:
-    discard appRegionUserAccess(RegionHandle(regionSlot), false)
-    regionFree(RegionHandle(regionSlot))
+proc releaseCurrentTask() =
+  ## Release everything the current task owns (region, channels, events).
+  let t = addr procTable.tasks[currentSlot()]
+  releaseTaskResources(t.pid, int(t.regionSlot))
 
 # ── I/O ───────────────────────────────────────────────────────────────────────
 
@@ -57,7 +56,7 @@ proc abiWrite*(buf: pointer; len: int) {.nimcall.} =
 
 proc abiExit*(code: int) {.nimcall, noreturn.} =
   klogInt(llInfo, "app exit code: ", int64(code))
-  freeCurrentRegion()
+  releaseCurrentTask()
   discard procKill(currentSlot())
   # The dead task is out of every ring; the next tick switches away for good.
   while true: waitForTick()
@@ -136,7 +135,7 @@ proc abiEventPublish*(topic: cstring; data: pointer; dataLen: int) {.nimcall.} =
   eventPublish(topic, data, dataLen)
 
 proc abiEventSubscribe*(topic: cstring): uint32 {.nimcall.} =
-  uint32(eventSubscribe(topic))
+  uint32(eventSubscribe(topic, procTable.tasks[procTable.current].pid))
 
 proc abiEventPoll*(token: uint32; buf: pointer; bufLen: int): int {.nimcall.} =
   ## Poll for one event on token. Copies payload into buf.

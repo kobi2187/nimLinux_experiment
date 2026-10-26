@@ -103,6 +103,15 @@ proc testGrantOnZeroInitTable() =
   assert capCheck(tok, capIpc), "first grant on zero-init table must check"
   echo "PASS: capGrant on zero-initialised table"
 
+proc testCapOwner() =
+  capTableInit()
+  let tok = capGrant(77, capIpc)
+  assert capOwner(tok) == 77'u32
+  capRevoke(tok)
+  assert capOwner(tok) == 0'u32, "revoked token has no owner"
+  assert capOwner(NullCap) == 0'u32
+  echo "PASS: capOwner"
+
 when isMainModule:
   testNullCapIsNull()
   testDifferentTokensNotEqual()
@@ -119,4 +128,5 @@ when isMainModule:
   testNullCapFailsCapCheck()
   testGrantOnZeroInitTable()
   testGrantCheckSucceeds()
+  testCapOwner()
   echo "All capability tests passed."

@@ -136,6 +136,25 @@ proc serverChanAllocOwned*(name: cstring; recvCap: uint64): ptr ServerChan =
       return ch
   nil
 
+proc serverChanRelease*(ch: ptr ServerChan) =
+  ## Unregister a server-owned channel and return its pool slot (owner died).
+  ## Senders see "not found" from then on; the name is free to re-create.
+  for i in 0..<registryCount:
+    if registry[i] == ch:
+      for j in i ..< registryCount - 1: registry[j] = registry[j + 1]
+      dec registryCount
+      registry[registryCount] = nil
+      break
+  for i in 0..<MaxOwnedChans:
+    if addr(ownedPool[i]) == ch: ownedUsed[i] = false
+
+iterator ownedChannels*(): ptr ServerChan =
+  ## Every registered server-owned channel (recvCap != 0).
+  var i = registryCount - 1
+  while i >= 0:            # backwards: callers may release as they go
+    if registry[i] != nil and registry[i].recvCap != 0: yield registry[i]
+    dec i
+
 proc serverChanFindByCap*(recvCap: uint64): ptr ServerChan =
   ## The channel a receive capability is bound to, or nil.
   if recvCap == 0: return nil
