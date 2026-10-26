@@ -807,3 +807,62 @@ are now wired into `make test` / `make test-arc`. Flags for the human:
 - `littlefs_wearleveling` is a 16 KB in-RAM toy FS registered at `/lfs_wl/`, not
   littlefs. It conflicts with §VFS (vendor real littlefs/lwext4) and had no SURVEY.
   Keep as a VFS test double or delete — human's call.
+
+## Decision principles from the human (2026-10-26)
+"Decisions should match the general vision: microkernel, functionality in
+servers, actors and lightweight fibers, capabilities, and libraries for an
+oskit, modular and encapsulated. Not a POSIX OS-threads type of operating
+system. Some prerequisites are allowed to enable the basis." Recorded in
+VISION.md as design axioms; the four open calls of 2026-10-25 resolved by it:
+
+| Call | Resolution | Rejected |
+|------|-----------|----------|
+| Who creates the dispatch channel | Server creates it: `chanCreate(name)` → receive capability; `capRecv(tok)`; plain `chanRecv` refused on owned channels | Kernel pre-registration (policy in kernel); pid-based receive check (ambient authority) |
+| `--panics:on` in kernel for dispatch_kmod | PARKED. Dispatcher is a userspace server; no CPS runtime in the kernel | Changing kernel flags for a kmod variant the microkernel path doesn't need |
+| littlefs_wearleveling | Renamed `ramfs` (honest oskit VFS lib / test double); real littlefs after Nim-ecosystem survey | Delete (loses a useful test double); keep misleading name |
+| mpsc_ring | PARKED as Mailbox's SMP backend; fibers are single-CPU today | Adopting now (cost, no benefit, OS-thread test harness only) |
+
+## Ring-3 bring-up — eleven root causes (2026-10-26)
+Method: QEMU `-d int`, HMP, gdb backtraces, objdump — every fix has evidence.
+TW#72 "RIP=0x101e" was REAL, not stale. In discovery order:
+1. **Trampoline** 12 B, no `ret`/`mov r10,rcx` → ran stub leftovers after
+   sysret. → 16 B complete function; loader refuses stubs < 16 B.
+2. **Patch table** hand list 20/28 → single `NimixSyscallSymbol` table +
+   test cross-checking `nimix_abi_stub.c`.
+3. **syscall_entry** arg shuffle swapped a2/a3.
+4. **First switch** to a ring-3 task `ret` to 0 → kstack starts with
+   `isr_restore`.
+5. **User RW/X**: boot map has no User bit → `mm/user_window` grants the
+   app's own region at spawn, revokes at exit. Interim: one shared address
+   space; per-app CR3 remains the real isolation step (OPEN, see VISION).
+6. **TLS**: Nim threads:on → `%fs` loads, FS=0 → apps `--threads:off`
+   (matches "no OS threads").
+7. **Shell not a task** (current=-1) → `procAdoptCurrent`; exit/sleep/yield
+   block with `sti;hlt` (`waitForTick`) so the PIT does the real switch.
+   Interim until Phase E block-on-mailbox/wake-on-deliver.
+8. **fxsave** buffer unaligned (#GP) → `{.align(16).}`.
+9. **Kernel stack overflow**: 4 KB kstack, `abiProcList` copied a whole Task
+   (>4 KB frame) into procTable → 16 KB stacks, in-place `claimSlot`, ptr
+   reads, canary checked every tick.
+10. **GDT order**: SYSRETQ needs user data before user code; got CS=0x2B
+    (TSS) → #GP(0x28) on the next ring-3 IRQ. Standard layout (DS 0x1B,
+    CS 0x23, STAR[63:48]=KernelDS). Shared `syscallScratchRsp` → user RSP
+    now on the task's own kstack.
+11. **Heap**: apps never ran `NimMain` (`--noMain`) → `nimixAppInit()`;
+    Nim's standalone heap is `array[float64]` → 8-aligned in EVERY binary,
+    so `p & ~PageMask` found wrong chunk headers (also the likely root of the
+    kernel "seq/string corruption" sharp edge). SURVEY: adopt Nim's own
+    `-d:nimAllocPagesViaMalloc` for apps (page-aligned arena malloc);
+    kernel keeps its malloc (wasm3 needs it; it logs via Nim strings so it
+    can't back Nim's allocator) and page-aligns `theHeap` via
+    `-fdata-sections` + kernel.ld. `tests/check_heap_alignment.sh` runs in
+    `make build`/`nim-apps`. Rejected: patching stdlib; linker trick for apps.
+Also: allocRegion gave apps kernel heap in mono/micro → all models allocate
+from the app's region; nim-cps tracing off for the dispatcher ELF (4096-entry
+trace deque per continuation in debug builds).
+
+### Result
+Structured 41/41 (user_tests 17/17 — first ring-3 suite run); harness 10/11;
+dispatcher + apps concurrent, zero faults. Known open: `ls` → fsReadDir("/")
+fails (FS layer); kernel string compare failed before the heap fix — kernel
+strings should be re-verified (metadata_db sharp edge).

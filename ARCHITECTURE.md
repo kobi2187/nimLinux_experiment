@@ -20,7 +20,7 @@
 | VGA text | `drivers/vga_text.nim` | BUILT | 80×25 text mode |
 | PCI bus scan | `drivers/pci/pci_device.nim` | BUILT | enumerate devices, vendor/device IDs |
 | TSS | `arch/x86_64/` | BUILT | TSS rsp0 updated on every context switch |
-| Syscall gate | `arch/x86_64/syscall_gate.nim` | PARTIAL | SYSCALL/SYSRET wired; ABI vtable dispatch is a no-op (all apps run ring 0) |
+| Syscall gate | `arch/x86_64/syscall_gate.nim` | BUILT | SYSCALL/SYSRET + 30-call table; one `NimixSyscallSymbol` list drives ELF patching; user RSP per-task; GDT DS-before-CS for SYSRET (2026-10-26) |
 
 ### Memory management
 
@@ -32,6 +32,7 @@
 | Region allocator | `mm/region_allocator.nim` | BUILT | 4 MB slots, free-list reuse, regionAlloc/regionFree |
 | SIP heap | `mm/sip_heap.nim` | BUILT | per-SIP bump allocator (SASOS model) |
 | Zero-copy region caps | `kernel/cap/capability.nim` (extension) | PLANNED | capGrantRegion, regionAddRef/DecRef, capMemRead/Write/Grant |
+| User window | `mm/user_window.nim` | BUILT | grant/revoke ring-3 access to exactly one app region (2 MB huge-page User bit) |
 | Guard pages | — | PLANNED | unmapped page before/after each app region |
 | mmap-style ABI | — | PLANNED | nimixMapAnon(size) — grow app heap |
 
@@ -39,7 +40,7 @@
 
 | Module | Path | Status | Interface |
 |--------|------|--------|-----------|
-| Process table | `kernel/process_table.nim` | BUILT | 3-class ring scheduler (Realtime>Server>App), procSpawn, procSwitch, procWakeExpired |
+| Process table | `kernel/process_table.nim` | BUILT | 3-class ring scheduler (Realtime>Server>App), procSpawn/Ring3, procAdoptCurrent (shell is a task), 16 KB kstacks + canary |
 | Task manager | `sched/task_manager.nim` | BUILT | task create/destroy, state machine |
 | Scheduler trait | `kernel/traits/scheduler.nim` | BUILT | SchedulerVTable — filled by each model |
 | Fiber model | `sched/fiber_model.nim` | BUILT | CPS fiber abstraction |
@@ -62,7 +63,7 @@
 |--------|------|--------|-----------|
 | Capability system | `kernel/cap/capability.nim` | BUILT | capGrant/Revoke/Check, CapRight enum, CapToken |
 | Cap registry | `kernel/cap/cap_registry.nim` | BUILT | named cap lookup |
-| ServerChan | `ipc/server_chan.nim` | BUILT | named channels, MsgPack wire format, chanSend/Recv/Call |
+| ServerChan | `ipc/server_chan.nim` | BUILT | named channels; server-owned channels bound to a receive capability (`chanCreate`/`capRecv` ABI); allocation-free lookup |
 | Mailbox | `ipc/mailbox.nim` | BUILT | MPSC ring primitive + named registry (2c1484d) |
 | MPSC ring (lock-free) | `ipc/mpsc_ring.nim` | BUILT (no callers) | Vyukov bounded MPSC; candidate SMP backend behind Mailbox's interface (ccfeb6d) |
 | Actor (CPS) | `runtime/actor.nim` | BUILT | suspend/recv/deliver — idiomatic cps park; body = `while true: suspend(); handle(recv())`; dispatcher's concurrency unit |
@@ -94,7 +95,7 @@
 | VFS Layer | `fs/vfs.nim` | PARTIAL | prefix router over FSDriver vtable; FatFs registered |
 | FatFs (vendor) | `fs/fatfs.nim` + vendor | BUILT | FAT16/32 read/write driver |
 | littlefs driver | `fs/littlefs.nim` | PLANNED | littlefs driver mapping sectors |
-| littlefs_wearleveling | `fs/littlefs_wearleveling.nim` | BUILT (no callers) | 16 KB in-RAM toy FS at `/lfs_wl/` — NOT littlefs; keep-as-test-double vs delete is open (DECISIONS 2026-10-25) |
+| ramfs | `fs/ramfs.nim` | BUILT (no callers) | RAM block FS at `/ram/`, VFS test double (renamed from littlefs_wearleveling, DECISIONS 2026-10-26) |
 | lwext4 driver | `fs/lwext4.nim` | PLANNED | lwext4 driver for ext4 large files |
 | Metadata B+ Tree | `fs/metadata_db.nim` | PLANNED | Pure Nim B+ Tree for flexible tags |
 | fs_server ELF | `build/apps/fs_server.elf` | PARTIAL | binary exists; boot-from-disk wiring incomplete |
@@ -105,7 +106,7 @@
 | Module | Path | Status | Notes |
 |--------|------|--------|-------|
 | ping_server | `servers/ping/` | BUILT | IPC demo — proves full stack |
-| dispatch_server | `servers/dispatch/` | PARTIAL | run loop = single CPS actor; `dispatchPump` = recv→actor→tick per quantum; strict `tryDecodeRequest` for untrusted input. ELF variant runs the actor (`--os:any --panics:on`), loads+spawns in QEMU; **receives nothing yet — no `dispatch` channel registered**; kmod variant not wired |
+| dispatch_server | `servers/dispatch/` | PARTIAL | CPS actor + `dispatchPump`; ELF owns `dispatch` via `chanCreate` and receives by capability — RUNS in ring 3 alongside apps (QEMU). Next: real clients + target servers (fs) |
 | fs_server | `apps/nim/` | PARTIAL | ELF exists; channel wiring incomplete |
 | input_server | — | PLANNED | IRQ1 PS2 → key events → event_server |
 | log_server | — | PLANNED | ring buffer, queryable |
@@ -180,9 +181,9 @@ app: regionOpen(token) → (ptr, len) → direct read → regionClose(token)
 
 | Seam | Tension | Expected move |
 |------|---------|--------------|
-| Syscall gate | Currently no-op — all apps run ring 0 | Task 48: real ring-3 transition, ABI vtable dispatch |
-| Channel creation from userspace | Only kmods can `serverChanRegister`; ELF servers (dispatch) can't own a channel | Add a `chanCreate` ABI call or kernel pre-registration — cross-cutting (ABI vtable), dialogue first |
-| CPS in the kernel | nim-cps needs `--panics:on`; kernel build lacks it | Needed for dispatch_kmod; decide with the human before changing kernel flags |
+| Address spaces | One shared space; per-region User windows | Per-app CR3 (VISION open question 6) |
+| Blocking in syscalls | Interim `sti;hlt` (waitForTick) | Phase E block-on-mailbox / wake-on-deliver |
+| Server-owned channel lifetime | Channel + cap survive the owning server's exit | Release on task exit (cap revocation by pid) |
 | Boot sequence | disk mount timing vs server spawn | Milestone 1: resolve open question #1 |
 | Virtio transport | blk driver is MMIO-only; QEMU attaches virtio-blk-pci | SPAWN virtio-pci behind VirtioTransport vtable (2026-06-27); blk+net migrate to vtable |
 | virtio-gpu | driver exists partially; app_server not yet | Milestone 5 |
@@ -210,3 +211,6 @@ app: regionOpen(token) → (ptr, len) → direct read → regionClose(token)
 | 2026-10-25 | virtio-pci CommonCfg/notify/ISR access made volatile; blk(pci) works end-to-end (V10 root cause) | DECISIONS.md §V10b |
 | 2026-10-25 | dispatcher: transport pump + strict untrusted decode; ELF variant runs CPS via `--os:any` | DECISIONS.md §Dispatcher transport pump |
 | 2026-10-25 | ccfeb6d modules recorded (mpsc_ring, bit_intrinsics, littlefs_wearleveling) — unwired | DECISIONS.md §Review of ccfeb6d modules |
+| 2026-10-26 | Ring 3 works end to end (11 root causes: syscall path, scheduler, user window, heap alignment) | DECISIONS.md §Ring-3 bring-up |
+| 2026-10-26 | Server-owned channels: `chanCreate`→receive cap, `capRecv`; dispatcher owns `dispatch` | DECISIONS.md §Decision principles |
+| 2026-10-26 | All models allocate app memory from the app's region; dispatch_kmod/kernel CPS PARKED | DECISIONS.md §Decision principles |

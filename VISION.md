@@ -36,6 +36,18 @@ OS with game-engine-quality graphics and a dispatcher-based concurrency engine.
 - Kernel scheduler stays preemptive and simple — it handles hard-RT; dispatcher handles soft-RT
 - Region ref count reaches zero before regionFree — no dangling pointers
 
+## Decision principles (human, 2026-10-26)
+
+- **Microkernel first**: functionality lives in servers; the kernel provides
+  mechanism (scheduling, address windows, mailboxes, capabilities), not policy.
+- **Actors + lightweight fibers**, never POSIX/OS threads (apps build
+  `--threads:off`; no TLS).
+- **Capabilities** are the authority — e.g. a server receives on its channel
+  through a receive capability, not by name or pid.
+- **Oskit libraries**: modular, encapsulated, behind small interfaces.
+- Prerequisites that enable this basis are allowed (e.g. the interim
+  `sti;hlt` blocking until block-on-mailbox lands).
+
 ## Open questions
 
 | # | Question | Resolving signal |
@@ -45,3 +57,4 @@ OS with game-engine-quality graphics and a dispatcher-based concurrency engine.
 | 3 | FlatBuffers schema ownership — defined per-server or in shared `schemas/` directory? | When we write the first FlatBuffers schema (Milestone 2) |
 | 4 | OS threads for drivers (rump kernel pattern) — how does the rumpuser hypercall layer integrate with NimixOS coroutines? | After `irqSubscribe(vec, cap)` + userspace DMA mapping exist |
 | 5 | SMP — when we add AP boot, `syscallScratchRsp` and `globalTss` must become per-CPU (via GS base MSR + `CpuLocal` struct + `swapgs`); `syscallTable` stays global (read-only). What does the `CpuLocal` struct look like and where does AP init live? | When AP bringup (APIC + SIPI) is started |
+| 6 | Per-app address spaces (own CR3) vs today's shared space with per-region User windows — when, and does SASOS keep the shared space? | When a second concurrent app must be protected from another (first untrusted app / app_server) |

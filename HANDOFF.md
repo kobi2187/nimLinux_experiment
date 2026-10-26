@@ -1,6 +1,32 @@
 # HANDOFF.md — Session Exit Note
 
-Last updated: 2026-10-25 (session 9, branch `ccr-56330414-wo65nx`, cloud container)
+Last updated: 2026-10-26 (session 9b, branch `ccr-56330414-wo65nx`, cloud container)
+
+## Session 9b — ring 3 end to end, decisions resolved, origin/main merged
+
+Human set the decision principles (now in VISION): microkernel, functionality
+in servers, actors + fibers, capabilities, oskit libs — no POSIX/OS threads;
+basis prerequisites allowed. Resolved with them: server-owned channels via a
+receive capability (`chanCreate`/`capRecv`); dispatch_kmod + kernel CPS
+PARKED; littlefs_wearleveling → `ramfs`; mpsc_ring parked for SMP.
+
+Then drove ring 3 from "nothing runs" to "41/41 structured, user_tests 17/17,
+dispatcher + apps concurrent, zero faults" — eleven root causes, each found
+from QEMU/gdb evidence (DECISIONS §Ring-3 bring-up). Biggest surprises: the
+GDT order made SYSRET produce CS=0x2B (TSS); Nim's standalone heap was
+8-byte aligned in every binary (kernel too).
+
+Merged origin/main (your session-8b handoff) as a docs union — nothing dropped.
+
+**Next:** Phase A virtio-gpu verify; fix `ls` (fsReadDir "/"); first real
+dispatcher round trip (client → dispatch → fs); re-verify kernel strings now
+that the heap is aligned; release channels/caps on server exit.
+
+**Debug kit that found these** (scratchpad scripts, recreate as needed): drive
+the serial shell from Python over QEMU stdio; `-d int,cpu_reset -D log` for
+exception chains; HMP `info virtio-queue-status`; `qemu -s` + `gdb
+add-symbol-file app.elf -o 0x2000000` + `hbreak` at the faulting RIP for a
+backtrace. The PF handler now prints CR2.
 
 ## Session 9 — V10 root cause, dispatcher pump, cap + build fixes
 
