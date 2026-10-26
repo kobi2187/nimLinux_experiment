@@ -9,9 +9,13 @@
 import virtio_regs
 import ../../arch/common/atomics
 import ../../mm/device_mmio
+import virtio_pci
 
 const
-  QueueSize* = 256    # must be a power of two ≤ QueueNumMax
+  ## Ring entries per queue — one size for every queue. 64 is the largest every
+  ## device we drive accepts (QEMU virtio-snd / virtio-input max out at 64);
+  ## the driver writes it to queue_size, so device and driver agree on wrap.
+  QueueSize* = 64     # power of two
 
   VirtqDescFWrite*  = 0x0002'u16   # device-writable buffer
   VirtqDescFNext*   = 0x0001'u16   # buffer has a next chain entry
@@ -139,3 +143,9 @@ proc virtqueuePop*(vq: var Virtqueue): tuple[found: bool; id: uint32; len: uint3
   let elem = vq.used.ring[vq.lastUsed mod QueueSize.uint16]
   vq.lastUsed = vq.lastUsed + 1
   (true, elem.id, elem.len)
+
+proc pciQueueAttach*(cfg: ptr VirtioPciCommonCfg; idx: uint16; ringPhys: uint64): bool =
+  ## Register a ring laid out by placeRings (desc | avail | used at ringPhys)
+  ## with a virtio-pci device, sized QueueSize on both sides.
+  commonQueueSetup(cfg, idx, ringPhys, ringPhys + availRingOffset(),
+                   ringPhys + usedRingOffset(), uint16(QueueSize))

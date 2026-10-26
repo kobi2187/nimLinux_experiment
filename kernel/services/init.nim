@@ -102,8 +102,49 @@ proc initClock*() =
 # Stage 3: Drivers + I/O
 # ═══════════════════════════════════════════════════════════════════════════
 
+# PCI INTx lines are shared between devices: one dispatcher per line runs
+# every handler on it, then EOIs. (Registering per device would let the last
+# device silently replace the others' handler.)
+const MaxIrqShares = 4
+var gIrqHandlers: array[16, array[MaxIrqShares, proc() {.nimcall.}]]
+
+proc irqLineDispatch(line: int) =
+  for h in gIrqHandlers[line]:
+    if h != nil: h()
+  picEoi(uint8(line))
+
+template lineEntry(n: static int): untyped =
+  proc(ctx: ptr ExceptionContext) {.nimcall.} = irqLineDispatch(n)
+
+proc wirePciIrq(line: uint8; handler: proc() {.nimcall.}) =
+  ## Add `handler` to the device IRQ `line` (shared-line safe).
+  let l = int(line)
+  if l >= 16: return
+  var installed = false
+  for i in 0 ..< MaxIrqShares:
+    if gIrqHandlers[l][i] != nil: installed = true
+  for i in 0 ..< MaxIrqShares:
+    if gIrqHandlers[l][i] == nil:
+      gIrqHandlers[l][i] = handler
+      break
+  if not installed:
+    const entries = [lineEntry(0), lineEntry(1), lineEntry(2), lineEntry(3),
+                     lineEntry(4), lineEntry(5), lineEntry(6), lineEntry(7),
+                     lineEntry(8), lineEntry(9), lineEntry(10), lineEntry(11),
+                     lineEntry(12), lineEntry(13), lineEntry(14), lineEntry(15)]
+    discard getInterruptManager().registerExceptionHandler(
+      uint32(irqToVector(l)), entries[l])
+    picSetLevelTriggered(line)
+    picUnmask(line)
+
+proc publishInputEvent(ev: VirtioInputEvent) {.nimcall.} =
+  ## Driver → event bus (topic "input"): an input/app server subscribes; the
+  ## kernel keeps no input policy. Payload = the 8-byte virtio input event.
+  var e = ev
+  eventPublish("input", addr e, sizeof(e))
+
 proc initVirtioDevices*() =
-  ## PCI scan + virtio-net / virtio-blk probing.
+  ## PCI scan + virtio device probing; interrupts wired per (shared) line.
   pciScan()
   klogInt(llInfo, "[SERVICES] PCI scan: found ", int64(gPciCount))
 
@@ -111,15 +152,8 @@ proc initVirtioDevices*() =
     klog(llWarn, "[SERVICES] virtio-net: not available")
   else:
     klog(llInfo, "[SERVICES] ✓ virtio-net initialized")
-    let netIrq = gVirtioNet.irqLine
-    picUnmask(netIrq)
-    discard getInterruptManager().registerExceptionHandler(
-      uint32(irqToVector(int(netIrq))),
-      proc(ctx: ptr ExceptionContext) {.nimcall.} =
-        virtioNetIrqHandler()
-        picEoi(gVirtioNet.irqLine))
-    klogInt(llInfo, "[SERVICES] ✓ virtio-net: IRQ wired (", int64(netIrq))
-    klog(llInfo, ")")
+    wirePciIrq(gVirtioNet.irqLine, virtioNetIrqHandler)
+    klogInt(llInfo, "[SERVICES] ✓ virtio-net: IRQ line ", int64(gVirtioNet.irqLine))
 
   if virtioBlkInit():
     klog(llInfo, "[SERVICES] ✓ virtio-blk initialized")
@@ -137,7 +171,9 @@ proc initVirtioDevices*() =
     klog(llWarn, "[SERVICES] virtio-snd: not available")
 
   if virtioInputInit():
-    klog(llInfo, "[SERVICES] ✓ virtio-input initialized")
+    gInput.onEvent = publishInputEvent
+    wirePciIrq(gInput.irqLine, virtioInputIrqHandler)
+    klogInt(llInfo, "[SERVICES] ✓ virtio-input: IRQ line ", int64(gInput.irqLine))
   else:
     klog(llWarn, "[SERVICES] virtio-input: not available")
 
@@ -240,8 +276,8 @@ proc initServices*() =
   # Stage 3
   klog(llInfo, "[SERVICES] Stage 3: Drivers + I/O")
   initBuiltinDrivers()
+  initVirtioDevices()   # devices first: modules (FatFs mount) use them
   initModules()
-  initVirtioDevices()
   initFilesystems()
 
   # Stage 4

@@ -149,13 +149,11 @@ proc netInitPci(): bool =
   let txq = virtqueueInitNoWire(1, txMem)
   # Set queue 0 (rx)
   cfgSet(gNetDev.common, queueSelect, 0)
-  if not commonQueueSetup(gNetDev.common, 0'u16, rxPhys,
-                          rxPhys + availRingOffset(), rxPhys + usedRingOffset()):
+  if not pciQueueAttach(gNetDev.common, 0'u16, rxPhys):
     klog(llError, "virtio-net(pci): rxq setup failed"); return false
   # Set queue 1 (tx)
   cfgSet(gNetDev.common, queueSelect, 1)
-  if not commonQueueSetup(gNetDev.common, 1'u16, txPhys,
-                          txPhys + availRingOffset(), txPhys + usedRingOffset()):
+  if not pciQueueAttach(gNetDev.common, 1'u16, txPhys):
     klog(llError, "virtio-net(pci): txq setup failed"); return false
   commonSetDriverOk(gNetDev.common)
   gVirtioNet = VirtioNet(usePci: true, rxMem: rxMem, txMem: txMem,

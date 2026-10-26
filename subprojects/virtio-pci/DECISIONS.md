@@ -91,3 +91,10 @@ checks live.
 Additive API in `virtio_pci.nim`: `cfgGet`/`cfgSet` (volatile CommonCfg access),
 `notifyWrite`, `commonKick` (select-then-read notify_off), `isrRead`. Existing
 procs keep their signatures. Root cause and evidence: parent DECISIONS.md §V10b.
+
+## 2026-10-26 — `commonQueueSetup(..., ringSize = 0)` (parent ADR "QEMU integration…")
+Additive, defaulted parameter: when non-zero the driver writes `queue_size`
+(and the call fails if the device's maximum is smaller). Existing callers and
+tests compile unchanged. Reason: drivers assumed a 256-entry ring but never
+stated it; virtio-snd/input default to 64 → index wrap mismatch → device
+marked broken. Parent wraps it as `virtqueue.pciQueueAttach`.

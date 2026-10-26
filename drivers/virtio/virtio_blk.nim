@@ -200,6 +200,8 @@ proc blkPciReady(t: VirtioTransport): bool =
 proc virtioBlkInitPci(): bool =
   var t = pciTransport(VirtioVendorBlk, VirtioBlkDevice)
   if not blkPciReady(t): return false
+  let loc = pciVirtioFind(VirtioVendorBlk, VirtioBlkDevice)
+  pciDisableIntx(loc.bus, loc.slot, loc.fn)   # polled driver
   # Allocate DMA ring from physMgr (above boot identity map), mapped uncached.
   # Queue needs 2 pages (desc+avail+used=7193B) + DMA bufs. 3 pages = safe margin.
   let mem = allocDmaPages(3)

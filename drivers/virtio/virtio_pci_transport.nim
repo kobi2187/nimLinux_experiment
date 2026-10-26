@@ -84,8 +84,7 @@ proc pciQueueSetup(idx: uint16; ringPhys: uint64): bool {.nimcall.} =
   ## Split the ring base into desc/avail/used using the shared virtqueue layout,
   ## then set DRIVER_OK so the device starts servicing the queue (spec §3.1.1 —
   ## DRIVER_OK comes after virtqueue setup; without it used.idx never advances).
-  if not commonQueueSetup(gDev.common, idx, ringPhys,
-                          ringPhys + availRingOffset(), ringPhys + usedRingOffset()):
+  if not pciQueueAttach(gDev.common, idx, ringPhys):
     return false
   commonSetDriverOk(gDev.common)
   when defined(virtioDebug):

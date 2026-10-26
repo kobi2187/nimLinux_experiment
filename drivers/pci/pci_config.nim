@@ -50,3 +50,11 @@ proc pciConfigWriteU16*(bus, slot, fn, reg: uint8, val: uint16) =
   let orig  = pciConfigReadU32(bus, slot, fn, reg)
   let next  = (orig and not mask) or (uint32(val) shl shift)
   pciConfigWriteU32(bus, slot, fn, reg, next)
+
+const PciCommandIntxDisable* = 1'u16 shl 10
+
+proc pciDisableIntx*(bus, slot, fn: uint8) =
+  ## Stop a polled device from asserting its INTx line. PCI INTx lines are
+  ## shared; an asserted line nobody acknowledges blocks every other device on it.
+  let cmd = pciConfigReadU16(bus, slot, fn, 0x04'u8)
+  pciConfigWriteU16(bus, slot, fn, 0x04'u8, cmd or PciCommandIntxDisable)

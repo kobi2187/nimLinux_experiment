@@ -177,10 +177,18 @@ proc commonSetDriverOk*(cfg: ptr VirtioPciCommonCfg) =
   cfgSet(cfg, deviceStatus, cfgGet(cfg, deviceStatus) or StatusDriverOk)
 
 proc commonQueueSetup*(cfg: ptr VirtioPciCommonCfg; idx: uint16;
-                       descPhys, availPhys, usedPhys: uint64): bool =
-  ## Select queue `idx`, write the split-ring phys addresses, enable it.
+                       descPhys, availPhys, usedPhys: uint64;
+                       ringSize = 0'u16): bool =
+  ## Select queue `idx`, set its size (ringSize; 0 = keep the device default),
+  ## write the split-ring phys addresses, enable it. False if the device's
+  ## max queue size is below ringSize.
   assert cfg != nil, "queueSetup: cfg must be non-nil"
   cfgSet(cfg, queueSelect,  idx)
+  # The ring index wraps at queue_size on both sides: state the driver's size
+  # (the device default may differ) and refuse a device whose max is smaller.
+  if ringSize != 0:
+    if cfgGet(cfg, queueSize) < ringSize: return false
+    cfgSet(cfg, queueSize, ringSize)
   cfgSet(cfg, queueDescLo,  lo32(descPhys));  cfgSet(cfg, queueDescHi,  hi32(descPhys))
   cfgSet(cfg, queueAvailLo, lo32(availPhys)); cfgSet(cfg, queueAvailHi, hi32(availPhys))
   cfgSet(cfg, queueUsedLo,  lo32(usedPhys));  cfgSet(cfg, queueUsedHi,  hi32(usedPhys))
