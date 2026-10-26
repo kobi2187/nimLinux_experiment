@@ -1,6 +1,25 @@
 # HANDOFF.md — Session Exit Note
 
-Last updated: 2026-10-26 (session 9c, branch `ccr-56330414-wo65nx`, cloud container)
+Last updated: 2026-10-26 (session 9d, branch `ccr-56330414-wo65nx`, cloud container)
+
+## Session 9d — QEMU integration, virtio verified on the host, debug tooling
+
+Human: "Improve qemu integration, virt drivers, and enable valgrind and
+debugging tools, whether over serial or native." Done and verified:
+`tools/nimix_qemu.py` is the single QEMU launcher (tests + `make qemu*`);
+`make test-devices` checks gpu/snd/net/input by their host-side effect
+(pixels, wav tone, pcap, injected keys) plus crash reports — 7/7. Six real
+driver bugs fixed on the way (gpu non-volatile spin, snd spec rewrite,
+64-entry queue size stated to devices, shared-INTx/ELCR/cascade, snd
+completion, init order). Serial: crash report + backtrace on every CPU
+exception and panic, `tools/symbolize.py`, `dmesg`. Native: `make
+test-valgrind`, `make test-asan` (UBSan found a misaligned kernel stack →
+fixed), `make qemu-debug` + `make gdb-attach` (tools/gdb/nimix.gdb). See
+DECISIONS §QEMU integration.
+
+**Next (roadmap B):** rasterizer + font on the verified virtio-gpu → GUI
+terminal; input_server consuming topic `input` (C). User-mode faults still
+halt the machine — kill the task instead (needs the fault → task path).
 
 ## Session 9c — "make it all work": WASM apps, ELF system, every model green
 
@@ -17,10 +36,12 @@ larger WASM file reads; consider moving wasm3 into a userspace ELF host.
 
 **Toolchain for a fresh container:** Nim 2.2.4 tarball; `nimble install
 https://github.com/nim-works/cps msgpack4nim`; apt `qemu-system-x86 ovmf
-grub-pc-bin grub-efi-amd64-bin xorriso mtools dosfstools clang lld wasi-libc`;
+grub-pc-bin grub-efi-amd64-bin xorriso mtools dosfstools clang lld wasi-libc
+valgrind gdb`;
 `pip install wasmtime`; `git submodule update --init vendor/wasm3 vendor/printf`.
 Then: `make test test-arc build nim-apps wasm-apps test-wasm disk
-test-structured test-qemu-models OVMF=/usr/share/ovmf/OVMF.fd`.
+test-structured test-qemu-models test-devices OVMF=/usr/share/ovmf/OVMF.fd`;
+`make test-valgrind test-asan` for native memory checking.
 
 ## Session 9b — ring 3 end to end, decisions resolved, origin/main merged
 

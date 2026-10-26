@@ -81,12 +81,26 @@
 | virtio-mmio transport | `drivers/virtio/virtio_mmio.nim` | PLANNED | extract existing BAR0+magic path behind VirtioTransport |
 | virtio-pci transport | `drivers/virtio/virtio_pci.nim` | BUILT | modern virtio-1.0 PCI cap-walk; blk/gpu/net migrated (4d028b9); **all CommonCfg/notify/ISR access via volatile `cfgGet`/`cfgSet`/`commonKick`/`isrRead`** (V10b); sub-project `subprojects/virtio-pci/` |
 | virtio-blk (PCI) | `drivers/virtio/virtio_blk.nim` | BUILT | verified in QEMU 8.2: FAT mount + ELF load from disk (V10b) |
-| virtio-gpu | `drivers/virtio/virtio_gpu.nim` | PARTIAL | file exists, framebuffer init incomplete |
+| virtio-gpu | `drivers/virtio/virtio_gpu.nim` | BUILT | 2D scanout, responses checked; verified by screendump pixels (`make test-devices`) |
+| virtio-input | `drivers/virtio/virtio_input.nim` | BUILT | evdev events → event bus topic `input` via shared-IRQ dispatcher; verified with QMP keys |
+| Shared PCI IRQ | `kernel/services/init.nim` `wirePciIrq` | BUILT | per-line fan-out, ELCR level-triggered; polled drivers set INTx-disable |
 | Driver registry | `kernel/driver_registry.nim` | BUILT | register/lookup by name |
 | PS/2 mouse | — | PLANNED | 3/4-byte protocol, mouse.move/click events |
 | RTC / CMOS | — | PLANNED | nimixUptime + nimixWallClock |
 | virtio-blk | — | PLANNED | replace ATA PIO diskio.c |
-| virtio-sound | — | PLANNED | PCM output queue, virtio spec 5.14 |
+| virtio-sound | `drivers/virtio/virtio_snd.nim` | BUILT | spec 5.14 tx chains, status-based completion; verified by wav recording |
+| Virtqueue size | `drivers/virtio/virtqueue.nim` | BUILT | `QueueSize = 64` for every queue, stated to the device (`pciQueueAttach`) |
+
+### Debug tooling
+
+| Module | Path | Status | Notes |
+|--------|------|--------|-------|
+| QEMU launcher | `tools/nimix_qemu.py` | BUILT | only QEMU command-line builder + QMP client; used by all tests and `make qemu*` |
+| Crash report | `kern/interrupts.nim` `fatalExceptionHandler`, `core/backtrace.nim` | BUILT | regs + frame-pointer backtrace on serial, then halt |
+| Symbolizer | `tools/symbolize.py` | BUILT | serial log → function names (kernel + PIE apps) |
+| Kernel log ring | `core/klog_ring.nim` | BUILT | last 16 KB of klog; `dmesg`, gdb `nimix-dmesg` |
+| gdb helpers | `tools/gdb/nimix.gdb` | BUILT | `make gdb-attach` |
+| Device self-test | `shell/devtest.nim` + `tests/qemu_devices.py` | BUILT | host-verified device effects + crash paths |
 
 ### Filesystem
 
@@ -188,7 +202,8 @@ app: regionOpen(token) → (ptr, len) → direct read → regionClose(token)
 | Server-owned channel lifetime | Channel + cap survive the owning server's exit | Release on task exit (cap revocation by pid) |
 | Boot sequence | disk mount timing vs server spawn | Milestone 1: resolve open question #1 |
 | Virtio transport | blk driver is MMIO-only; QEMU attaches virtio-blk-pci | SPAWN virtio-pci behind VirtioTransport vtable (2026-06-27); blk+net migrate to vtable |
-| virtio-gpu | driver exists partially; app_server not yet | Milestone 5 |
+| virtio-gpu | driver verified; app_server not yet | Milestone 5 / roadmap B |
+| Virtqueue depth | one fixed 64-entry size for all queues | per-queue size if a device needs depth (net throughput) |
 | FlatBuffers schema location | per-server vs shared `schemas/` | Open question #3, resolves at Milestone 2 |
 | Rump kernel / OS threads for drivers | blocked on irqSubscribe + userspace DMA | Long-term; don't touch yet |
 
@@ -218,3 +233,4 @@ app: regionOpen(token) → (ptr, len) → direct read → regionClose(token)
 | 2026-10-26 | All models allocate app memory from the app's region; dispatch_kmod/kernel CPS PARKED | DECISIONS.md §Decision principles |
 | 2026-10-26 | Regular apps = WASM (Nim SDK), system tools + servers = ELF; shell resolves bare names | DECISIONS.md §Apps are WASM |
 | 2026-10-26 | Task resources released on exit and kill; kernel built --panics:on; all 3 models 16/16 | DECISIONS.md §Apps are WASM |
+| 2026-10-26 | One QEMU launcher; gpu/snd/net/input verified on the host; shared-IRQ + queue-size fixes; serial crash reports, symbolizer, dmesg, gdb helpers, valgrind/ASan targets | DECISIONS.md §QEMU integration |

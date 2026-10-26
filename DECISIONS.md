@@ -902,3 +902,69 @@ Human: "Regular apps are wasm, servers and system are elf." Implemented:
 
 Verified: host + ARC + WASM host tests; structured 41/41; QEMU harness
 16/16 on microkernel, SASOS and monolithic; kill/restart/duplicate scenarios.
+
+## QEMU integration, virtio drivers verified on the host, debug tooling (2026-10-26)
+
+Request: improve QEMU integration and the virtio drivers; enable valgrind and
+debugging tools over serial and natively.
+
+**One QEMU launcher** — `tools/nimix_qemu.py` (library + CLI) is now the only
+place that builds a QEMU command line: device set (`blk net gpu snd input |
+all`), display, accel (KVM when available), serial, gdb stub, QMP (unix
+socket client with `screendump`/`send_key`/`hmp`), event log, pcap, wav.
+`tests/qemu_harness.py`, `tests/qemu_debug.py`, `tests/qemu_devices.py` and
+the Makefile `qemu*` targets all use it (four duplicated command lines and a
+second QMP client removed). SURVEY: rejected the `qemu.qmp` PyPI package (an
+extra dependency for ~40 lines) and libvirt (far heavier than the need).
+
+**Devices are verified by their effect on the host, not the guest's word**
+(`make test-devices`, `shell/devtest.nim`): gpu → screendump pixels of four
+colour bars; snd → wav recording at ~440 Hz; net → our UDP marker in a pcap;
+input → keys injected via QMP arrive as evdev codes through the IRQ path.
+Writing that test exposed six real driver bugs, all fixed:
+1. **virtio-gpu showed nothing**: `gpuSubmitCmd` spun on a non-volatile
+   `used.idx` (hoisted load → "done" before the device answered); responses
+   were never checked. Now acquire-load + per-command OK_NODATA check, and the
+   framebuffer has its own DMA allocation (it overran the 3 ring pages by 4 MB).
+2. **virtio-snd**: wrong request codes/enums, event+tx sharing a ring, non-spec
+   tx chains → rewritten to spec 5.14 (3-descriptor xfer/data/status chains).
+3. **Queue size mismatch (all virtio-pci devices)**: drivers assumed 256-entry
+   rings but never wrote `queue_size`; snd/input default to 64, so ring indices
+   diverged after 64 entries (QEMU: "Desc next is 64" → device broken).
+   `QueueSize = 64` for every queue and the driver states it
+   (`pciQueueAttach` → `commonQueueSetup(..., ringSize)`, additive API — see
+   subprojects/virtio-pci DECISIONS). Rejected per-queue sizes for now: the
+   ring arrays are typed by the constant; revisit if a queue needs depth.
+4. **Shared INTx lines**: the slave PIC cascade (IRQ2) was never unmasked, the
+   lines were edge-triggered, and polled devices (blk/gpu/snd) raised the
+   shared line with nobody acknowledging it — after blk's first interrupt line
+   11 stayed high and net/input never interrupted again. Now: per-line fan-out
+   dispatcher (`wirePciIrq`), ELCR level-triggered PCI lines, IRQ2 unmasked,
+   polled drivers set PCI Command.InterruptDisable, IRQ drivers read their ISR.
+5. **snd completions**: QEMU 8.2 fills tx used entries without publishing
+   used.idx; completion is taken from the per-request status the device writes
+   (spec-valid), and `virtioSndFinish` cycles STOP/RELEASE/PREPARE/START to
+   hand back the last held period. Sounds are padded to whole periods.
+6. Init order: virtio before modules/filesystems (FAT mounts at boot).
+
+**Debugging over serial**: every CPU exception (except #DB/NMI/#BP) prints a
+crash report — vector, error code, CR2/CR3, all registers, frame-pointer
+backtrace — and halts (previously only 4 vectors had handlers and they
+*returned*, re-faulting forever). Nim runtime panics (`rtl_stubs.c exit/abort`)
+print a backtrace too. The kernel builds `-fno-omit-frame-pointer`.
+`tools/symbolize.py` names frames from the ELF (`nm`; `addr2line` lines with
+`make DEBUG=1`), apps via the logged PIE load bias. `dmesg` shows a 16 KB
+klog ring (`core/klog_ring.nim`). `devtest crash-pf|crash-ud|crash-panic`
+exercise the whole path in `make test-devices`.
+
+**Debugging natively**: `make test-valgrind` (memcheck, `-d:useMalloc`) and
+`make test-asan` (ASan + UBSan) run every host test; the host-test list is
+now one Makefile variable shared by `test`/`test-valgrind`/`test-asan`.
+UBSan's first run found a real defect: the per-task kernel stack started
+4 bytes past an 8-byte boundary (misaligned canary, misaligned stack base) →
+`kstack {.align(16).}`. `make qemu-debug` + `make gdb-attach` load
+`tools/gdb/nimix.gdb` (nimix-bt frame-pointer backtrace without debug info,
+nimix-dmesg, nimix-sym, nimix-app for PIE apps, nimix-breaks).
+
+Verified: `make test`, `test-arc`, `test-valgrind`, `test-asan` clean;
+`test-devices` 7/7; `test-structured` 41/41; `test-qemu-models` 16/16 × 3.
