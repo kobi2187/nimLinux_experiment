@@ -28,7 +28,7 @@ QEMU_MEM ?= 256
 # and surface real defects on serial via panicoverride. Opt into the optimized,
 # unchecked build with:  make DANGER=-d:danger   (or the `release` target).
 DANGER ?=
-NIM_FLAGS = c --os:any --mm:arc -d:StandaloneHeapSize=16777216 --passC:-fdata-sections \
+NIM_FLAGS = c --os:any --mm:arc --panics:on -d:StandaloneHeapSize=16777216 --passC:-fdata-sections \
             -d:release $(DANGER) -d:kernelFull --noMain --outdir:build \
             --nimblePath:nimcache
 
@@ -41,7 +41,7 @@ KERNEL_OUT = build/main
 ISO_OUT    = nimixos.iso
 ISO_ALL_OUT = nimixos-all-kernels.iso
 
-.PHONY: all build apps nim-apps iso iso-all qemu qemu-all qemu-gui qemu-debug run clean test test-qemu test-arc
+.PHONY: all build apps nim-apps wasm-apps test-wasm iso iso-all qemu qemu-all qemu-gui qemu-debug run clean test test-qemu test-qemu-models test-arc
 
 # Default target: full cycle
 all: build iso qemu
@@ -50,6 +50,32 @@ all: build iso qemu
 # Rebuilds .wasm from .c and regenerates the embedded Nim byte array.
 CLANG_WASM = clang --target=wasm32 -nostdlib -Wl,--no-entry \
              -Wl,--export=_start -Wl,--allow-undefined -O2
+
+# ── Regular apps: Nim → WASM ─────────────────────────────────────────────────
+# Regular apps are WASM (sandboxed, capability-limited); system tools and
+# servers are ELF. wasm32-wasi headers only (apt: wasi-libc) — nothing from
+# WASI libc is linked: apps/wasm/nimix_wasm_rt.c supplies the few libc
+# symbols, so a module imports only NimixOS host calls (env.*).
+WASI_INCLUDE ?= /usr/include/wasm32-wasi
+NIM_WASM = $(NIM) c --skipParentCfg --skipUserCfg --hints:off \
+           --os:standalone --cpu:wasm32 --mm:arc --threads:off --noMain \
+           -d:release -d:StandaloneHeapSize=65536 -d:nimAllocPagesViaMalloc \
+           --cc:clang --clang.exe=clang --clang.linkerexe=clang \
+           --passC:"--target=wasm32-wasi -nostdlib -isystem $(WASI_INCLUDE)" \
+           --passL:"--target=wasm32-wasi -nostdlib -Wl,--no-entry \
+                    -Wl,--export=_start -Wl,--allow-undefined"
+WASM_APPS = build/apps/hello.wasm build/apps/cat.wasm
+
+wasm-apps: $(WASM_APPS)
+
+# Host tests for WASM apps (wasmtime; skipped when not installed).
+test-wasm: wasm-apps
+	python3 tests/test_wasm_apps.py build/apps
+
+.SECONDEXPANSION:
+build/apps/%.wasm: apps/wasm/$$*/$$*.nim apps/wasm/nimix_wasm.nim apps/wasm/nimix_wasm_rt.c kernel/abi/nimix_page_arena.h
+	@mkdir -p build/apps
+	$(NIM_WASM) -o:$@ $<
 
 # ── Compile Nim userspace apps (PIE, --os:standalone) ────────────────────────
 # --threads:off: NimixOS has fibers/actors, not OS threads, and sets up no TLS.
@@ -74,7 +100,7 @@ NIM_APP = $(NIM) c --skipParentCfg --skipUserCfg \
           --path:$(CURDIR)/apps/nim \
           --nimblePath:$(HOME)/.nimble/pkgs2
 
-nim-apps: build/apps/hello.elf build/apps/ping_server.elf \
+nim-apps: build/apps/ping_server.elf \
           build/apps/ps.elf build/apps/kill.elf \
           build/apps/stats.elf build/apps/ls.elf \
           build/apps/top.elf build/apps/dispatch_server.elf \
@@ -86,10 +112,6 @@ NIM_APP_TEST = $(NIM_APP) -d:nimixUserspace
 build/apps/user_tests.elf: tests/user_tests/main.nim tests/user_tests/panicoverride.nim tests/test_protocol.nim kernel/abi/nimix_abi.h build/nimix_abi_stub.o
 	@mkdir -p build/apps
 	$(NIM_APP_TEST) -o:$@ $<
-
-build/apps/hello.elf: apps/nim/hello/hello.nim kernel/abi/nimix_abi.h build/nimix_abi_stub.o
-	@mkdir -p build/apps
-	$(NIM_APP) -o:$@ $<
 
 build/apps/ping_server.elf: servers/ping/ping_server_elf.nim servers/ping/ping_logic.nim kernel/abi/nimix_abi.h build/nimix_abi_stub.o
 	@mkdir -p build/apps
@@ -173,6 +195,15 @@ $(ISO_OUT): build/kernel-monolithic
 	grub-mkrescue -o $(ISO_OUT) iso/
 	rm -rf iso
 
+# One ISO per kernel model (for automated testing of each model).
+nimixos-%.iso: build/kernel-%
+	rm -rf build/iso-$*
+	mkdir -p build/iso-$*/boot/grub
+	cp build/kernel-$* build/iso-$*/boot/kernel.elf
+	printf 'set timeout=0\nset default=0\nmenuentry "NimixOS $*" { multiboot2 /boot/kernel.elf }\n' > build/iso-$*/boot/grub/grub.cfg
+	grub-mkrescue -o $@ build/iso-$*/ 2>/dev/null
+	rm -rf build/iso-$*
+
 # ── Create bootable ISO with all kernel variants ───────────────────────────────────────────
 iso-all: $(ISO_ALL_OUT)
 
@@ -244,9 +275,11 @@ $(DISK):
 	$(MAKE) disk-add-apps
 
 # Add/update WASM and ELF files on the disk image (uses mtools — no sudo)
-disk-add-apps: apps/ping/ping.wasm apps/pingpong/pingpong.wasm nim-apps
-	MTOOLS_SKIP_CHECK=1 mcopy -oi $(DISK) apps/ping/ping.wasm apps/pingpong/pingpong.wasm ::
-	MTOOLS_SKIP_CHECK=1 mcopy -oi $(DISK) build/apps/hello.elf build/apps/ps.elf build/apps/kill.elf build/apps/stats.elf build/apps/ls.elf build/apps/top.elf build/apps/dispatch_server.elf build/apps/fs_server.elf build/apps/user_tests.elf ::
+# Regular apps (.wasm) + system tools and servers (.elf) + sample data.
+disk-add-apps: apps/ping/ping.wasm apps/pingpong/pingpong.wasm nim-apps wasm-apps
+	MTOOLS_SKIP_CHECK=1 mcopy -oi $(DISK) apps/ping/ping.wasm apps/pingpong/pingpong.wasm $(WASM_APPS) ::
+	MTOOLS_SKIP_CHECK=1 mcopy -oi $(DISK) build/apps/ps.elf build/apps/kill.elf build/apps/stats.elf build/apps/ls.elf build/apps/top.elf build/apps/dispatch_server.elf build/apps/fs_server.elf build/apps/ping_server.elf build/apps/user_tests.elf ::
+	MTOOLS_SKIP_CHECK=1 mcopy -oi $(DISK) apps/data/notes.txt ::
 
 # Add a single file: make disk-add FILE=myapp.wasm
 disk-add:
@@ -323,7 +356,13 @@ bench-arc:
 # up-to-date ELFs.
 test-qemu: nim-apps disk-add-apps $(ISO_OUT)
 	python3 tests/qemu_harness.py --iso $(ISO_OUT) --bios $(OVMF) \
-		$(if $(wildcard $(DISK)),--disk $(DISK),)
+		$(if $(wildcard $(DISK)),--disk $(DISK) --virtio-blk,)
+
+# Same suite against every kernel model (vision goal 2: models interchangeable).
+test-qemu-models: nim-apps disk-add-apps $(addprefix nimixos-,$(addsuffix .iso,$(KERNEL_MODELS)))
+	@for m in $(KERNEL_MODELS); do echo "=== model: $$m ==="; \
+	  python3 tests/qemu_harness.py --iso nimixos-$$m.iso --bios $(OVMF) \
+	    --disk $(DISK) --virtio-blk || exit 1; done
 
 # ── Structured in-kernel test suite ───────────────────────────────
 # Boots a testMode kernel, parses TEST PASS/FAIL/DONE from serial.

@@ -11,6 +11,7 @@ disk.img
 # Source is tests/*.nim; the extensionless ELF next to it is an artifact.
 tests/test_*
 !tests/test_*.nim
+!tests/test_*.py
 !tests/test_*/
 
 # ── Tooling scratch ───────────────────────────────────────────

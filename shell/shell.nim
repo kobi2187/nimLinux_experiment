@@ -43,13 +43,9 @@ type
     scModel
     scLoadPing      ## load ping — embedded WASM
     scLoadPingpong  ## load pingpong — actor mailbox demo
-    scLs            ## ls — list files on disk
     scMount         ## mount — mount FAT disk
     scRun           ## run <file> — load WASM from disk and execute
     scExec          ## exec <file> — load ELF from disk and jump to entry
-    scPs            ## ps — list all tasks with pid/class/state/cpu
-    scKill          ## kill <pid> — terminate task by PID
-    scStats         ## stats — scheduler stats + uptime
     scLspci         ## lspci — list PCI devices
     scNetinfo       ## netinfo — virtio-net MAC and packet counts
 
@@ -90,9 +86,6 @@ proc parseCommand*(buf: openArray[char], len: int): ShellCommand =
   if bufEq(buf, first, last, "load ping"):      return scLoadPing
   if bufEq(buf, first, last, "load pingpong"):  return scLoadPingpong
   if bufEq(buf, first, last, "mount"):   return scMount
-  if bufEq(buf, first, last, "ls"):    return scLs
-  if bufEq(buf, first, last, "ps"):    return scPs
-  if bufEq(buf, first, last, "stats"):  return scStats
   if bufEq(buf, first, last, "lspci"):   return scLspci
   if bufEq(buf, first, last, "netinfo"): return scNetinfo
   # "run <file>", "exec <file>", "kill <pid>" — prefix match
@@ -100,8 +93,6 @@ proc parseCommand*(buf: openArray[char], len: int): ShellCommand =
      buf[first+2] == 'n' and buf[first+3] == ' ':  return scRun
   if last - first >= 4 and buf[first] == 'e' and buf[first+1] == 'x' and
      buf[first+2] == 'e' and buf[first+3] == 'c' and buf[first+4] == ' ':  return scExec
-  if last - first >= 4 and buf[first] == 'k' and buf[first+1] == 'i' and
-     buf[first+2] == 'l' and buf[first+3] == 'l' and buf[first+4] == ' ':  return scKill
   scUnknown
 
 # ── Command implementations ────────────────────────────────────────────────
@@ -116,12 +107,10 @@ proc cmdHelp() =
   kprint("  mount            - mount FAT disk\n")
   kprint("  load ping        - run embedded ping WASM app\n")
   kprint("  load pingpong    - run embedded pingpong demo\n")
-  kprint("  ls               - list files on disk\n")
+  kprint("  <name> [args]    - run name / name.elf (system, servers) / name.wasm (apps)\n")
+  kprint("                     e.g. ls /, ps, top, stats, kill <pid>, hello\n")
   kprint("  run <file.wasm>  - load and run WASM from disk\n")
   kprint("  exec <file.elf>  - load and execute ELF from disk\n")
-  kprint("  ps               - list all tasks\n")
-  kprint("  kill <pid>       - terminate task by PID\n")
-  kprint("  stats            - scheduler statistics and uptime\n")
   kprint("  lspci            - list PCI devices\n")
   kprint("  netinfo          - virtio-net MAC and packet counts\n")
 
@@ -312,41 +301,63 @@ proc extractArg[N: static int](buf: openArray[char]; first, last, skip: int;
     dst[di] = buf[si]; inc di; inc si
   dst[di] = '\0'
 
-# ── App exec helper ────────────────────────────────────────────────────────
+proc loadFile(name: cstring): int =
+  ## Read a disk file into diskFileBuf without printing. Bytes read, or -1.
+  if not fsMounted and not fsMount(): return -1
+  let (res, n) = fsReadInto(name, cast[ptr byte](addr diskFileBuf[0]),
+                            diskFileBuf.len)
+  if res != fOk: -1 else: n
 
-proc execApp(name: cstring; args: cstring) =
-  ## Load a PIE ELF app from disk with given args string.
-  cmdExec(name, args)
+proc launchLoaded(name: cstring; nbytes: int; args: cstring) =
+  ## Start what diskFileBuf holds, chosen by magic — not by extension:
+  ## ELF  = system tool or server (its own ring-3 task),
+  ## WASM = regular app (sandboxed; only the capabilities it is given).
+  let p = cast[ptr UncheckedArray[byte]](addr diskFileBuf[0])
+  if nbytes >= 4 and p[0] == 0x7f'u8 and p[1] == byte('E') and
+     p[2] == byte('L') and p[3] == byte('F'):
+    let dataBuf = cast[ptr byte](addr diskFileBuf[0])
+    if isPieElf(dataBuf): runPieElf(name, dataBuf, nbytes, args)
+    else: runExecElf(dataBuf, nbytes)
+  elif nbytes >= 4 and p[0] == 0'u8 and p[1] == byte('a') and
+       p[2] == byte('s') and p[3] == byte('m'):
+    let caps = [CapIpc, CapEvents]
+    wasmSetArgs(args)
+    if wasmRun(cast[ptr byte](addr diskFileBuf[0]), nbytes, caps) != wasmOk:
+      kprint("WASM execution failed\n")
+  else:
+    kprint("not an ELF or WASM file\n")
+
+proc withSuffix(dst: var array[128, char]; name: openArray[char]; n: int;
+                suffix: string) =
+  ## dst = name[0..<n] & suffix, NUL-terminated (no heap).
+  var k = 0
+  while k < n and k < dst.len - suffix.len - 1:
+    dst[k] = name[k]; inc k
+  for c in suffix:
+    dst[k] = c; inc k
+  dst[k] = '\0'
 
 proc cmdUnknown(buf: openArray[char], first, last: int) =
-  ## Try to execute as filename from disk. Detect .elf vs .wasm.
-  if not fsMounted and not fsMount():
-    kprint("No disk mounted\n")
-    return
-
-  var fname: array[128, char]
-  var flen = 0
+  ## `name [args]`: run a program from disk. Tries `name` as given, then
+  ## `name.elf` (system tools + servers), then `name.wasm` (regular apps).
+  var word: array[128, char]
+  var n = 0
   var i = first
-  while i <= last and flen < 127:
-    if buf[i] == ' ': break
-    fname[flen] = buf[i]
-    inc flen
-    inc i
-  fname[flen] = '\0'
-
-  let isElf = flen > 4 and fname[flen-4] == '.' and fname[flen-3] == 'e' and
-              fname[flen-2] == 'l' and fname[flen-1] == 'f'
-  let isWasm = flen > 5 and fname[flen-5] == '.' and fname[flen-4] == 'w' and
-               fname[flen-3] == 'a' and fname[flen-2] == 's' and fname[flen-1] == 'm'
-
-  if isElf:
-    cmdExec(cast[cstring](addr fname[0]))
-  elif isWasm:
-    cmdRun(cast[cstring](addr fname[0]))
-  else:
-    kprint("Unknown command: '")
-    for j in first..last: defaultSerial.putChar(buf[j])
-    kprint("' (not .elf or .wasm)\n")
+  while i <= last and buf[i] != ' ' and n < 100:
+    word[n] = buf[i]; inc n; inc i
+  var args: array[128, char]
+  extractArg(buf, i, last, 0, args)
+  var cand: array[128, char]
+  for suffix in ["", ".elf", ".wasm"]:
+    withSuffix(cand, word, n, suffix)
+    let nbytes = loadFile(cast[cstring](addr cand[0]))
+    if nbytes >= 0:
+      launchLoaded(cast[cstring](addr cand[0]), nbytes,
+                   cast[cstring](addr args[0]))
+      return
+  kprint("Unknown command: '")
+  for j in first..last: defaultSerial.putChar(buf[j])
+  kprint("' (no such program, .elf or .wasm)\n")
 
 # ── Shell input helpers ────────────────────────────────────────────────────
 
@@ -375,11 +386,6 @@ proc runWasmWithCaps(label: string; data: ptr byte; len: int) =
   let caps = [CapIpc, CapEvents]
   if wasmRun(data, len, caps) != wasmOk: wasmLog("error running", label)
 
-proc execArg[N: static int](buf: openArray[char]; first, last, skip: int; app: cstring) =
-  var dst: array[N, char]
-  extractArg(buf, first, last, skip, dst)
-  execApp(app, cast[cstring](addr dst[0]))
-
 proc dispatchCmd(cmd: ShellCommand; buf: openArray[char];
                  first, last: int; physMgr: PhysicalMemManager) =
   case cmd
@@ -393,9 +399,6 @@ proc dispatchCmd(cmd: ShellCommand; buf: openArray[char];
     runWasm("ping",    cast[ptr byte](unsafeAddr pingWasm[0]),     pingWasm.len)
   of scLoadPingpong:
     runWasmWithCaps("pingpong", cast[ptr byte](unsafeAddr pingpongWasm[0]), pingpongWasm.len)
-  of scLs:     execApp("ls.elf", "/")
-  of scPs:     execApp("ps.elf", "")
-  of scStats:  execApp("stats.elf", "")
   of scLspci:  cmdLspci()
   of scNetinfo: cmdNetinfo()
   of scRun:
@@ -404,9 +407,6 @@ proc dispatchCmd(cmd: ShellCommand; buf: openArray[char];
   of scExec:
     var fname: array[128, char]
     extractArg(buf, first, last, 5, fname); cmdExec(cast[cstring](addr fname[0]))
-  of scKill:
-    var pidBuf: array[32, char]
-    extractArg(buf, first, last, 5, pidBuf); execApp("kill.elf", cast[cstring](addr pidBuf[0]))
   of scEmpty:   discard
   of scUnknown: cmdUnknown(buf, first, last)
 

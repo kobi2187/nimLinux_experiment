@@ -57,9 +57,16 @@ def build_tests(disk=None):
         return t
 
     tests += [
-        disk_test("exec_hello", "exec hello.elf", r"Hello from"),
+        # Regular apps are WASM, system tools and servers are ELF; bare names
+        # resolve on disk (name, name.elf, name.wasm).
+        disk_test("wasm_hello", "hello",          r"Hello from a Nim WASM app", timeout=20),
+        disk_test("wasm_ping",  "ping",           r"ping!", timeout=20),
         disk_test("exec_ps",    "exec ps.elf",    r"PID\s+CLASS\s+STATE"),
-        disk_test("exec_top",   "exec top.elf",   r"uptime_ticks", timeout=20),
+        disk_test("exec_top",   "top",            r"uptime_ticks", timeout=20),
+        disk_test("ls_disk",    "ls",             r"notes\.txt", timeout=20),
+        disk_test("fs_server",  "fs_server",      r"ready on 'fs' channel", timeout=30),
+        disk_test("wasm_cat",   "cat notes.txt",  r"read by cat\.wasm through fs_server", timeout=30),
+        disk_test("cat_missing","cat nope.txt",   r"cat: nope\.txt: not found", timeout=30),
     ]
     return tests
 
@@ -73,6 +80,7 @@ class QemuHarness:
         self.mem        = mem
         self.timeout    = timeout
         self.virtio_blk = virtio_blk
+        self.booted     = False
 
         self._proc      = None
         self._out_fd    = None
@@ -265,8 +273,9 @@ def run_tests(harness: QemuHarness, tests: list) -> bool:
         harness.clear_buf()
 
         if cmd is None:
-            # Boot test: wait for initial prompt
-            ok, output = harness.expect(pattern, timeout=harness.timeout)
+            # Boot test: main() already consumed the first prompt while waiting
+            # for boot, so judge by that instead of waiting for it again.
+            ok, output = harness.booted, "(boot prompt seen before tests)"
         else:
             harness.send(cmd)
             ok, output = harness.expect(pattern, timeout=timeout)
@@ -444,6 +453,7 @@ def main():
             harness.cleanup()
             sys.exit(1)
         print("Boot prompt received.")
+        harness.booted = True
         passed = run_tests(harness, tests)
     harness.cleanup()
     sys.exit(0 if passed else 1)
