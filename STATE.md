@@ -25,15 +25,29 @@ Last updated: 2026-10-25 (session 9, branch `ccr-56330414-wo65nx`)
 
 ## Now / Next
 
-- [ ] **TW#65 — ring-3 apps don't run / shell hangs after first ring-3 spawn.**
-  Now the top blocker: `hello.elf` prints nothing, and the next shell command after
-  any `exec` gets no reply. Every harness failure cascades from this.
-- [ ] Dispatcher channel ownership (cross-cutting — dialogue): `chanCreate` ABI vs
-  kernel pre-registration of `"dispatch"`. Without it the ELF dispatcher idles.
-- [ ] virtio-gpu done-check: boot with `-device virtio-gpu-pci`, expect
-  `virtio-gpu: ready` (now plausible after V10b).
+Roadmap A–E (approved session 8b): A) reality audit + virtio-gpu boot verify →
+B) rasterizer+font → GUI terminal → C) input_server + app_server skeleton →
+D) media demo → E) scheduler block-on-mailbox/wake-on-deliver + dispatcher
+transport wiring — network last. Session 9 work is Phase A (reality audit): it
+found the disk path, ring 3 and the ABI patch table all broken in practice.
+
+- [→] **TW#65/TW#72 ring-3 bring-up** (WIP, session 9b): `hello.elf` and `ps.elf`
+  now run in ring 3, print, exit and the shell resumes. TW#72 "RIP=0x101e" was
+  REAL (not stale): first switch to a ring-3 task `ret`'d to address 0. Open:
+  triple fault on the 3rd consecutive app launch (RSP=0x8 → stale kstack).
+- [→] casfs brainstorm (see HANDOFF §8b for full state): ecosystem survey
+  blocked on web-limit, resume with namespace question 1.
+- [ ] Roadmap Phase A: confirm `virtio-gpu: ready` (boot with
+  `-device virtio-gpu-pci`); audit docs vs commits 4d028b9/385f410 (audio+input
+  drivers exist, docs stale).
+- [x] Dispatcher Stage 1 (34a3592) + transport pump (session 9). Channel
+  ownership resolved: server-owned channel + receive capability (`chanCreate` /
+  `capRecv`, WIP). Next: dispatcher ELF calls `nimixChanCreate("dispatch")`.
+- [ ] Phase E: block-on-mailbox/wake-on-deliver — replaces the interim
+  `waitForTick` (sti;hlt) in sleep/yield and the dispatcher's `nimixSleep(1)` poll.
 - [ ] raylib/naylib PLATFORM_CUSTOM onto `virtioGpuFbPtr()` / `virtioGpuPresent()`.
-- [ ] Human call: `fs/littlefs_wearleveling.nim` — keep as VFS test double or delete.
+- [ ] `fs/littlefs_wearleveling.nim` → rename to honest `ramfs` VFS lib; real
+  littlefs per the Nim-ecosystem-first rule (survey nimble before vendoring C).
 
 ## Known sharp edges
 
