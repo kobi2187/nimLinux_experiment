@@ -293,7 +293,7 @@ test:
 	$(NIM) c -r $(TEST_FLAGS) -d:noKernelHardware tests/test_elf_loader.nim
 	$(NIM) c -r $(TEST_FLAGS) -d:noKernelHardware tests/test_vfs_btree.nim
 	$(NIM) c -r $(TEST_FLAGS) tests/test_bit_intrinsics.nim
-	$(NIM) c -r $(TEST_FLAGS) tests/test_littlefs_wearleveling.nim
+	$(NIM) c -r $(TEST_FLAGS) tests/test_ramfs.nim
 	@echo "=== All tests passed ==="
 
 TEST_FLAGS_ARC = --skipParentCfg --mm:arc --panics:on --path:$(CURDIR) --path:$(CURDIR)/apps/nim --nimblePath:$(HOME)/.nimble/pkgs2 -d:noSignalHandler
