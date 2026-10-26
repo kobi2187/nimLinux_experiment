@@ -197,6 +197,7 @@ proc mapAllLoadSegments(r: var ElfLoadResult; fileBase, bias: uint64;
     if not mapLoadSegment(r, fileBase, bias, ph, fileSize): return false
   r.loadBase += bias
   r.loadEnd  += bias
+  klogHex(llInfo, "ELF PIE: load bias=", bias)   # tools/symbolize.py --app
   true
 
 # ── RELA relocations ──────────────────────────────────────────────────────────

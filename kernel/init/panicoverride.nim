@@ -8,6 +8,7 @@
 ## the serial console and halts, so real errors are observable.
 
 import ../../core/serial
+import ../../core/backtrace
 
 proc rawoutput*(s: string) =
   ## Nim runtime sink for defect/exception text.
@@ -18,6 +19,7 @@ proc panic*(s: string) {.noreturn.} =
   kprintln("")
   kprintln("=== KERNEL PANIC (runtime check) ===")
   kprintln(s)
-  kprintln("=== halted ===")
+  printBacktrace(0'u64, currentRbp())
+  kprintln("=== halted (symbolize: tools/symbolize.py <serial log>) ===")
   while true:
     asm """ cli; hlt """

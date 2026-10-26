@@ -15,6 +15,7 @@ import ../core/types
 import ../arch/x86_64/cpu_primitives
 import ../sync/spinlock
 import ../core/serial
+import ../core/backtrace
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Exception Context
@@ -353,55 +354,63 @@ proc dispatchException*(manager: InterruptManager, ctx: ptr ExceptionContext): R
   handler(ctx)
   ok()
 
+proc fatalExceptionHandler*(ctx: ptr ExceptionContext)   # crash report, below
+
 proc nimInterruptDispatch*(ctx: ptr ExceptionContext) {.exportc, cdecl.} =
   ## Called from isr_common_stub. Dispatches to registered Nim handler.
   let mgr = getInterruptManager()
   if mgr != nil:
-    discard mgr.dispatchException(ctx)
+    let r = mgr.dispatchException(ctx)
+    if r.isErr and ctx.vectorNum < 32:
+      fatalExceptionHandler(ctx)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Default Exception Handlers
 # ═══════════════════════════════════════════════════════════════════════════
 
-proc defaultDivideErrorHandler*(ctx: ptr ExceptionContext) =
-  ## Default divide by zero handler
-  kprint("EXCEPTION: Divide Error\n")
-  kprint("  RIP: 0x")
-  kprintHex(ctx.rip)
-  kprint("\n  RAX: 0x")
-  kprintHex(ctx.rax)
-  kprint("\n")
+const ExceptionNames: array[32, cstring] = [
+  "Divide Error", "Debug", "NMI", "Breakpoint", "Overflow", "Bound Range",
+  "Invalid Opcode", "Device Not Available", "Double Fault", "Coprocessor Overrun",
+  "Invalid TSS", "Segment Not Present", "Stack-Segment Fault",
+  "General Protection Fault", "Page Fault", "Reserved", "x87 FP Error",
+  "Alignment Check", "Machine Check", "SIMD FP Error", "Virtualization",
+  "Control Protection", "Reserved", "Reserved", "Reserved", "Reserved",
+  "Reserved", "Reserved", "Hypervisor Injection", "VMM Communication",
+  "Security", "Reserved"]
 
-proc defaultPageFaultHandler*(ctx: ptr ExceptionContext) =
-  ## Default page fault handler
-  kprint("EXCEPTION: Page Fault\n")
-  kprint("  Error Code: 0x")
-  kprintHex(ctx.errorCode)
-  kprint("\n  CR2 (fault address): 0x")
-  kprintHex(readCr2())
-  kprint("\n  RIP: 0x")
-  kprintHex(ctx.rip)
-  kprint("\n")
-  # In real implementation, would check if it's a valid fault we can recover from
+proc putReg(name: cstring; v: uint64) =
+  defaultSerial.putString(name)
+  defaultSerial.putString("=0x")
+  defaultSerial.putHex(v)
 
-proc defaultGeneralProtectionHandler*(ctx: ptr ExceptionContext) =
-  ## Default general protection fault handler
-  kprint("EXCEPTION: General Protection Fault\n")
-  kprint("  Error Code: 0x")
-  kprintHex(ctx.errorCode)
-  kprint("\n  RIP: 0x")
-  kprintHex(ctx.rip)
-  kprint("\nHalting.\n")
-
-proc defaultDoubleFaultHandler*(ctx: ptr ExceptionContext) =
-  ## Default double fault handler (attempted recovery failed)
-  kprint("EXCEPTION: Double Fault\n")
-  kprint("  ERROR Code: 0x")
-  kprintHex(ctx.errorCode)
-  kprint("\nTriple fault imminent. Halting.\n")
-  # Spin forever
+proc fatalExceptionHandler*(ctx: ptr ExceptionContext) =
+  ## Crash report on serial — vector, error code, CR2, every register and a
+  ## frame-pointer backtrace (tools/symbolize.py names the frames) — then halt.
+  ## Returning instead would iretq onto the faulting instruction and loop.
+  {.emit: "asm volatile(\"cli\");".}
+  let vec = int(ctx.vectorNum and 31)
+  defaultSerial.putString("\n=== CPU EXCEPTION ")
+  defaultSerial.putInt(int64(ctx.vectorNum))
+  defaultSerial.putString(" (")
+  defaultSerial.putString(ExceptionNames[vec])
+  defaultSerial.putString(if (ctx.cs and 3) == 3: ") in USER mode ===\n"
+                          else: ") in kernel mode ===\n")
+  putReg("err", ctx.errorCode); putReg("  cr2", readCr2()); putReg("  cr3", readCr3())
+  defaultSerial.putChar('\n')
+  putReg("rip", ctx.rip); putReg("  rsp", ctx.rsp); putReg("  rbp", ctx.rbp)
+  putReg("  rflags", ctx.rflags); defaultSerial.putChar('\n')
+  putReg("rax", ctx.rax); putReg("  rbx", ctx.rbx); putReg("  rcx", ctx.rcx)
+  putReg("  rdx", ctx.rdx); defaultSerial.putChar('\n')
+  putReg("rsi", ctx.rsi); putReg("  rdi", ctx.rdi); putReg("  r8", ctx.r8)
+  putReg("  r9", ctx.r9); defaultSerial.putChar('\n')
+  putReg("r10", ctx.r10); putReg("  r11", ctx.r11); putReg("  r12", ctx.r12)
+  putReg("  r13", ctx.r13); defaultSerial.putChar('\n')
+  putReg("r14", ctx.r14); putReg("  r15", ctx.r15); putReg("  cs", ctx.cs)
+  putReg("  ss", ctx.ss); defaultSerial.putChar('\n')
+  printBacktrace(ctx.rip, ctx.rbp)
+  defaultSerial.putString("=== halted (symbolize: tools/symbolize.py <serial log>) ===\n")
   while true:
-    discard
+    {.emit: "asm volatile(\"cli; hlt\");".}
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Initialization Utilities
@@ -409,10 +418,10 @@ proc defaultDoubleFaultHandler*(ctx: ptr ExceptionContext) =
 
 proc installDefaultHandlers*(manager: InterruptManager): Result[void, ExceptionError] =
   ## Install default handlers for common exceptions
-  ?manager.registerExceptionHandler(EX_DIVIDE_ERROR, defaultDivideErrorHandler)
-  ?manager.registerExceptionHandler(EX_PAGE_FAULT, defaultPageFaultHandler)
-  ?manager.registerExceptionHandler(EX_GENERAL_PROTECTION, defaultGeneralProtectionHandler)
-  ?manager.registerExceptionHandler(EX_DOUBLE_FAULT, defaultDoubleFaultHandler)
+  ## Every CPU exception except the debug traps (#DB, NMI, #BP) is fatal.
+  for v in 0'u32 ..< 32'u32:
+    if int(v) notin [EX_DEBUG, EX_NMI, EX_BREAKPOINT]:
+      ?manager.registerExceptionHandler(v, fatalExceptionHandler)
   ok()
 
 proc initInterruptSystem*(kernelCodeSelector: uint16): Result[void, ExceptionError] =

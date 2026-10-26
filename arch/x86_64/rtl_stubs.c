@@ -105,11 +105,23 @@ int fflush(FILE *stream) {
     return 0;
 }
 
+/* core/backtrace.nim: frame-pointer walk in the serial crash-report format. */
+extern void nimixPrintBacktraceHere(void);
+
+static void fatal_halt(const char *what) {
+    com1_puts("\n=== KERNEL PANIC (");
+    com1_puts(what);
+    com1_puts(") ===\n");
+    nimixPrintBacktraceHere();
+    com1_puts("=== halted (symbolize: tools/symbolize.py <serial log>) ===\n");
+    for (;;) __asm__ volatile("cli; hlt");
+}
+
 void exit(int status) {
     (void)status;
-    /* Kernel cannot exit — a fatal runtime error ends here. Say so. */
-    com1_puts("\n=== KERNEL HALT (fatal runtime error, see above) ===\n");
-    for (;;) __asm__ volatile("cli; hlt");
+    /* Kernel cannot exit — a fatal Nim runtime error (failed check,
+     * unhandled exception; text already printed) ends here. */
+    fatal_halt("fatal runtime error, see above");
 }
 
 /* ── Debug serial output ───────────────────────────────────────── */
@@ -204,7 +216,7 @@ unsigned long long strtoull(const char *s, char **end, int base) {
 
 /* abort: wasm3 calls this on fatal internal error — we halt */
 void abort(void) {
-    for (;;) __asm__ volatile("cli; hlt");
+    fatal_halt("abort");
 }
 
 /* __popcountdi2: used by wasm3's compile phase for bitmask ops */

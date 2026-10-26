@@ -20,6 +20,8 @@ import ../apps/ping/ping_embedded
 import ../apps/pingpong/pingpong_embedded
 import ../kernel/abi/app_args
 import ../mm/user_window
+import devtest
+import ../core/klog_ring
 import ../arch/x86_64/syscall_gate
 import ../mm/region_allocator
 import ../mm/sip_heap
@@ -48,6 +50,8 @@ type
     scExec          ## exec <file> — load ELF from disk and jump to entry
     scLspci         ## lspci — list PCI devices
     scNetinfo       ## netinfo — virtio-net MAC and packet counts
+    scDmesg         ## dmesg — kernel log ring (boot + driver messages)
+    scDevtest       ## devtest <gpu|snd|net|input> — exercise a virtio device
 
 # ── String helpers ─────────────────────────────────────────────────────────
 
@@ -82,12 +86,15 @@ proc parseCommand*(buf: openArray[char], len: int): ShellCommand =
   if bufEq(buf, first, last, "version"):   return scVersion
   if bufEq(buf, first, last, "meminfo"):   return scMeminfo
   if bufEq(buf, first, last, "clear"):     return scClear
+  if bufEq(buf, first, last, "dmesg"):     return scDmesg
   if bufEq(buf, first, last, "model"):     return scModel
   if bufEq(buf, first, last, "load ping"):      return scLoadPing
   if bufEq(buf, first, last, "load pingpong"):  return scLoadPingpong
   if bufEq(buf, first, last, "mount"):   return scMount
   if bufEq(buf, first, last, "lspci"):   return scLspci
   if bufEq(buf, first, last, "netinfo"): return scNetinfo
+  if last - first >= 7 and bufEq(buf, first, first + 7, "devtest "): return scDevtest
+  if bufEq(buf, first, last, "devtest"): return scDevtest
   # "run <file>", "exec <file>", "kill <pid>" — prefix match
   if last - first >= 3 and buf[first] == 'r' and buf[first+1] == 'u' and
      buf[first+2] == 'n' and buf[first+3] == ' ':  return scRun
@@ -113,6 +120,8 @@ proc cmdHelp() =
   kprint("  exec <file.elf>  - load and execute ELF from disk\n")
   kprint("  lspci            - list PCI devices\n")
   kprint("  netinfo          - virtio-net MAC and packet counts\n")
+  kprint("  dmesg            - kernel log (last 16 KB of klog output)\n")
+  kprint("  devtest <dev>    - exercise gpu|snd|net|input (host-verifiable)\n")
 
 proc cmdVersion() =
   kprint("NimixOS v0.1.0\n")
@@ -127,6 +136,11 @@ proc cmdModel() =
     kprint("  (Microkernel - hardware-isolated servers)\n")
   else:
     kprint("  (Monolithic - direct in-kernel calls)\n")
+
+proc cmdDmesg() =
+  if klogRingDropped() > 0:
+    kprint("[... "); kprintInt(int64(klogRingDropped())); kprint(" earlier bytes dropped]\n")
+  for c in klogRingChars(): defaultSerial.putChar(c)
 
 proc cmdClear() =
   for i in 0..39: defaultSerial.putChar('\n')
@@ -393,6 +407,7 @@ proc dispatchCmd(cmd: ShellCommand; buf: openArray[char];
   of scVersion:     cmdVersion()
   of scMeminfo:     cmdMeminfo(physMgr)
   of scClear:       cmdClear()
+  of scDmesg:       cmdDmesg()
   of scModel:       cmdModel()
   of scMount:       cmdMount()
   of scLoadPing:
@@ -401,6 +416,9 @@ proc dispatchCmd(cmd: ShellCommand; buf: openArray[char];
     runWasmWithCaps("pingpong", cast[ptr byte](unsafeAddr pingpongWasm[0]), pingpongWasm.len)
   of scLspci:  cmdLspci()
   of scNetinfo: cmdNetinfo()
+  of scDevtest:
+    var dev: array[16, char]
+    extractArg(buf, first, last, 7, dev); devtest(dev)
   of scRun:
     var fname: array[128, char]
     extractArg(buf, first, last, 4, fname); cmdRun(cast[cstring](addr fname[0]))

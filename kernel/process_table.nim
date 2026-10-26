@@ -75,7 +75,7 @@ type
     classPrev*:  int16
 
     # ── Kernel stack (per-task, for context switching) ─────────────────────
-    kstack*:     array[KStackSize, byte]  ## per-task kernel stack (syscalls, IRQs)
+    kstack* {.align(16).}: array[KStackSize, byte]  ## per-task kernel stack (syscalls, IRQs); aligned: canary + rsp0
     rsp*:        uint64              ## saved RSP (set by contextSwitch/preemptiveSwitch)
 
     # ── FPU/SSE state (512 bytes, must be 16-byte aligned for fxsave64) ────

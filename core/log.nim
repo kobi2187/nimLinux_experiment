@@ -14,6 +14,7 @@ import ./log_types
 export log_types  # re-export so importers only need `import core/log`
 
 import ./serial
+import ./klog_ring
 
 const
   LevelPrefix: array[LogLevel, cstring] = [
@@ -30,6 +31,7 @@ proc klog*(level: LogLevel, msg: cstring) {.inline.} =
     defaultSerial.putString(LevelPrefix[level])
     defaultSerial.putString(msg)
     defaultSerial.putChar('\n')
+    klogRingPut(LevelPrefix[level]); klogRingPut(msg); klogRingPut('\n')
 
 proc klogHex*(level: LogLevel, label: cstring, val: uint64) {.inline.} =
   ## Log label + hex value.
@@ -39,6 +41,8 @@ proc klogHex*(level: LogLevel, label: cstring, val: uint64) {.inline.} =
     defaultSerial.putString("0x")
     defaultSerial.putHex(val)
     defaultSerial.putChar('\n')
+    klogRingPut(LevelPrefix[level]); klogRingPut(label); klogRingPut("0x")
+    klogRingPutHex(val); klogRingPut('\n')
 
 proc klogInt*(level: LogLevel, label: cstring, val: int64) {.inline.} =
   ## Log label + decimal integer.
@@ -47,6 +51,8 @@ proc klogInt*(level: LogLevel, label: cstring, val: int64) {.inline.} =
     defaultSerial.putString(label)
     defaultSerial.putInt(val)
     defaultSerial.putChar('\n')
+    klogRingPut(LevelPrefix[level]); klogRingPut(label); klogRingPutInt(val)
+    klogRingPut('\n')
 
 proc kpanic*(msg: cstring) {.noreturn, inline.} =
   ## Print panic message and halt the CPU forever. No recovery.
