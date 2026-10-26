@@ -17,3 +17,5 @@ tests/test_*
 # ── Tooling scratch ───────────────────────────────────────────
 .claude/tsc-cache/
 thoughts/
+__pycache__/
+qemu-debug/

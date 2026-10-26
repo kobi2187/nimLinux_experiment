@@ -24,6 +24,9 @@ import sys
 import threading
 import time
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools"))
+import nimix_qemu as nq            # noqa: E402 — the one QEMU command-line builder
+
 PIPE_BASE = "/tmp/nimix"
 PIPE_IN   = PIPE_BASE + ".in"
 PIPE_OUT  = PIPE_BASE + ".out"
@@ -107,23 +110,12 @@ class QemuHarness:
         os.mkfifo(PIPE_IN)
         os.mkfifo(PIPE_OUT)
 
-        cmd = [
-            "qemu-system-x86_64",
-            "-cdrom",   self.iso,
-            "-bios",    self.bios,
-            "-m",       f"{self.mem}M",
-            "-serial",  f"pipe:{PIPE_BASE}",
-            "-display", "none",
-            "-no-reboot",
-        ]
-        if self.disk and os.path.exists(self.disk):
-            if self.virtio_blk:
-                cmd += [
-                    "-drive",  f"if=none,file={self.disk},format=raw,id=d0",
-                    "-device", "virtio-blk-pci,drive=d0",
-                ]
-            else:
-                cmd += ["-hda", self.disk]
+        have_disk = bool(self.disk) and os.path.exists(self.disk)
+        legacy = ["-hda", self.disk] if have_disk and not self.virtio_blk else []
+        cmd = nq.build_cmd(nq.QemuConfig(
+            iso=self.iso, bios=self.bios, mem_mb=self.mem, disk=self.disk or "",
+            serial=f"pipe:{PIPE_BASE}",
+            devices=("blk",) if self.virtio_blk else (), extra=legacy))
 
         self._proc = subprocess.Popen(
             cmd,

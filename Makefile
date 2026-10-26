@@ -7,11 +7,13 @@
 #   make apps     # compile WASM apps from C source → update embedded arrays
 #   make iso      # create ISO from built kernel
 #   make iso-all  # create ISO with all 3 kernel models in GRUB menu
-#   make qemu     # boot ISO in QEMU (UEFI, serial, no display)
-#   make qemu-gui # boot with VGA display
-#   make qemu-debug # boot with GDB server on :1234 (paused at start)
-#   make test      # run host-side unit tests
+#   make qemu     # boot ISO in QEMU (UEFI, serial, no display; DEVICES=all)
+#   make qemu-gui # window + every virtio device
+#   make qemu-debug / gdb-attach  # paused gdb stub :1234 / gdb with helpers
+#   make symbolize LOG=serial.log # name the frames of a serial crash report
+#   make test      # run host-side unit tests (test-valgrind, test-asan too)
 #   make test-qemu # boot ISO in QEMU and run serial test suite
+#   make test-devices # virtio devices verified on the host + crash reports
 #   make clean     # remove build artifacts
 #
 # Config:
@@ -28,8 +30,10 @@ QEMU_MEM ?= 256
 # and surface real defects on serial via panicoverride. Opt into the optimized,
 # unchecked build with:  make DANGER=-d:danger   (or the `release` target).
 DANGER ?=
+# DEBUG=1: DWARF debug info for gdb source lines / addr2line (make gdb-attach).
+DEBUG ?=
 NIM_FLAGS = c --os:any --mm:arc --panics:on -d:StandaloneHeapSize=16777216 --passC:-fdata-sections \
-            -d:release $(DANGER) -d:kernelFull --noMain --outdir:build \
+            -d:release $(DANGER) $(if $(DEBUG),--debugger:native,) -d:kernelFull --noMain --outdir:build \
             --nimblePath:nimcache
 
 # Kernel models to build
@@ -41,7 +45,7 @@ KERNEL_OUT = build/main
 ISO_OUT    = nimixos.iso
 ISO_ALL_OUT = nimixos-all-kernels.iso
 
-.PHONY: all build apps nim-apps wasm-apps test-wasm iso iso-all qemu qemu-all qemu-gui qemu-debug run clean test test-qemu test-qemu-models test-arc
+.PHONY: all build apps nim-apps wasm-apps test-wasm iso iso-all qemu qemu-all qemu-gui qemu-debug gdb-attach symbolize run clean test test-valgrind test-asan test-qemu test-qemu-models test-devices test-arc
 
 # Default target: full cycle
 all: build iso qemu
@@ -231,38 +235,40 @@ $(ISO_ALL_OUT): $(addprefix build/kernel-,$(KERNEL_MODELS))
 	grub-mkrescue -o $(ISO_ALL_OUT) iso/
 	rm -rf iso
 
-# ── Run in QEMU (headless, serial only) ───────────────────────────
+# ── Run in QEMU — every target goes through tools/nimix_qemu.py ──────────────
+# DEVICES: comma list of blk,net,gpu,snd,input or "all" (virtio-pci).
+# Extra launcher flags: QEMU_ARGS="--pcap n.pcap --wav a.wav --log" etc.
 DISK ?= disk.img
-DISK_DRIVE = -drive if=none,file=$(DISK),format=raw,id=d0
-DISK_DEVICE = -device virtio-blk-pci,drive=d0
-DISK_FLAGS = $(if $(wildcard $(DISK)),$(DISK_DRIVE) $(DISK_DEVICE),)
+DEVICES ?= blk
+GDB_PORT ?= 1234
+LAUNCH = python3 tools/nimix_qemu.py run --bios $(OVMF) --mem $(QEMU_MEM) \
+         --disk $(DISK) --devices $(DEVICES) $(QEMU_ARGS)
 
 qemu: $(ISO_OUT) $(DISK)
-	qemu-system-x86_64 -cdrom $(ISO_OUT) -bios $(OVMF) \
-		$(DISK_FLAGS) \
-		-no-reboot -m $(QEMU_MEM)M -serial stdio -display none
+	$(LAUNCH) --iso $(ISO_OUT)
 
-# ── Run in QEMU with all kernel variants ───────────────────────────────────────────
 qemu-all: $(ISO_ALL_OUT) $(DISK)
-	qemu-system-x86_64 -cdrom $(ISO_ALL_OUT) -bios $(OVMF) \
-		$(DISK_FLAGS) \
-		-no-reboot -m $(QEMU_MEM)M -serial stdio -display none
+	$(LAUNCH) --iso $(ISO_ALL_OUT)
 
-# ── Run in QEMU (with VGA) ────────────────────────────────────────
+# Window + every virtio device (the virtio-gpu head shows `devtest gpu`).
 qemu-gui: $(ISO_OUT) $(DISK)
-	qemu-system-x86_64 -cdrom $(ISO_OUT) -bios $(OVMF) \
-		$(DISK_FLAGS) \
-		-no-reboot -m $(QEMU_MEM)M -serial stdio
+	$(LAUNCH) --iso $(ISO_OUT) --gui --devices all
 
-# ── Run in QEMU with GDB server (paused at start) ─────────────────
+# Paused at reset with the gdb stub; attach from another terminal: make gdb-attach
 qemu-debug: $(ISO_OUT) $(DISK)
-	@echo "GDB: target remote :1234  —  symbol file: build/kernel-monolithic"
-	qemu-system-x86_64 -cdrom $(ISO_OUT) -bios $(OVMF) \
-		$(DISK_FLAGS) \
-		-no-reboot -m $(QEMU_MEM)M -serial stdio -display none \
-		-s -S
+	$(LAUNCH) --iso $(ISO_OUT) --gdb wait --gdb-port $(GDB_PORT)
 
-# ── Alias ─────────────────────────────────────────────────────────
+# gdb with kernel symbols + NimixOS helpers (nimix-help). Build with DEBUG=1
+# for source lines. GDB_KERNEL= to pick another model's ELF.
+GDB_KERNEL ?= build/kernel-monolithic
+gdb-attach:
+	gdb -q -ex "set confirm off" -ex "file $(GDB_KERNEL)" -ex "source tools/gdb/nimix.gdb" \
+	    -ex "target remote :$(GDB_PORT)" -ex "nimix-help"
+
+# Symbolize a saved serial log: make symbolize LOG=serial.log [APP=build/apps/x.elf]
+symbolize:
+	python3 tools/symbolize.py $(LOG) --kernel $(GDB_KERNEL) $(if $(APP),--app $(APP),)
+
 run: all
 
 # ── Disk image management ─────────────────────────────────────────
@@ -293,50 +299,84 @@ disk-ls:
 # Uses --skipParentCfg to bypass kernel nim.cfg (-nostdlib, kernel.ld, etc.)
 TEST_FLAGS = --skipParentCfg --mm:refc --path:$(CURDIR) --nimblePath:$(HOME)/.nimble/pkgs2 -d:noSignalHandler
 
+HOST_TESTS = \
+  tests/test_log.nim \
+  tests/test_klog_ring.nim \
+  tests/test_vga_text.nim \
+  tests/test_traits.nim \
+  tests/test_ps2_keyboard.nim \
+  tests/test_ps2_mouse.nim \
+  tests/test_pic.nim \
+  tests/test_pci.nim \
+  tests/test_pit.nim \
+  tests/test_event_server.nim \
+  tests/test_driver_registry.nim \
+  tests/test_module_loader.nim \
+  tests/test_kernel_module_integration.nim \
+  tests/test_tss.nim \
+  tests/test_server_chan.nim \
+  tests/test_capability.nim \
+  tests/test_cap_registry.nim \
+  tests/test_region_allocator.nim \
+  tests/test_sip_heap.nim \
+  tests/test_zerocopy.nim \
+  tests/test_stdlib_shim.nim \
+  tests/test_dispatch_queue.nim \
+  tests/test_flatbuffers.nim \
+  tests/test_msgpack_chan.nim \
+  tests/test_mailbox.nim \
+  tests/test_audio_logic.nim \
+  tests/test_fs_logic.nim \
+  tests/test_virtio.nim \
+  tests/test_bit_intrinsics.nim \
+  tests/test_user_window.nim \
+  tests/test_ramfs.nim
+HOST_TESTS_TESTING = \
+  tests/test_osalloc.nim \
+  tests/test_fd_table.nim \
+  tests/test_sync_ipc.nim \
+  tests/test_sleep.nim
+HOST_TESTS_NOHW = \
+  tests/test_fatfs_write.nim \
+  tests/test_virtio_pci.nim \
+  tests/test_rtc.nim \
+  tests/test_syscall_table.nim \
+  tests/test_elf_loader.nim \
+  tests/test_vfs_btree.nim
+
+# $(call host_tests,<extra nim flags>,<runner>) — every host test once; with a
+# runner (e.g. valgrind) build only, then run the binary under it.
+define host_tests
+	@set -e; for t in $(HOST_TESTS); do \
+	  $(NIM) c $(if $(2),,-r) $(TEST_FLAGS) $(1) $$t; $(if $(2),$(2) ./$${t%.nim};) done
+	@set -e; for t in $(HOST_TESTS_TESTING); do \
+	  $(NIM) c $(if $(2),,-r) $(TEST_FLAGS) -d:testing $(1) $$t; $(if $(2),$(2) ./$${t%.nim};) done
+	@set -e; for t in $(HOST_TESTS_NOHW); do \
+	  $(NIM) c $(if $(2),,-r) $(TEST_FLAGS) -d:noKernelHardware $(1) $$t; $(if $(2),$(2) ./$${t%.nim};) done
+endef
+
 test:
 	@echo "=== NimixOS Test Suite ==="
-	$(NIM) c -r $(TEST_FLAGS) tests/test_log.nim
-	$(NIM) c -r $(TEST_FLAGS) tests/test_vga_text.nim
-	$(NIM) c -r $(TEST_FLAGS) tests/test_traits.nim
-	$(NIM) c -r $(TEST_FLAGS) tests/test_ps2_keyboard.nim
-	$(NIM) c -r $(TEST_FLAGS) tests/test_ps2_mouse.nim
-	$(NIM) c -r $(TEST_FLAGS) tests/test_pic.nim
-	$(NIM) c -r $(TEST_FLAGS) tests/test_pci.nim
-	$(NIM) c -r $(TEST_FLAGS) tests/test_pit.nim
-	$(NIM) c -r $(TEST_FLAGS) tests/test_event_server.nim
-	$(NIM) c -r $(TEST_FLAGS) tests/test_driver_registry.nim
-	$(NIM) c -r $(TEST_FLAGS) tests/test_module_loader.nim
-	$(NIM) c -r $(TEST_FLAGS) tests/test_kernel_module_integration.nim
-	$(NIM) c -r $(TEST_FLAGS) tests/test_tss.nim
-	$(NIM) c -r $(TEST_FLAGS) tests/test_server_chan.nim
-	$(NIM) c -r $(TEST_FLAGS) tests/test_capability.nim
-	$(NIM) c -r $(TEST_FLAGS) tests/test_cap_registry.nim
-	$(NIM) c -r $(TEST_FLAGS) tests/test_region_allocator.nim
-	$(NIM) c -r $(TEST_FLAGS) tests/test_sip_heap.nim
-	$(NIM) c -r $(TEST_FLAGS) tests/test_zerocopy.nim
-	$(NIM) c -r $(TEST_FLAGS) tests/test_stdlib_shim.nim
-	$(NIM) c -r $(TEST_FLAGS) -d:testing tests/test_osalloc.nim
-	$(NIM) c -r $(TEST_FLAGS) -d:testing tests/test_fd_table.nim
-	$(NIM) c -r $(TEST_FLAGS) -d:testing tests/test_sync_ipc.nim
-	$(NIM) c -r $(TEST_FLAGS) -d:testing tests/test_sleep.nim
-	$(NIM) c -r $(TEST_FLAGS) tests/test_dispatch_queue.nim
-	$(NIM) c -r $(TEST_FLAGS) tests/test_flatbuffers.nim
-	$(NIM) c -r $(TEST_FLAGS) tests/test_msgpack_chan.nim
-	$(NIM) c -r $(TEST_FLAGS) tests/test_mailbox.nim
-	$(NIM) c -r $(TEST_FLAGS) tests/test_audio_logic.nim
+	$(call host_tests,,)
 	$(NIM) c -r --skipParentCfg --mm:arc --panics:on --path:$(CURDIR) -d:noSignalHandler tests/test_cps_eval.nim
-	$(NIM) c -r $(TEST_FLAGS) tests/test_fs_logic.nim
-	$(NIM) c -r $(TEST_FLAGS) -d:noKernelHardware tests/test_fatfs_write.nim
-	$(NIM) c -r $(TEST_FLAGS) tests/test_virtio.nim
-	$(NIM) c -r $(TEST_FLAGS) -d:noKernelHardware tests/test_virtio_pci.nim
-	$(NIM) c -r $(TEST_FLAGS) -d:noKernelHardware tests/test_rtc.nim
-	$(NIM) c -r $(TEST_FLAGS) -d:noKernelHardware tests/test_syscall_table.nim
-	$(NIM) c -r $(TEST_FLAGS) -d:noKernelHardware tests/test_elf_loader.nim
-	$(NIM) c -r $(TEST_FLAGS) -d:noKernelHardware tests/test_vfs_btree.nim
-	$(NIM) c -r $(TEST_FLAGS) tests/test_bit_intrinsics.nim
-	$(NIM) c -r $(TEST_FLAGS) tests/test_user_window.nim
-	$(NIM) c -r $(TEST_FLAGS) tests/test_ramfs.nim
 	@echo "=== All tests passed ==="
+
+# ── Native debugging of host-testable code ───────────────────────────────────
+# Same host tests, built with the system allocator (-d:useMalloc) so the tools
+# see every allocation. valgrind: memcheck, any error fails the run.
+# asan: AddressSanitizer + UBSan (clang/gcc), aborts on the first error.
+VALGRIND ?= valgrind --error-exitcode=1 --leak-check=full --errors-for-leak-kinds=definite --quiet
+SAN_FLAGS = -d:useMalloc --debugger:native --passC:"-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined" --passL:"-fsanitize=address,undefined"
+
+test-valgrind:
+	@echo "=== Host tests under valgrind memcheck ==="
+	$(call host_tests,-d:useMalloc --debugger:native,$(VALGRIND))
+	@echo "=== valgrind: clean ==="
+
+test-asan:
+	@echo "=== Host tests under ASan + UBSan ==="
+	$(call host_tests,$(SAN_FLAGS),)
+	@echo "=== ASan/UBSan: clean ==="
 
 TEST_FLAGS_ARC = --skipParentCfg --mm:arc --panics:on --path:$(CURDIR) --path:$(CURDIR)/apps/nim --nimblePath:$(HOME)/.nimble/pkgs2 -d:noSignalHandler
 
@@ -363,6 +403,11 @@ test-qemu-models: nim-apps disk-add-apps $(addprefix nimixos-,$(addsuffix .iso,$
 	@for m in $(KERNEL_MODELS); do echo "=== model: $$m ==="; \
 	  python3 tests/qemu_harness.py --iso nimixos-$$m.iso --bios $(OVMF) \
 	    --disk $(DISK) --virtio-blk || exit 1; done
+
+# Every virtio device verified on the HOST (screendump pixels, wav tone, pcap
+# frame, injected keys) + crash reports symbolized. See tests/qemu_devices.py.
+test-devices: disk-add-apps $(ISO_OUT)
+	python3 tests/qemu_devices.py --iso $(ISO_OUT) --bios $(OVMF)
 
 # ── Structured in-kernel test suite ───────────────────────────────
 # Boots a testMode kernel, parses TEST PASS/FAIL/DONE from serial.

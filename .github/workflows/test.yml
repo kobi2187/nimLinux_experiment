@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0
-# NimixOS CI — build all 3 kernel models, ELF + WASM apps, run host tests,
+# NimixOS CI — build all 3 kernel models, ELF + WASM apps, run host tests
+# (plain, valgrind, ASan+UBSan),
 # the in-kernel structured suite, and the QEMU shell suite on every model.
 
 name: CI
@@ -29,7 +30,7 @@ jobs:
           sudo apt-get install -y -qq \
             qemu-system-x86 ovmf \
             grub-pc-bin grub-efi-amd64-bin grub-common xorriso mtools dosfstools \
-            gcc clang lld wasi-libc
+            gcc clang lld wasi-libc valgrind
           pip install --quiet wasmtime
 
       - name: Install Nim 2.2.4
@@ -48,6 +49,12 @@ jobs:
 
       - name: ARC / CPS tests (dispatcher, actor, MPSC ring)
         run: make test-arc
+
+      - name: Host tests under valgrind memcheck
+        run: make test-valgrind
+
+      - name: Host tests under ASan + UBSan
+        run: make test-asan
 
       - name: Build all 3 kernel models (checks heap alignment)
         run: make build
@@ -68,3 +75,7 @@ jobs:
       - name: QEMU shell suite on every kernel model
         run: make test-qemu-models OVMF=/usr/share/ovmf/OVMF.fd
         timeout-minutes: 30
+
+      - name: virtio devices verified on the host + serial crash reports
+        run: make test-devices OVMF=/usr/share/ovmf/OVMF.fd
+        timeout-minutes: 15
