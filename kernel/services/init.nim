@@ -32,6 +32,7 @@ import ../../drivers/rtc
 import ../../kern/interrupts
 import ../../arch/x86_64/syscall_gate
 import ../../kernel/abi/nimix_abi_impl   # user-fault policy
+import ../../kernel/abi/task_cleanup
 import ../../fs/fatfs
 import ../../fs/fatfs_write   # registerFatFs
 import ../../fs/ramfs         # registerRamFs
@@ -226,6 +227,7 @@ proc initSyscallGate*() =
   ## comes with ring 3: a CPU fault in a user task kills that task (like exit)
   ## instead of halting the machine — kernel state is intact.
   syscallGateInit()
+  installRegionReleaseHook()
   userFaultKill   = abiKillFaultingTask
   userStackBounds = abiCurrentTaskBounds
   klog(llInfo, "[SERVICES] ✓ Syscall gate ready (ring 0<->3)")

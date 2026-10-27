@@ -19,6 +19,16 @@ proc releaseTaskResources*(pid: uint32; regionSlot: int) =
       serverChanRelease(ch)
       cap.capRevoke(tok)
   eventReleaseOwner(pid)
+  cap.capRevokeAllOf(pid)
+  # Drop the owner's reference; the slot (and its user window) is released
+  # when the last capability on it goes too (regionOnRelease below).
   if regionSlot >= 0:
-    discard appRegionUserAccess(RegionHandle(regionSlot), false)
     regionFree(RegionHandle(regionSlot))
+
+proc revokeUserWindow(h: RegionHandle) {.nimcall.} =
+  discard appRegionUserAccess(h, false)
+
+proc installRegionReleaseHook*() =
+  ## A region's user window closes when its LAST reference goes, not when
+  ## its first owner exits — a task still holding a capability keeps access.
+  regionOnRelease = revokeUserWindow

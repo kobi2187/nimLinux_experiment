@@ -1,14 +1,21 @@
 # SPDX-License-Identifier: GPL-2.0
-## Tests for capGrantRegion, regionAddRef/DecRef, and memory capability rights.
+## Region capabilities: who may mint them, and how long the memory lives.
+##
+## Model: the owner holds one reference from regionAlloc; every region
+## capability holds another. regionFree drops the owner's reference and the
+## slot is recycled only when the last reference goes. The last three tests
+## are regressions for holes found 2026-10-27 (any task could mint a write
+## cap on any slot; a freed slot was reused while capabilities still named it).
 
 import ../kernel/cap/capability
 import ../mm/region_allocator
 
+var h: RegionHandle
+
 proc setup() =
   regionAllocInit()
   capTableInit()
-  # Allocate one region slot so slot 0 is valid
-  discard regionAlloc(4096)
+  h = regionAlloc(4096)                     # slot 0, owned by "pid 1"
 
 proc testGrantRegionValidSlotReturnsNonNull() =
   setup()
@@ -16,55 +23,81 @@ proc testGrantRegionValidSlotReturnsNonNull() =
   assert not tok.isNull, "capGrantRegion for valid slot must return non-null token"
   echo "PASS: capGrantRegion valid slot returns non-null token"
 
-proc testRefCountOneAfterGrant() =
+proc testOwnerHoldsOneReference() =
   setup()
-  discard capGrantRegion(0, 1, capMemRead)
-  assert regionRefCount(RegionHandle(0)) == 1, "ref count must be 1 after one grant"
-  echo "PASS: ref count is 1 after first grant"
-
-proc testRefCountTwoAfterSecondGrant() =
-  setup()
-  discard capGrantRegion(0, 1, capMemRead)
+  assert regionRefCount(h) == 1, "the owner's reference"
   discard capGrantRegion(0, 2, capMemRead)
-  assert regionRefCount(RegionHandle(0)) == 2, "ref count must be 2 after two grants"
-  echo "PASS: ref count is 2 after second grant"
+  discard capGrantRegion(0, 3, capMemRead)
+  assert regionRefCount(h) == 3, "owner + two capabilities"
+  echo "PASS: owner reference + one per capability"
 
-proc testRefCountDropsToOneAfterFirstRevoke() =
+proc testLastReferenceReleases() =
   setup()
-  let tok1 = capGrantRegion(0, 1, capMemRead)
-  discard capGrantRegion(0, 2, capMemRead)
-  capRevoke(tok1)
-  assert regionRefCount(RegionHandle(0)) == 1, "ref count must drop to 1 after first revoke"
-  echo "PASS: ref count drops to 1 after first revoke"
-
-proc testRefCountDropsToZeroAfterBothRevoked() =
-  setup()
-  let tok1 = capGrantRegion(0, 1, capMemRead)
-  let tok2 = capGrantRegion(0, 2, capMemRead)
-  capRevoke(tok1)
-  capRevoke(tok2)
-  assert regionRefCount(RegionHandle(0)) == 0, "ref count must drop to 0 after both revoked"
-  echo "PASS: ref count drops to 0 after both tokens revoked"
+  let t1 = capGrantRegion(0, 2, capMemRead)
+  let t2 = capGrantRegion(0, 3, capMemRead)
+  regionFree(h)                              # owner done
+  capRevoke(t1)
+  assert regionValid(h), "still referenced by t2"
+  capRevoke(t2)
+  assert not regionValid(h) and regionRefCount(h) == 0, "last reference releases"
+  echo "PASS: slot released only when the last reference goes"
 
 proc testGrantRegionInvalidSlotReturnsNullCap() =
   setup()
-  let tok = capGrantRegion(99, 1, capMemRead)
-  assert tok.isNull, "capGrantRegion for invalid slot must return NullCap"
-  echo "PASS: capGrantRegion invalid slot returns NullCap"
+  assert capGrantRegion(99, 1, capMemRead).isNull, "out of range"
+  regionFree(h)
+  assert capGrantRegion(0, 1, capMemRead).isNull, "freed slot"
+  echo "PASS: capGrantRegion on an invalid or freed slot returns NullCap"
 
 proc testGrantRegionMemWriteCapCheckPasses() =
   setup()
   let tok = capGrantRegion(0, 1, capMemWrite)
-  assert not tok.isNull, "capGrantRegion with capMemWrite must return non-null token"
-  assert capCheck(tok, capMemWrite), "capCheck must pass for capMemWrite"
-  echo "PASS: capGrantRegion with capMemWrite grants write right, capCheck passes"
+  assert not tok.isNull and capCheck(tok, capMemWrite)
+  echo "PASS: capMemWrite grant passes capCheck"
+
+proc testOnlyOwnerOrGrantHolderMayMint() =
+  setup()
+  assert capMayGrantRegion(1, ownSlot = 0, slot = 0), "owner may"
+  assert not capMayGrantRegion(99, ownSlot = -1, slot = 0), "a stranger may not"
+  discard capGrantRegion(0, 99, capMemGrant)
+  assert capMayGrantRegion(99, ownSlot = -1, slot = 0), "capMemGrant holder may"
+  echo "PASS: only the owner or a capMemGrant holder may mint region caps"
+
+proc testFreedWhileReferencedIsNotReused() =
+  setup()
+  let reader = capGrantRegion(0, 7, capMemRead)
+  regionFree(h)                              # owner exits
+  let next = regionAlloc(4096)
+  assert int(next) != int(h), "a referenced slot must not go to the next app"
+  assert capCheck(reader, capMemRead) and regionValid(h), "reader still sees the same memory"
+  echo "PASS: no reuse while a capability still names the slot"
+
+proc testDoubleFreeIgnored() =
+  setup()
+  regionFree(h)
+  regionFree(h)
+  let a = regionAlloc(4096)
+  let b = regionAlloc(4096)
+  assert int(a) != int(b), "a double free must not put the slot on the free list twice"
+  echo "PASS: double free ignored"
+
+proc testRevokeAllOfReleasesHeldRegions() =
+  setup()
+  discard capGrantRegion(0, 5, capMemRead)
+  discard capGrantRegion(0, 5, capMemWrite)
+  regionFree(h)
+  capRevokeAllOf(5)                          # pid 5 exits
+  assert not regionValid(h), "exit releases what the task held"
+  echo "PASS: task exit revokes its region caps"
 
 when isMainModule:
   testGrantRegionValidSlotReturnsNonNull()
-  testRefCountOneAfterGrant()
-  testRefCountTwoAfterSecondGrant()
-  testRefCountDropsToOneAfterFirstRevoke()
-  testRefCountDropsToZeroAfterBothRevoked()
+  testOwnerHoldsOneReference()
+  testLastReferenceReleases()
   testGrantRegionInvalidSlotReturnsNullCap()
   testGrantRegionMemWriteCapCheckPasses()
+  testOnlyOwnerOrGrantHolderMayMint()
+  testFreedWhileReferencedIsNotReused()
+  testDoubleFreeIgnored()
+  testRevokeAllOfReleasesHeldRegions()
   echo "All zerocopy/region-cap tests passed."

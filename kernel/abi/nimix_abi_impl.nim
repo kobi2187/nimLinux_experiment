@@ -197,8 +197,12 @@ proc abiSndDrain*(): int {.nimcall.} =
 # ── Timing ────────────────────────────────────────────────────────────────────
 
 proc abiGrantRegion*(slot: int; right: uint32): uint64 {.nimcall.} =
-  ## Mint a memory cap for the current task.
-  let pid = procTable.tasks[procTable.current].pid
+  ## Mint a memory cap for the current task — only on its own region or one
+  ## it holds capMemGrant for (0 otherwise). Rights outside the enum: 0.
+  let t = addr procTable.tasks[procTable.current]
+  let pid = t.pid
+  if right > uint32(high(cap.CapRight)) or
+     not cap.capMayGrantRegion(pid, int(t.regionSlot), slot): return 0
   let capRight = cap.CapRight(right)
   let tok = cap.capGrantRegion(slot, pid, capRight)
   uint64(tok)

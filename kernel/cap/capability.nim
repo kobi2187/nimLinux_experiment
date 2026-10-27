@@ -105,3 +105,21 @@ proc capCheck*(tok: CapToken; right: CapRight): bool =
   if slot < 0 or slot >= MaxCaps: return false
   let e = gCapTable.entries[slot]
   e.valid and e.token == tok and e.right == right
+
+proc capMayGrantRegion*(pid: uint32; ownSlot, slot: int): bool =
+  ## Who may mint a capability on region `slot`: the task whose region it is
+  ## (`ownSlot`), or a holder of a capMemGrant capability on that slot.
+  ## A slot number alone confers nothing.
+  if not regionValid(RegionHandle(slot)): return false
+  if slot == ownSlot: return true
+  for e in gCapTable.entries:
+    if e.valid and e.pid == pid and e.regionSlot == slot and e.right == capMemGrant:
+      return true
+  false
+
+proc capRevokeAllOf*(pid: uint32) =
+  ## Task exit: revoke every capability `pid` still holds (region caps drop
+  ## their reference, so memory others shared with it can be reclaimed).
+  for i in 0 ..< MaxCaps:
+    let e = gCapTable.entries[i]
+    if e.valid and e.pid == pid: capRevoke(e.token)
