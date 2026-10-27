@@ -42,7 +42,7 @@ block-on-mailbox/wake-on-deliver + dispatcher transport — network last.
 
 - [x] Phase A: virtio-gpu verified (screendump pixels) — plus snd/net/input.
 - [x] Phase B step 1: rasterizer + font + VT → framebuffer console (shell on screen, keyboard).
-- [ ] Phase B step 2 / C: app_server owns the display; terminal app in a window.
+- [→] Phase B step 2 / C: app_server API PROPOSED (docs/proposals/app_server_api.md) — awaiting agreement before freezing; then K1–K3 kernel prerequisites, SPAWN app_server.
 - [x] User-mode CPU faults kill the task (system continues); kernel faults halt.
 - [ ] Dispatcher in the app path: apps → `dispatch` → servers (today WASM apps
   talk to servers directly; route via dispatcher with QoS + cap-gating, M2).
