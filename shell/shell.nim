@@ -22,6 +22,7 @@ import ../kernel/abi/app_args
 import ../mm/user_window
 import devtest
 import ../core/klog_ring
+import ../kernel/console/console_input
 import ../arch/x86_64/syscall_gate
 import ../mm/region_allocator
 import ../mm/sip_heap
@@ -452,7 +453,7 @@ proc runShell*(physMgr: PhysicalMemManager) =
   var inputLen = 0
   kprint(ShellPrompt)
   while true:
-    let c = defaultSerial.getChar()
+    let c = consoleGetChar()         # serial or keyboard; flushes the display
     case c
     of '\r', '\n':       handleEnter(inputBuf, inputLen, physMgr)
     of '\b', char(127):  handleBackspace(inputBuf, inputLen)

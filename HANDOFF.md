@@ -1,6 +1,19 @@
 # HANDOFF.md — Session Exit Note
 
-Last updated: 2026-10-26 (session 9d, branch `ccr-56330414-wo65nx`, cloud container)
+Last updated: 2026-10-27 (session 9e, branch `ccr-56330414-wo65nx`, cloud container)
+
+## Session 9e — framebuffer console (roadmap B step 1), user-fault kill
+
+The shell now runs on the virtio-gpu display as well as serial, and reads
+keys from the QEMU window: `gfx/` (canvas, Spleen 8x16 font, UTF-8),
+`term/` (VT100 subset + incremental renderer), `input/` (evdev keymap) are
+pure libs; `kernel/console/` is the fbcon-style consumer. The pixel test
+(`tools/term_replay.nim`: host renders the same byte stream) caught a real
+race (render vs. concurrent ring-3 output) → snapshot flush. Ring-3 faults
+kill only the task (DECISIONS §User-mode faults). See DECISIONS §Roadmap B.
+
+**Next:** roadmap C — app_server owning the display (windows as region
+caps), terminal app in a window reusing term/gfx; input_server.
 
 ## Session 9d — QEMU integration, virtio verified on the host, debug tooling
 

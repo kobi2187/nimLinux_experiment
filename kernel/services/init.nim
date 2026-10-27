@@ -36,6 +36,7 @@ import ../../fs/fatfs
 import ../../fs/fatfs_write   # registerFatFs
 import ../../fs/ramfs         # registerRamFs
 import ../../shell/shell
+import ../console/fb_console
 
 when defined(amd64) or defined(x86_64):
   import ../../arch/x86_64/cpu_primitives
@@ -282,6 +283,8 @@ proc initServices*() =
   klog(llInfo, "[SERVICES] Stage 3: Drivers + I/O")
   initBuiltinDrivers()
   initVirtioDevices()   # devices first: modules (FatFs mount) use them
+  if fbConsoleInit():    # from here on, console output also shows on the display
+    klog(llInfo, "[SERVICES] ✓ framebuffer console (virtio-gpu)")
   initModules()
   initFilesystems()
 

@@ -253,18 +253,29 @@ proc virtioGpuInit*(): bool =
 
 # ── Presentation ──────────────────────────────────────────────────────────────
 
-proc virtioGpuPresent*() =
+proc virtioGpuPresentRect*(x, y, w, h: int) =
+  ## Copy one rectangle of the framebuffer to the host and show it. Small
+  ## rects keep a text console cheap (a full 1280x800 frame is 4 MB).
   if not gGpu.ready: return
-  var xfer = GpuTransferToHost2d(hdr: mkHdr(GpuCmdTransferToHost2d),
-    r: fullRect(gGpu.width, gGpu.height), offset: 0, resourceId: GpuResourceId)
+  let x0 = clamp(x, 0, int(gGpu.width))
+  let y0 = clamp(y, 0, int(gGpu.height))
+  let x1 = clamp(x + w, 0, int(gGpu.width))
+  let y1 = clamp(y + h, 0, int(gGpu.height))
+  if x1 <= x0 or y1 <= y0: return
+  let r = GpuRect(x: uint32(x0), y: uint32(y0), w: uint32(x1 - x0), h: uint32(y1 - y0))
+  # offset = where the rect's first pixel lives in the backing store.
+  var xfer = GpuTransferToHost2d(hdr: mkHdr(GpuCmdTransferToHost2d), r: r,
+    offset: (uint64(y0) * uint64(gGpu.width) + uint64(x0)) * 4, resourceId: GpuResourceId)
   var resp1: GpuCtrlHdr
   if not (gpuSubmitCmd(addr xfer, uint32(sizeof(xfer)), addr resp1, uint32(sizeof(resp1))) and
           gpuCheck("virtio-gpu: TRANSFER_TO_HOST_2D failed", resp1)): return
-  var flush = GpuResourceFlush(hdr: mkHdr(GpuCmdResourceFlush),
-    r: fullRect(gGpu.width, gGpu.height), resourceId: GpuResourceId)
+  var flush = GpuResourceFlush(hdr: mkHdr(GpuCmdResourceFlush), r: r, resourceId: GpuResourceId)
   var resp2: GpuCtrlHdr
   if gpuSubmitCmd(addr flush, uint32(sizeof(flush)), addr resp2, uint32(sizeof(resp2))):
     discard gpuCheck("virtio-gpu: RESOURCE_FLUSH failed", resp2)
+
+proc virtioGpuPresent*() =
+  virtioGpuPresentRect(0, 0, int(gGpu.width), int(gGpu.height))
 
 proc virtioGpuFbPtr*(): ptr UncheckedArray[uint32] =
   if not gGpu.ready: return nil

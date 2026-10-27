@@ -288,6 +288,9 @@ TEST_FLAGS = --skipParentCfg --mm:refc --path:$(CURDIR) --nimblePath:$(HOME)/.ni
 HOST_TESTS = \
   tests/test_log.nim \
   tests/test_klog_ring.nim \
+  tests/test_gfx.nim \
+  tests/test_term.nim \
+  tests/test_keymap.nim \
   tests/test_vga_text.nim \
   tests/test_traits.nim \
   tests/test_ps2_keyboard.nim \
@@ -392,8 +395,17 @@ test-qemu-models: nim-apps disk-add-apps $(addprefix nimixos-,$(addsuffix .iso,$
 
 # Every virtio device verified on the HOST (screendump pixels, wav tone, pcap
 # frame, injected keys) + crash reports symbolized. See tests/qemu_devices.py.
-test-devices: disk-add-apps $(ISO_OUT)
+test-devices: disk-add-apps $(ISO_OUT) build/term_replay
 	python3 tests/qemu_devices.py --iso $(ISO_OUT) --bios $(OVMF)
+
+# Host renderer of a console byte stream (same term/gfx code as the kernel).
+build/term_replay: tools/term_replay.nim term/vt.nim term/term_render.nim gfx/canvas.nim gfx/bitmap_font.nim gfx/font_spleen8x16.nim gfx/utf8.nim
+	@mkdir -p build
+	$(NIM) c --skipParentCfg --skipProjCfg --hints:off --mm:arc -d:release -o:$@ $<
+
+# Regenerate the console font from its BDF source.
+gfx/font_spleen8x16.nim: vendor/fonts/spleen-8x16.bdf tools/bdf2nim.py
+	python3 tools/bdf2nim.py $< spleen8x16 > $@
 
 # ── Structured in-kernel test suite ───────────────────────────────
 # Boots a testMode kernel, parses TEST PASS/FAIL/DONE from serial.

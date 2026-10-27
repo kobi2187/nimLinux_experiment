@@ -38,8 +38,8 @@ Tags: CLEAR = path obvious | FUZZY = outcome known, path uncertain | OPEN = unde
 | 8 | CLEAR | ELF loader: validate segment fits within allocated region before mapping | oversized segment returns error, no silent overwrite |
 | 6 | CLEAR | ELF loader: R_X86_64_GLOB_DAT + R_X86_64_JUMP_SLOT relocations | dynamically-linked ELF loads and runs |
 | 7 | CLEAR | ELF loader: strip PT_INTERP silently | ELF with PT_INTERP loads without error |
-| 60 | CLEAR | Software rasterizer: drawRect/Line/fillRect/putPixel/blitBitmap/fillTriangle into uint32* framebuffer | visual output in QEMU VGA |
-| 61 | CLEAR | Font rendering: stb_truetype + bitmap fallback → drawText(fb, x, y, str, size, color) | text renders in framebuffer |
+| 60 | DONE 2026-10-27 | Software rasterizer `gfx/canvas.nim` (fillTriangle still open) | screendump == host render (`make test-devices`) |
+| 61 | DONE 2026-10-27 | Bitmap font (Spleen 8x16) + drawText; TTF via stb_truetype deferred to userspace | text renders in framebuffer |
 | 24 | CLEAR | stdlib shim: osenv.nim — stub getenv/putenv (return nil/false) | msgpack4nim compiles under --os:nimix |
 
 ## Layer 4 — IPC encoding
@@ -98,13 +98,13 @@ Tags: CLEAR = path obvious | FUZZY = outcome known, path uncertain | OPEN = unde
 | 12 | CLEAR | app_server skeleton: register window handles, route input to focused app | window creation request succeeds |
 | 45 | CLEAR | audio_server ELF (duplicate detail entry; see layer5 task 57) | |
 | 62 | CLEAR | app_server (full compositor): create/destroy windows, z-order, focus, route input; 'app' channel | two windows, correct input routing |
-| 64 | CLEAR | Terminal emulator window: VT100 subset in GUI window, based on stb_truetype | shell runs in a window |
+| 64 | PARTIAL | VT100 subset + renderer DONE (`term/`), shell on the fb console; the *window* waits on app_server | shell runs in a window |
 
 ## Layer 8 — GUI + raylib
 
 | TW# | Tag | Description | Done-check |
 |-----|-----|-------------|-----------|
-| 15 | CLEAR | virtio-gpu linear framebuffer init: set mode, clear screen | framebuffer appears in qemu-gui |
+| 15 | DONE 2026-10-27 | virtio-gpu framebuffer + damaged-rect present | framebuffer appears in qemu-gui |
 | 16 | CLEAR | (see layer3 task 60 — software rasterizer) | |
 | 17 | CLEAR | (see layer3 task 61 — font rendering) | |
 | 18 | CLEAR | Window manager: title bar, z-order, drag, basic compositor | windows draggable |

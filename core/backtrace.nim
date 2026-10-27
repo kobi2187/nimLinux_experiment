@@ -47,5 +47,7 @@ proc currentRbp*(): uint64 {.inline.} =
   {.emit: "asm volatile(\"mov %%rbp, %0\" : \"=r\"(`result`));".}
 
 proc nimixPrintBacktraceHere*() {.exportc, noinline.} =
-  ## Backtrace of the caller's stack (used by rtl_stubs.c exit/abort).
+  ## Backtrace of the caller's stack (used by rtl_stubs.c exit/abort), then
+  ## make the report visible on the display console as well.
   printBacktrace(0'u64, currentRbp())
+  consoleFlushNow()

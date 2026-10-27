@@ -442,6 +442,7 @@ proc fatalExceptionHandler*(ctx: ptr ExceptionContext) =
   {.emit: "asm volatile(\"cli\");".}
   let user = (ctx.cs and 3) == 3
   printCrashReport(ctx, user)
+  consoleFlushNow()                         # show it on the display too
   if user and userFaultKill != nil:
     userFaultKill()                         # never returns
   defaultSerial.putString("=== halted (symbolize: tools/symbolize.py <serial log>) ===\n")

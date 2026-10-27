@@ -5,6 +5,9 @@
 Each device test makes the guest do something with a real effect outside the
 VM, then checks that effect on the host — not the guest's word for it:
 
+    console shell output  → screendump equals the serial byte stream rendered
+                            on the host by the same term/gfx code; keys typed
+                            on the virtio keyboard reach the shell
     gpu    devtest gpu    → QMP screendump of the virtio-gpu head: 4 colour bars
     snd    devtest snd    → QEMU wav audiodev recording: ~440 Hz square wave
     net    devtest net    → QEMU filter-dump pcap: our UDP marker frame
@@ -126,6 +129,27 @@ def check_snd(wav):
     return f"{len(seg)} frames, {hz:.0f} Hz"
 
 
+CONSOLE_START = "[SERVICES] \u2713 framebuffer console".encode()
+REPLAY = os.path.join(ROOT, "build/term_replay")
+
+
+def check_console(serial: bytes, ppm: str, tmp: str) -> str:
+    """The display must equal the console byte stream rendered on the host
+    by the same term/gfx code (tools/term_replay.nim) — pixel for pixel."""
+    start = serial.index(CONSOLE_START)
+    start = serial.rindex(b"\n", 0, start) + 1          # the mirror starts at this line
+    stream = os.path.join(tmp, "console.bin")
+    open(stream, "wb").write(serial[start:])
+    w, h, shown = read_ppm(ppm)
+    want = os.path.join(tmp, "console-want.ppm")
+    subprocess.run([REPLAY, stream, str(w), str(h), want], check=True)
+    expected = read_ppm(want)[2]
+    if shown != expected:
+        bad = sum(1 for i in range(0, len(shown), 3) if shown[i:i + 3] != expected[i:i + 3])
+        raise AssertionError(f"{bad} pixels differ from the host replay ({ppm} vs {want})")
+    return f"{w}x{h} matches host replay of {len(serial) - start} console bytes"
+
+
 def check_net(pcap):
     data = open(pcap, "rb").read()
     assert NET_MARKER in data, "marker frame not in pcap"
@@ -158,6 +182,21 @@ def test_devices(tmp, iso, bios) -> list:
             except Exception as e:             # noqa: BLE001 — report and continue
                 results.append((name, False, str(e)))
 
+        def console_check():
+            g.run("version")                       # typed on serial
+            # ls.elf (ring 3) writes while the shell task renders: the race
+            # the console's snapshot flush exists for.
+            g.run("ls", until="app exit code")
+            mark = len(g.out)
+            for k in "version":                    # typed on the virtio keyboard
+                g.qmp.send_key(k)
+            g.qmp.send_key("ret")
+            assert g.wait("NimixOS v", 15, mark), "keyboard input did not reach the shell"
+            g.wait(PROMPT, 10, mark)
+            time.sleep(0.5)                        # let the console's batched flush land
+            g.qmp.screendump(ppm, device="gpu0")
+            return check_console(bytes(g.out), ppm, tmp)
+        step("console", None, "", console_check)   # before gpu: devtest paints over it
         step("gpu", "devtest gpu", "bars presented",
              lambda: (g.qmp.screendump(ppm, device="gpu0"), check_gpu(ppm))[1])
         step("snd", "devtest snd", "in flight 0", lambda: "recorded")

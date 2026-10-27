@@ -1,6 +1,15 @@
 # STATE.md — Current Status
 
-Last updated: 2026-10-26 (session 9d, branch `ccr-56330414-wo65nx`)
+Last updated: 2026-10-27 (session 9e, branch `ccr-56330414-wo65nx`)
+
+## Just landed — roadmap B step 1: graphics libs + framebuffer console (session 9e)
+
+- `gfx/` canvas + Spleen 8x16 bitmap font, `term/` VT100 subset + incremental
+  renderer, `input/` evdev keymap — pure libraries, host-tested.
+- Kernel framebuffer console: everything on serial also shows on the
+  virtio-gpu display; the shell takes keys from the QEMU window
+  (`make qemu-gui`). Verified pixel-exact against a host replay.
+- Ring-3 faults kill only the task; trap-frame register order fixed.
 
 ## Just landed — QEMU integration + debugging (session 9d)
 
@@ -22,7 +31,7 @@ Last updated: 2026-10-26 (session 9d, branch `ccr-56330414-wo65nx`)
 ## Verified (Nim 2.2.4, QEMU 8.2.2 TCG, OVMF)
 
 `make test` ✅ · `test-arc` ✅ · `test-valgrind` ✅ · `test-asan` ✅ ·
-`test-wasm` ✅ · `test-devices` **10/10** · `test-structured` **41/41** ·
+`test-wasm` ✅ · `test-devices` **11/11** · `test-structured` **41/41** ·
 `test-qemu-models` **16/16 × 3 models**.
 
 ## Now / Next
@@ -32,7 +41,8 @@ Roadmap A–E (approved 8b): A) reality audit + virtio-gpu verify → B) rasteri
 block-on-mailbox/wake-on-deliver + dispatcher transport — network last.
 
 - [x] Phase A: virtio-gpu verified (screendump pixels) — plus snd/net/input.
-- [ ] Phase B: rasterizer + font on virtio-gpu → GUI terminal.
+- [x] Phase B step 1: rasterizer + font + VT → framebuffer console (shell on screen, keyboard).
+- [ ] Phase B step 2 / C: app_server owns the display; terminal app in a window.
 - [x] User-mode CPU faults kill the task (system continues); kernel faults halt.
 - [ ] Dispatcher in the app path: apps → `dispatch` → servers (today WASM apps
   talk to servers directly; route via dispatcher with QoS + cap-gating, M2).

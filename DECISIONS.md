@@ -1001,3 +1001,45 @@ purpose; the Makefile's per-tool rules became one pattern rule (`NIM_TOOLS`).
 
 Verified: `make test-devices` 10/10 (two user faults in one boot, shell alive,
 region reused, frames symbolized to nullWrite/invalidOpcode via --app).
+
+## Roadmap B, step 1: rasterizer, bitmap font, VT terminal, framebuffer console (2026-10-27)
+
+**Boundary (reversible, logged for the human):** the drawing and terminal
+code are *libraries* with no kernel imports — `gfx/` (canvas, UTF-8, bitmap
+font), `term/` (VT model, incremental renderer), `input/` (evdev keymap) —
+host-tested and usable unchanged by a userspace app_server / terminal app.
+Their first consumer is a kernel **framebuffer console** (`kernel/console/`),
+the fbcon equivalent: a basis prerequisite (see the principles: "some
+prerequisites are allowed to enable the basis"), not GUI policy. The GUI
+terminal *app* in a window comes with app_server (roadmap C) and reuses the
+same libs; the kernel console can then become the fallback/boot console.
+
+SURVEY:
+- Font — adopted **Spleen 8x16** (BSD-2, Frederic Cambus; vendored BDF +
+  licence; `tools/bdf2nim.py` → `gfx/font_spleen8x16.nim`, 351 glyphs:
+  ASCII, Latin-1, box drawing). Rejected for the console: stb_truetype
+  (needs libm + malloc + a TTF; stays vendored for userspace TTF later),
+  font8x8 (too small at 1280x800), Terminus (OFL, no gain over Spleen),
+  Unifont (huge).
+- VT parser — built a subset on Paul Williams' DEC parser states. Rejected
+  libvterm (~10k LOC, libc + malloc — far beyond a VT100 subset) and st's
+  parser (entangled with X11). Fixed storage, no allocation.
+- Rasterizer — built (clipped fill/rect/line/1-bpp blit/scroll, ~120 lines).
+  raylib's software renderer stays the plan for apps (task 41) — it needs a
+  platform layer and libc we don't have in-kernel.
+
+Mechanism: `serial.putChar` gains a `consoleMirror` hook (core stays
+dependency-free); output updates only the character grid; the shell's idle
+loop (`consoleGetChar`, which also reads keys from the `input` topic via the
+keymap) flushes at most every 2 ticks, presenting only the damaged rectangle
+(`virtioGpuPresentRect`). Crash reports call `consoleFlushNow` so they are
+visible on screen.
+
+**Race found by the pixel test:** ring-3 apps write (and scroll) the grid
+while the shell task renders it, so rows shifted under the renderer and
+damage was lost (duplicated lines, gaps). The flush now copies the grid and
+takes its damage with interrupts off (~190 KB memcpy) and renders the copy.
+
+Verified: `make test-devices` 11/11 — the screen equals the serial byte
+stream rendered on the host by the same code (`tools/term_replay.nim`),
+pixel for pixel, with keyboard input and concurrent ring-3 output.
