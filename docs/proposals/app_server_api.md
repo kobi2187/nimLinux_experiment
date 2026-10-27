@@ -40,6 +40,15 @@ unit of memory and capabilities.
 
 ## 3. Surfaces — shared memory, lock-free
 
+> **Superseded in part by `docs/proposals/bulk_data.md` (2026-10-27):** no
+> ad-hoc shared region. A surface is a swapchain of *buffers*: the app
+> **moves** a buffer to app_server on commit and gets it back on release, so
+> the two sides never touch the same pixels at once (enforced, not promised).
+> The control block's counters become messages on the control channel, and
+> the event ring below becomes a kernel **ring** (producer end held by the
+> server, consumer end by the app). The frame protocol, damage rects, and
+> triple buffering are unchanged. The layout below is kept for reference.
+
 A window's pixels live in a **surface region** that the *client* allocates
 (memory is charged to the app; the server can't be made to allocate) and
 grants to app_server with a region capability (refcounted: a dying client

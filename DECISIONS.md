@@ -1043,3 +1043,20 @@ takes its damage with interrupts off (~190 KB memcpy) and renders the copy.
 Verified: `make test-devices` 11/11 — the screen equals the serial byte
 stream rendered on the host by the same code (`tools/term_replay.nim`),
 pixel for pixel, with keyboard input and concurrent ring-3 output.
+
+## Region capabilities: ownership + lifetime holes fixed (2026-10-27)
+
+Human asked for big data to move formally, with no unsafe shared memory, and
+asked us to *test* what exists. The region-capability "zero-copy" mechanism
+was a sketch. A probe showed: (1) `abiGrantRegion` let any task mint a
+write cap on any slot number; (2) owner exit freed the slot while caps still
+named it, and the next app was given that memory (cross-app use-after-free);
+(3) freed handles still read as valid, and exiting tasks leaked every cap
+(including the spawn-time `ipcCap`). Fixed locally, with no API change:
+the owner holds a reference from `regionAlloc`; a slot is recycled, and its
+user window closed (`regionOnRelease`), only at the last reference; only
+the owner or a `capMemGrant` holder may mint (`capMayGrantRegion`); exit
+revokes all caps (`capRevokeAllOf`). Regressions in `tests/test_zerocopy.nim`.
+Still open: rights are not enforced on access, and tokens are global. The
+formal model (owned / move / lend / sealed buffers + typed rings, enforced by
+page rights or the type system) is PROPOSED in docs/proposals/bulk_data.md.
