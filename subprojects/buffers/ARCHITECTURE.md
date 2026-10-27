@@ -9,10 +9,10 @@ procs `bufCreate/Map/Unmap/Size/State/Seal/Return/Close`, `msgSend/msgRecv`,
 Today it is a stub returning `beNotImplemented`.
 
 ## Module tree (proposed starting map — this orchestrator may redraw it)
-- `state`    [PLANNED] pure ownership state machine: buffers, per-task handle
+- `state`    [BUILT `ipc/buffers/state.nim`] pure ownership state machine: buffers, per-task handle
   tables, lends, seals, refcounts, budgets. Host-testable; the heart.
-- `arena`    [PLANNED] Stage A: 128 MB arena of 2 MB blocks (allocation, budget charge).
-- `ring`     [PLANNED] session rings over `ipc/mpsc_ring` semantics; staging,
+- `arena`    [BUILT `ipc/buffers/arena.nim`] Stage A: 128 MB arena of 2 MB blocks (allocation, budget charge).
+- `ring`     [BUILT `ipc/buffers/ring.nim`] session rings over `ipc/mpsc_ring` semantics; staging,
   `ringSubmit` validation, mailbox wake.
 - `enforce/` [PLANNED] `BufEnforcer` per model: `sasos` (no-op + owned `Buf`
   type with `=copy` error), `mono` (table), `micro` (PDE rights per block at
@@ -34,4 +34,5 @@ Today it is a stub returning `beNotImplemented`.
 - none
 
 ## Drift log
+- 2026-10-27: the frozen types moved to `ipc/buffers/types.nim` (re-exported by `ipc/buffers.nim`; API unchanged) so implementation modules share them without a cycle.
 - 2026-10-27: spawned from the parent with the frozen API → parent DECISIONS §Bulk data FROZEN.

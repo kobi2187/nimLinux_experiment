@@ -289,6 +289,9 @@ HOST_TESTS = \
   tests/test_log.nim \
   tests/test_klog_ring.nim \
   tests/test_buffers_api.nim \
+  tests/test_buffers_state.nim \
+  tests/test_buffers_arena.nim \
+  tests/test_buffers_ring.nim \
   tests/test_gfx.nim \
   tests/test_term.nim \
   tests/test_keymap.nim \

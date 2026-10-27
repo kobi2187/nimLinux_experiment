@@ -70,7 +70,7 @@
 | SIP chan | `ipc/sip_chan.nim` | BUILT | SASOS direct-copy channel |
 | Event server | `kernel/event_server.nim` | BUILT | pub/sub, nimixEventSubscribe/Poll |
 | MsgPack (kernel) | `kernel/ipc/msgpack_chan.nim` | BUILT | hand-rolled, no stdlib, `--os:any` |
-| **Buffers (bulk data)** | `ipc/buffers.nim` (frozen API, stub) | **SPAWNED** → `subprojects/buffers/` | `bufCreate/Map/Unmap/Seal/Return/Close`, `msgSend/msgRecv` with ≤4 out-of-band handles (`tmMove/tmLend/tmShare/tmTransit`), `bufRefCheck`, session rings `ringCreate/Push/Submit/Pop` (256 B slots: ≤240 B inline or a 12 B `BufRef`), `budgetAvailable`, per-model `BufEnforcer` hook. Spec: docs/proposals/bulk_data.md (FROZEN) |
+| **Buffers (bulk data)** | `ipc/buffers.nim` (frozen API, stub) + `ipc/buffers/` (impl: `state`, `arena`, `ring` BUILT) | **SPAWNED** → `subprojects/buffers/` (B1–B4 done) | `bufCreate/Map/Unmap/Seal/Return/Close`, `msgSend/msgRecv` with ≤4 out-of-band handles (`tmMove/tmLend/tmShare/tmTransit`), `bufRefCheck`, session rings `ringCreate/Push/Submit/Pop` (256 B slots: ≤240 B inline or a 12 B `BufRef`), `budgetAvailable`, per-model `BufEnforcer` hook. Spec: docs/proposals/bulk_data.md (FROZEN) |
 | Region caps (legacy) | `kernel/cap/capability.nim` + `mm/region_allocator.nim` | BUILT, to be replaced | owner ref + last-reference release; `capMayGrantRegion`. App *images* keep regions; the data plane moves to buffers |
 
 ### Drivers
