@@ -358,7 +358,8 @@ test:
 # Same host tests, built with the system allocator (-d:useMalloc) so the tools
 # see every allocation. valgrind: memcheck, any error fails the run.
 # asan: AddressSanitizer + UBSan (clang/gcc), aborts on the first error.
-VALGRIND ?= valgrind --error-exitcode=1 --leak-check=full --errors-for-leak-kinds=definite --quiet
+VALGRIND ?= valgrind --error-exitcode=1 --leak-check=full --errors-for-leak-kinds=definite --quiet \
+           --suppressions=$(CURDIR)/tests/valgrind.supp   # Nim refc stack scan only
 SAN_FLAGS = -d:useMalloc --debugger:native --passC:"-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined" --passL:"-fsanitize=address,undefined"
 
 test-valgrind:
