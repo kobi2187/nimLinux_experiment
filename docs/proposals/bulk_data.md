@@ -1,6 +1,6 @@
 # Bulk data: buffers, handles, rings — proposal v2 (NOT frozen)
 
-Status: **PROPOSED 2026-10-27, v2**. The requirement: one general, explicit,
+Status: **FROZEN 2026-10-27 (v2)** — all decisions agreed; API `ipc/buffers.nim`, implemented by `subprojects/buffers/`. The requirement: one general, explicit,
 formal mechanism for big data, with no copying through messages and no
 unsafe shared memory. Decisions needed are in §10.
 

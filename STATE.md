@@ -42,7 +42,9 @@ block-on-mailbox/wake-on-deliver + dispatcher transport — network last.
 
 - [x] Phase A: virtio-gpu verified (screendump pixels) — plus snd/net/input.
 - [x] Phase B step 1: rasterizer + font + VT → framebuffer console (shell on screen, keyboard).
-- [→] Phase B step 2 / C: app_server API agreed in principle; bulk-data model PROPOSED v2 (docs/proposals/bulk_data.md: owned/sealed buffers, two size lanes, dispatcher-brokered sessions, batched ownership flips, budgets follow ownership) — awaiting decisions, then SPAWN buffers + app_server.
+- [x] Bulk-data API FROZEN (`ipc/buffers.nim`, spec docs/proposals/bulk_data.md v2); `subprojects/buffers` SPAWNED (first task: SURVEY). VISION Q6 resolved.
+- [ ] buffers sub-project delivers (state machine → arena → rings → enforcement → ABI/WASM).
+- [ ] SPAWN app_server on top of buffers (protocol agreed, freeze at spawn).
 - [x] Region capability holes fixed (any-task minting, use-after-free on owner exit, leaked caps) — tests/test_zerocopy.nim.
 - [x] User-mode CPU faults kill the task (system continues); kernel faults halt.
 - [ ] Dispatcher in the app path: apps → `dispatch` → servers (today WASM apps

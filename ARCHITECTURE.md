@@ -70,6 +70,8 @@
 | SIP chan | `ipc/sip_chan.nim` | BUILT | SASOS direct-copy channel |
 | Event server | `kernel/event_server.nim` | BUILT | pub/sub, nimixEventSubscribe/Poll |
 | MsgPack (kernel) | `kernel/ipc/msgpack_chan.nim` | BUILT | hand-rolled, no stdlib, `--os:any` |
+| **Buffers (bulk data)** | `ipc/buffers.nim` (frozen API, stub) | **SPAWNED** → `subprojects/buffers/` | `bufCreate/Map/Unmap/Seal/Return/Close`, `msgSend/msgRecv` with ≤4 out-of-band handles (`tmMove/tmLend/tmShare/tmTransit`), `bufRefCheck`, session rings `ringCreate/Push/Submit/Pop` (256 B slots: ≤240 B inline or a 12 B `BufRef`), `budgetAvailable`, per-model `BufEnforcer` hook. Spec: docs/proposals/bulk_data.md (FROZEN) |
+| Region caps (legacy) | `kernel/cap/capability.nim` + `mm/region_allocator.nim` | BUILT, to be replaced | owner ref + last-reference release; `capMayGrantRegion`. App *images* keep regions; the data plane moves to buffers |
 
 ### Drivers
 
@@ -189,11 +191,17 @@ virtio-blk ← fs_server (replaces ATA PIO)
 virtio-sound ← audio_server
 ```
 
-**Zero-copy data path:**
+**Zero-copy data path (frozen 2026-10-27, implemented by subprojects/buffers):**
 ```
-fs_server fills region slot → mints capMemRead → sends token (MsgPack tiny)
-app: regionOpen(token) → (ptr, len) → direct read → regionClose(token)
+read:   app bufCreate (own budget) ──msgSend(req, [h: tmLend])──▶ dispatcher ──(tmTransit)──▶ fs_server
+        fs_server bufMap → fill → reply ──▶ lend ends, app owns the filled buffer again
+stream: dispatcher brokers a session → each side gets one ring end
+        producer ringPush × n → ringSubmit (1 kernel call: validate, flip ownership, wake consumer actor)
+small:  ≤240 B rides inline in the message / ring slot (copied; no handle)
 ```
+Enforcement per model (`BufEnforcer`): SASOS = type system (no-op hook),
+monolithic = ownership table, microkernel = page rights flipped per 2 MB
+block (Stage A) → per-app CR3 (Stage B, next kernel milestone).
 
 ---
 
@@ -209,7 +217,7 @@ later: app_server owns the display; GUI terminal app = same term/gfx libs in a w
 
 | Seam | Tension | Expected move |
 |------|---------|--------------|
-| Address spaces | One shared space; per-region User windows | Per-app CR3 (VISION open question 6) |
+| Address spaces | One shared space; per-region User windows | Stage A buffer page rights per switch → per-app CR3 (Stage B, decided 2026-10-27) |
 | Blocking in syscalls | Interim `sti;hlt` (waitForTick) | Phase E block-on-mailbox / wake-on-deliver |
 | Server-owned channel lifetime | Channel + cap survive the owning server's exit | Release on task exit (cap revocation by pid) |
 | Boot sequence | disk mount timing vs server spawn | Milestone 1: resolve open question #1 |
@@ -217,6 +225,7 @@ later: app_server owns the display; GUI terminal app = same term/gfx libs in a w
 | virtio-gpu | driver verified; app_server not yet | Milestone 5 / roadmap B |
 | Virtqueue depth | one fixed 64-entry size for all queues | per-queue size if a device needs depth (net throughput) |
 | Display ownership | kernel fb console draws directly on the framebuffer | app_server owns the display; kernel console becomes the boot/fallback console (roadmap C) |
+| Region tokens → buffer handles | fs_logic / memregion use global region tokens | migrate to `ipc/buffers` handles once the sub-project delivers (ABI change, planned) |
 | FlatBuffers schema location | per-server vs shared `schemas/` | Open question #3, resolves at Milestone 2 |
 | Rump kernel / OS threads for drivers | blocked on irqSubscribe + userspace DMA | Long-term; don't touch yet |
 
@@ -249,3 +258,4 @@ later: app_server owns the display; GUI terminal app = same term/gfx libs in a w
 | 2026-10-26 | One QEMU launcher; gpu/snd/net/input verified on the host; shared-IRQ + queue-size fixes; serial crash reports, symbolizer, dmesg, gdb helpers, valgrind/ASan targets | DECISIONS.md §QEMU integration |
 | 2026-10-26 | Ring-3 faults kill only the task; ExceptionContext GPR order fixed (was reversed) | DECISIONS.md §User-mode faults |
 | 2026-10-27 | gfx/term/input libraries + kernel framebuffer console (serial mirror, keyboard input) | DECISIONS.md §Roadmap B step 1 |
+| 2026-10-27 | Bulk-data API FROZEN (`ipc/buffers.nim`); `buffers` SPAWNED; VISION Q6 resolved (Stage A page rights → Stage B per-app CR3) | DECISIONS.md §Bulk data FROZEN |

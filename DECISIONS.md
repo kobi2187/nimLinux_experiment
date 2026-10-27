@@ -1060,3 +1060,38 @@ revokes all caps (`capRevokeAllOf`). Regressions in `tests/test_zerocopy.nim`.
 Still open: rights are not enforced on access, and tokens are global. The
 formal model (owned / move / lend / sealed buffers + typed rings, enforced by
 page rights or the type system) is PROPOSED in docs/proposals/bulk_data.md.
+
+## Bulk data FROZEN; buffers SPAWNED (2026-10-27)
+
+Human agreed to all seven decisions of docs/proposals/bulk_data.md v2, which is
+now FROZEN. The API is `ipc/buffers.nim` (a stub returning `beNotImplemented`;
+layouts pinned by `tests/test_buffers_api.nim`), implemented by the new
+sub-project `subprojects/buffers/`.
+1. **The rule:** mutable memory is never shared. Owned or sealed; move/lend;
+   rings are the only concurrent sharing. Two lanes: ≤240 B inline (copied),
+   larger by buffer (moved or lent).
+2. **Dispatcher-brokered sessions:** control messages and session setup go
+   through the dispatcher, which forwards handles in `tmTransit` (no map
+   right, never touches data). Steady-state streams flow on direct session
+   rings under dispatcher policy (resize/reprioritise/revoke). VISION axiom
+   clarified accordingly.
+3. **Budgets follow ownership.** The requester provides the buffer by
+   default; servers never allocate on a client's behalf.
+4. **Enforcement:** Stage A = 2 MB blocks, ownership flipped in batches at
+   `ringSubmit` and at context switch. Stage B = per-app CR3, the next kernel
+   milestone. **Resolves VISION open question 6** (signal: app_server is the
+   first service that must be protected from its clients); SASOS keeps the
+   shared space and enforces by type.
+5. **Per-task handle tables**, with handles carried out-of-band in messages
+   (≤4) and translated by the kernel. Replaces global region tokens: an ABI
+   change for `grantRegion` / `capSend` / fs replies, migrated by the
+   sub-project.
+6. **WASM:** copy at the sandbox edge (v1), region-backed aperture (v2).
+7. **Arena:** 128 MB in 2 MB blocks (tunable constant).
+
+Rejected (from v1 and the survey of the option space): direct app→server
+transfers bypassing the dispatcher (violates axiom 1); a kernel call per
+transfer (too costly for audio/frames/packets; batching instead);
+server-allocated reply buffers (lets a client exhaust server memory);
+global/guessable tokens (authority by number); free-form shared regions with
+"protocol discipline" (the unsafe status quo the human ruled out).

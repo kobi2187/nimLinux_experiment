@@ -2,6 +2,17 @@
 
 Last updated: 2026-10-27 (session 9e, branch `ccr-56330414-wo65nx`, cloud container)
 
+## Session 9f — bulk data frozen, buffers spawned
+
+The human wanted big data moved formally, with no unsafe shared memory. The
+existing region "zero copy" was tested and found unsafe (three holes fixed,
+see DECISIONS §Region capabilities). The bulk-data proposal went through
+two rounds (v2 aligned with the dispatcher axiom, batching, budgets and WASM),
+and all seven decisions were agreed. It is FROZEN as `ipc/buffers.nim` (a stub
+plus layout test) and SPAWNED as `subprojects/buffers/` (first task: SURVEY).
+app_server's protocol is agreed and builds on it; spawn it next. VISION Q6
+is resolved: Stage A page rights now, per-app CR3 next.
+
 ## Session 9e — framebuffer console (roadmap B step 1), user-fault kill
 
 The shell now runs on the virtio-gpu display as well as serial, and reads

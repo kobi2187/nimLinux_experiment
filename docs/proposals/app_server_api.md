@@ -1,7 +1,7 @@
 # app_server API — proposal (NOT frozen)
 
-Status: **PROPOSED 2026-10-27** — for convergence with the human before the
-seam is frozen (AGENTS.md §SPAWN). Decisions needed are in §8.
+Status: **AGREED 2026-10-27** (decisions §8 accepted), to be frozen when
+app_server is spawned — it builds on the frozen buffers API (bulk_data.md).
 
 ## 1. What we keep from BeOS, and what we change
 

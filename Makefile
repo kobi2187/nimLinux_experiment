@@ -288,6 +288,7 @@ TEST_FLAGS = --skipParentCfg --mm:refc --path:$(CURDIR) --nimblePath:$(HOME)/.ni
 HOST_TESTS = \
   tests/test_log.nim \
   tests/test_klog_ring.nim \
+  tests/test_buffers_api.nim \
   tests/test_gfx.nim \
   tests/test_term.nim \
   tests/test_keymap.nim \

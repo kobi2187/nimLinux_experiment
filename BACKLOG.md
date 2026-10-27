@@ -72,6 +72,9 @@ Tags: CLEAR = path obvious | FUZZY = outcome known, path uncertain | OPEN = unde
 
 | TW# | Tag | Description | Done-check |
 |-----|-----|-------------|-----------|
+| 70 | SPAWN 2026-10-27 | **buffers** — frozen bulk-data API `ipc/buffers.nim` (owned/sealed, move/lend, session rings, budgets); see `subprojects/buffers/` | sub-project done-checks (spec §11) |
+| 71 | PARENT | Stage B: per-app CR3 (VISION Q6 resolved) — next kernel milestone after buffers Stage A | per-task page tables; switch = CR3 load |
+| 72 | SPAWN (next) | **app_server** — agreed protocol (docs/proposals/app_server_api.md) on top of buffers; freeze when spawned | two terminal windows, focus routing, pixel test |
 | 29 | CLEAR | nimixos/net.nim — thin Nim app API: download/connect → MsgPack → dispatcher | app can call net.download() |
 | 30 | CLEAR | nimixos/media.nim — thin Nim app API: play/pause/stop → MsgPack → dispatcher | app can call media.play() |
 | 31 | CLEAR | nimixos.h C header — maps thin API to MsgPack IPC for WASM/C apps | WASM app can call fs/net/media via C header |

@@ -30,7 +30,11 @@ OS with game-engine-quality graphics and a dispatcher-based concurrency engine.
 ## Design axioms (never violate)
 
 - Apps never call kernel I/O directly — all I/O goes through dispatcher
-- Control plane = MsgPack (inspectable), data plane = FlatBuffers or region token (zero-copy)
+  (streams: the dispatcher brokers a session and governs it; steady-state
+  data then flows on that session's ring — 2026-10-27, bulk_data.md)
+- Control plane = MsgPack (inspectable), data plane = FlatBuffers or **buffer
+  handle** (zero-copy). Mutable memory is never shared: a buffer is owned by
+  one task or sealed; it moves or is lent (ipc/buffers.nim, frozen 2026-10-27)
 - Kernel stays policy-free — it executes what dispatcher says, in the order dispatcher says
 - Dispatcher is single-threaded (CPS) — no locks needed in hot path
 - Kernel scheduler stays preemptive and simple — it handles hard-RT; dispatcher handles soft-RT
@@ -57,4 +61,4 @@ OS with game-engine-quality graphics and a dispatcher-based concurrency engine.
 | 3 | FlatBuffers schema ownership — defined per-server or in shared `schemas/` directory? | When we write the first FlatBuffers schema (Milestone 2) |
 | 4 | OS threads for drivers (rump kernel pattern) — how does the rumpuser hypercall layer integrate with NimixOS coroutines? | After `irqSubscribe(vec, cap)` + userspace DMA mapping exist |
 | 5 | SMP — when we add AP boot, `syscallScratchRsp` and `globalTss` must become per-CPU (via GS base MSR + `CpuLocal` struct + `swapgs`); `syscallTable` stays global (read-only). What does the `CpuLocal` struct look like and where does AP init live? | When AP bringup (APIC + SIPI) is started |
-| 6 | Per-app address spaces (own CR3) vs today's shared space with per-region User windows — when, and does SASOS keep the shared space? | When a second concurrent app must be protected from another (first untrusted app / app_server) |
+| 6 | ~~Per-app address spaces~~ **RESOLVED 2026-10-27**: per-app CR3 is the next kernel milestone (buffers Stage B); Stage A enforces buffer ownership by per-switch page rights in the shared space; SASOS keeps the shared space (type-system enforcement). | Signal arrived: app_server must be protected from its clients |
