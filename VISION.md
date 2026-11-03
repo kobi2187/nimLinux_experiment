@@ -51,6 +51,14 @@ OS with game-engine-quality graphics and a dispatcher-based concurrency engine.
 - **Oskit libraries**: modular, encapsulated, behind small interfaces.
 - Prerequisites that enable this basis are allowed (e.g. the interim
   `sti;hlt` blocking until block-on-mailbox lands).
+- **Kernel residency is historical, not design (human, 2026-11-03).** If
+  something runs in the kernel, it's only because the OS started there and the
+  kernel was all we had. Unless being in the kernel is inherent to the design,
+  each component moves, over time, to where it belongs. The residency map in
+  ARCHITECTURE.md tracks every component's current and proper home and what
+  blocks the move. The kernel model decides where a component *runs*
+  (monolithic may link a server in); no component should be *forced* into the
+  kernel for every model.
 - **WASM is for isolation only (human, 2026-11-03).** Operations that must be
   fast run natively: in **servers** (coarse or shared work: rendering, decoding,
   files) or in **ELF helpers**, i.e. native host imports granted to a WASM

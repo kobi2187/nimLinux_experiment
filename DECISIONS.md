@@ -1215,3 +1215,30 @@ principles). Consequences:
 - Rejected: running RUI's framework natively with app callbacks crossing
   into WASM. Closures and refs would cross the sandbox boundary on every
   handler; only leaf operations with plain-data arguments become imports.
+
+## Kernel residency is historical, not design (2026-11-03)
+
+Human: "if something runs in the kernel, it's only because the os started
+with kernel decisions and kernel was all we had, so over time, these move to
+their proper place. if it's not inherent and part of the design, then we
+find where each component should reside." Recorded in VISION (decision
+principles). Made concrete as the **residency map** in ARCHITECTURE.md:
+- every kernel-resident component, classified as inherent (privilege or
+  universal trust: scheduling, memory, interrupts, caps, IPC transport,
+  buffer enforcement, crash output) or historical;
+- for each historical one, its proper home and the blocker.
+
+**Historical:** wasm3, the shell, the fb console/VT, all device drivers
+(gpu, snd, input, net, blk, PS/2, RTC), VFS/FatFs, the ping/dispatch kmods,
+the event topic registry.
+
+The common blocker is **R0, device capabilities** (IRQ subscription, MMIO,
+DMA buffers, PCI config): VISION open question 4's prerequisite, which
+buffers (DMA-able, owned memory) now makes tractable. Migrations R0–R10
+are in BACKLOG, ordered to coincide with the vertical slice: the render
+server takes the GPU (R2/V6), the audio server takes snd (R4/V10), and the
+WASM host leaves the kernel (R1/V8).
+
+The kernel *model* still decides where a component runs: monolithic may
+link a server in, by design. What changes is that no component is *forced*
+into the kernel for every model.

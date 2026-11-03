@@ -149,6 +149,25 @@ draw_protocol.md (PROPOSED, awaiting agreement); survey docs/surveys/rui2.md.
 | V12 | PARKED | AOT for app code (wasm2c, RLBox-style isolation) | only if V9 shows the interpreter alone misses the app budget | V9 |
 | V11 | CLEAR | upstream to rui2: **text-backend seam (Pango, Pixie)**; SDF/backdrop backend hook; `{.cursor.}` parent or ORC note; optional rui_scripting / rui_shaped | PRs to kobi2187/rui2; RUI desktop runs on the Pixie backend | V7 |
 
+## Residency migrations (2026-11-03) [PARENT]: components to their proper home
+
+Outcome: the kernel holds only inherent mechanism (ARCHITECTURE residency
+map). Order follows dependencies and the vertical slice.
+
+| # | Tag | Task | Done-check | Depends |
+|---|-----|------|-----------|---------|
+| R0 | FUZZY | device-capability mechanisms: `irqSubscribe` → mailbox, MMIO caps, DMA buffer caps, PCI-config caps | a userspace test driver gets an IRQ and does DMA through caps only | buffers (DMA buffers) |
+| R1 | CLEAR | wasm3 → per-app userspace ELF WASM host (= slice V8) | WASM apps run with no wasm3 code in the kernel image | V8 |
+| R2 | CLEAR | virtio-gpu + display → render server (= slice V6) | no gpu driver in the kernel image; screendump tests pass | R0, V6 |
+| R3 | CLEAR | virtio-input + PS/2 → input_server | keys reach apps via input_server; kernel has no input driver | R0 |
+| R4 | CLEAR | virtio-snd → audio server (= slice V10) | wav test passes via the server | R0, V10 |
+| R5 | CLEAR | fb console/VT → console server; kernel keeps a serial (+ minimal panic) console | shell output on screen via the console server | R2 |
+| R6 | CLEAR | shell → `shell.elf` (+ a spawn syscall) | the QEMU suite drives the userspace shell | R5 |
+| R7 | CLEAR | virtio-blk + VFS/FatFs → blk + fs servers | `cat` through fs_server with no FS code in the kernel | R0, buffers B10 |
+| R8 | CLEAR | virtio-net + IP stack → net_server | pcap test via net_server | R0 |
+| R9 | CLEAR | retire ping/dispatch kmods in the micro model (ELF servers exist) | microkernel image links neither | — |
+| R10 | CLEAR | event topic registry → event server; kernel keeps notify | pub/sub tests via the server | Phase E |
+
 ## Compiler target (long-term)
 
 | TW# | Tag | Description |

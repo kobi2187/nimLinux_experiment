@@ -213,6 +213,46 @@ keys: virtio-input ─▶ event "input" ─▶ console_input (input/evdev_keymap
 later: app_server owns the display; GUI terminal app = same term/gfx libs in a window region
 ```
 
+## Residency map (2026-11-03): where each component is vs. where it belongs
+
+Per VISION: kernel residency is historical unless inherent. **Inherent** means
+the mechanism needs CPU privilege or must be trusted by everyone: scheduling,
+page tables, interrupts, capability checks, the IPC transport, buffer
+enforcement. "Proper home" is the microkernel model's placement; the
+monolithic model may still link a server in.
+
+| component | today | inherent? | proper home | blocked by |
+|-----------|-------|-----------|-------------|-----------|
+| boot, GDT/IDT/TSS, syscall gate, interrupt dispatch, crash reports | kernel | **yes** | kernel | — |
+| scheduler, process table, task cleanup, user-fault kill | kernel | **yes** | kernel | — |
+| physical/virtual memory, memory windows, regions, user windows | kernel | **yes** | kernel | — |
+| capabilities, server_chan/mailbox transport, event wake | kernel | **yes** (mechanism) | kernel | — |
+| buffers state + enforcement, ringSubmit | kernel | **yes** | kernel | — |
+| klog + serial crash output | kernel | **yes** (last-resort output) | kernel | — |
+| PIT tick, PIC/IRQ routing, fine clock (V3) | kernel | **yes** | kernel | — |
+| ELF segment mapping | kernel | yes (mapping); parsing/relocation no | kernel maps; an exec/loader server parses | spawn-from-userspace syscall |
+| **wasm3 runtime** (runtime/wasm_*) | kernel (shell context) | no | **per-app userspace ELF WASM host** with native helpers | slice V8 |
+| **shell** (+devtest, dmesg UI) | kernel task | no | `shell.elf` (system tool) | spawn syscall; console server |
+| **fb console / VT / console input** | kernel | no (a boot/panic console is the only inherent part) | console server, then the terminal app on app_server | render server (V6) |
+| **virtio-gpu** | kernel driver | no | **render server** owns the display | R0 device caps; V6 |
+| **virtio-snd** | kernel driver | no | **audio server** | R0; V10 |
+| **virtio-input, PS/2 keyboard+mouse** | kernel drivers | no | **input_server** | R0 |
+| **virtio-net + Ethernet/IPv4/UDP** | kernel | no | **net_server** | R0 |
+| **virtio-blk** | kernel (polled) | no | blk driver server (or fs_server's) | R0 |
+| **VFS, FatFs, ramfs** | kernel | no | **fs_server** (exists as ELF; still calls kernel FS) | blk in userspace, or lent buffers to a blk server |
+| PCI scan, driver registry, module loader | kernel | partly (config-space access is privileged) | kernel grants PCI-config / MMIO / IRQ / DMA caps; a driver manager server enumerates and spawns | R0 |
+| ping_server kmod, dispatch kmod | kernel modules | no | their ELF servers (both exist) | — |
+| event_server topic registry (pub/sub policy) | kernel | no (wakeups are mechanism) | event server; the kernel keeps notify/wake | Phase E block-on-mailbox |
+| RTC wall clock | kernel driver | no | time service | R0 |
+
+**R0, the kernel mechanisms every driver move needs** (the
+`irqSubscribe` + DMA prerequisite of VISION Q4):
+- `irqSubscribe(line, cap)`, delivering to a mailbox;
+- MMIO-range capabilities, mapped into the driver's space;
+- DMA memory capabilities: a buffer the device may address, physical
+  address known to its owner (buffers + memory windows);
+- PCI config-space capabilities per device.
+
 ## 3. Seams under tension
 
 | Seam | Tension | Expected move |
@@ -261,3 +301,4 @@ later: app_server owns the display; GUI terminal app = same term/gfx libs in a w
 | 2026-10-27 | gfx/term/input libraries + kernel framebuffer console (serial mirror, keyboard input) | DECISIONS.md §Roadmap B step 1 |
 | 2026-10-27 | Bulk-data API FROZEN (`ipc/buffers.nim`); `buffers` SPAWNED; VISION Q6 resolved (Stage A page rights → Stage B per-app CR3) | DECISIONS.md §Bulk data FROZEN |
 | 2026-11-03 | Buffers enforced from ring 3 (arena page rights per switch, syscalls 30–36); memory windows reserved+mapped; huge-page walk + boot-stack bugs fixed; 8 KB frame guard | DECISIONS.md §Buffers enforced |
+| 2026-11-03 | Residency map: every kernel-resident component classified inherent vs historical, with proper home + blocker; R0 device-capability mechanisms identified | DECISIONS.md §Kernel residency |
