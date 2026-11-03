@@ -1,6 +1,6 @@
 # Render server: raylib provides, apps describe — proposal (NOT frozen)
 
-Status: **PROPOSED 2026-11-03**, for agreement. It amends the agreed
+Status: **AGREED 2026-11-03** (human: "let's do that", with the raylib bridge). Record-level details are frozen at V6 spawn, after prototype P0 measures. It amends the agreed
 app_server proposal (client-side rendering) into a hybrid. Inputs: the
 human's side chat, `docs/surveys/rui2.md`, and VISION §Rendering model and
 budgets. Decisions are in §6.

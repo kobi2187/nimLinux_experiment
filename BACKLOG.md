@@ -129,6 +129,11 @@ Tags: CLEAR = path obvious | FUZZY = outcome known, path uncertain | OPEN = unde
 
 ## Vertical slice — raylib render server + RUI2 apps (2026-11-03) [PARENT]
 
+Critical path: P0 → V2 (picolibc) → V3 (clock) → V4 (big memory) → V5 (raylib on
+NimixOS) → R0 (device caps) → V6 (render server, takes the GPU = R2) → V9.
+Parallel tracks: V7 bridge on RUI (after P0); V8 WASM host (= R1) with the
+buffers ring ABI; V10 audio (after R0).
+
 Outcome: a WASM app built on RUI2 (vendor/rui2) shows a working window through
 the raylib render server, within VISION's budgets, and is benchmarked against
 in-process raylib. Proposals: docs/proposals/render_server.md and
@@ -137,6 +142,7 @@ draw_protocol.md (PROPOSED, awaiting agreement); survey docs/surveys/rui2.md.
 | # | Tag | Task | Done-check | Depends |
 |---|-----|------|-----------|---------|
 | V1 | DONE | vendor rui2 (submodule @0038051) + SURVEY | docs/surveys/rui2.md | — |
+| **P0** | CLEAR | **host loopback prototype (first, answers the perf question early):** vendor raylib **6.2** (rlsw + `rcore_memory`, headless); the bridge = our naylib-compatible binding to 6.2 (direct) + command encoder (remote) + decoder; the same screen through both paths in one process | (1) remote pixels == direct pixels (protocol conformance); (2) per-frame time and records/frame for both, reported; no NimixOS dependency | — |
 | V2 | CLEAR | SURVEY + adopt libc/libm: picolibc vs musl math, freestanding, for the raylib/rlsw server ELF | hosted build of rlsw links; libm functions raylib uses resolve | — |
 | V3 | CLEAR | fine monotonic clock: TSC calibrated against the PIT; `nanoTime` syscall | host test of the calibration math; QEMU: 1 s sleep measures 1 s ± 1 % | — |
 | V4 | FUZZY | large memory for servers/apps (> 4 MB): a large-region class or an arena-backed heap | render server gets ≥ 32 MB; app regions unchanged | buffers |

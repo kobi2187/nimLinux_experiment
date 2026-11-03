@@ -1264,3 +1264,24 @@ raylib or create a command from it. Added to draw_protocol §7 (proposal):
 Rejected: a pure command shim (forces every app onto one path and leaves
 no fallback for ops the server lacks); changing RUI's call sites (RUI is
 one of many raylib clients the bridge should serve).
+
+## Render-server model + raylib bridge AGREED; P0 host prototype first (2026-11-03)
+
+Human agreed ("let's do that") to the render-server model with the raylib
+bridge, noting the possible performance penalty and the amount of support
+work.
+- **Status:** render_server.md is AGREED; draw_protocol.md is agreed in
+  principle. The record set is frozen at V6 spawn, after P0 validates it.
+- **Performance answered early, not at V9:** P0 is a host-only loopback
+  prototype. The same screen goes through the bridge `direct` (raylib
+  in-process) and `remote` (encode → decode → raylib) paths in one
+  process. Equal pixels are the protocol conformance test; frame time and
+  records/frame give the model's cost before any kernel work.
+- **Pin raylib 6.2**, the latest release; `rlsw` and the `rcore_memory`
+  headless platform are both present since 6.0.
+- naylib master bundles raylib 5.6-dev (no rlsw, no memory platform), and
+  RUI pins an older naylib. So **the bridge is our own naylib-compatible
+  binding to raylib 6.2**, not a layer over naylib, and it absorbs the
+  5.x → 6.x API differences.
+- `rcore_memory.c` is also the template for `PLATFORM_NIMIX` (memory
+  platform + damage blit to virtio-gpu).

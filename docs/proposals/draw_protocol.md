@@ -1,6 +1,6 @@
 # RUI ↔ render server draw-command protocol — proposal (NOT frozen)
 
-Status: **PROPOSED 2026-11-03**, for agreement after render_server.md.
+Status: **AGREED in principle 2026-11-03** (model + bridge). The record set and encoding are frozen when the render server spawns (V6), after the host loopback prototype (P0) validates them pixel for pixel and measures their cost.
 Sources: `docs/surveys/rui2.md` (the 84 raylib calls RUI makes, its
 per-widget texture cache, shaders only for SDF primitives and the backdrop,
 Pango text), `docs/proposals/bulk_data.md` (frozen transport) and
