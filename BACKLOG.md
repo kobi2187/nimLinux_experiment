@@ -157,6 +157,7 @@ draw_protocol.md (PROPOSED, awaiting agreement); survey docs/surveys/rui2.md.
 | V9 | CLEAR | **benchmark**: same RUI screen in-process (RUI + raylib/rlsw, ELF) vs server path (WASM → commands → server) | report: frame time, key-to-pixel, commands/frame, kernel calls/frame; CI gates the counts | V6 V7 V8 |
 | V10 | CLEAR | audio: thread-free miniaudio backend → virtio-snd via session ring (audio server) | 440 Hz test tone through the ring (existing wav check) | buffers rings |
 | V12 | PARKED | AOT for app code (wasm2c, RLBox-style isolation) | only if V9 shows the interpreter alone misses the app budget | V9 |
+| V13 | PARKED | GPU acceleration: rlgl → virgl backend in the render server (VISION Q7) | server frame time within budget on a GPU host; rlsw output still the test reference | V6 V9 + VISION Q7 signal |
 | V11 | CLEAR | upstream to rui2: **text-backend seam (Pango, Pixie)**; SDF/backdrop backend hook; `{.cursor.}` parent or ORC note; optional rui_scripting / rui_shaped | PRs to kobi2187/rui2; RUI desktop runs on the Pixie backend | V7 + **stabilized** (human, 2026-11-03: push only after we stabilize; until then `patches/rui2/`) |
 
 ## Residency migrations (2026-11-03) [PARENT]: components to their proper home

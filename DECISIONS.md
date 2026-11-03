@@ -1402,3 +1402,18 @@ one, repeatably (`make test-v7`). Steady frames: at most **86 records /
 - **Observed for V6/RUI:** a label change costs ~63 records, because RUI
   recomposites up the tree to the root. Within budget; damage-limited
   compositing (P0 finding) also shrinks this.
+
+## GPU acceleration parked (2026-11-03)
+
+Asked whether to use QEMU's accelerated GL. Survey: QEMU 8.2 in this
+environment has `virtio-gpu-gl` (virgl, virglrenderer 1.8.8); Venus (Vulkan),
+gfxstream and DRM native context need QEMU ≥ 9.2, and DRM native context
+also a host GPU. Every option's guest side normally means Mesa or a Linux
+DRM driver. The fitting design, if needed: a small rlgl backend that speaks
+virgl's command stream for raylib's GL subset, inside the render server
+only (the bridge and the server-provides model keep apps, RUI and the
+protocol unchanged). **Parked** (human: "can do a lot without it"; VISION
+Q7, BACKLOG V13). Signal: V9 shows the server missing its frame budget
+after damage-limited compositing. rlsw stays the floor and the pixel-exact
+test reference (GPU output is not bit-identical across hosts; this
+container has no host GPU, so virgl would run on llvmpipe).
