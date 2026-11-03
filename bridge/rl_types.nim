@@ -17,6 +17,12 @@ type
     id*: uint32
     texture*, depth*: Texture
   RenderTexture2D* = RenderTexture
+  Image* {.bycopy.} = object      ## CPU pixels; never crosses as a value (uploads go as blobs)
+    data*: pointer
+    width*, height*, mipmaps*, format*: int32
+  Shader* {.bycopy.} = object
+    id*: uint32
+    locs*: ptr int32
 
 const
   PixelFormatR8G8B8A8* = 7'i32

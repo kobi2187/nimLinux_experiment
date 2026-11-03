@@ -36,11 +36,33 @@ proc EndTextureMode*()
 proc DrawTextureRec*(t: Texture2D; src: Rectangle; pos: Vector2; tint: Color)
 proc BeginScissorMode*(x, y, w, h: int32)
 proc EndScissorMode*()
+# V7b: the rest of what RUI draws with (server side of the remote backend).
+proc DrawCircle*(cx, cy: int32; radius: float32; c: Color)
+proc DrawCircleLines*(cx, cy: int32; radius: float32; c: Color)
+proc DrawRectangle*(x, y, w, h: int32; c: Color)
+proc DrawRectangleGradientH*(x, y, w, h: int32; left, right: Color)
+proc DrawRectangleGradientV*(x, y, w, h: int32; top, bottom: Color)
+proc DrawRectangleLines*(x, y, w, h: int32; c: Color)
+proc DrawRectangleRoundedLinesEx*(r: Rectangle; roundness: float32; segments: int32; thick: float32; c: Color)
+proc DrawRing*(center: Vector2; inner, outer, a0, a1: float32; segments: int32; c: Color)
+proc DrawTexturePro*(t: Texture2D; src, dst: Rectangle; origin: Vector2; rotation: float32; tint: Color)
+proc DrawTextureV*(t: Texture2D; pos: Vector2; tint: Color)
+proc LoadTextureFromImage*(img: Image): Texture2D
+proc UnloadTexture*(t: Texture2D)
+proc SetTextureFilter*(t: Texture2D; filter: int32)
+proc SetTextureWrap*(t: Texture2D; wrap: int32)
+proc LoadImage*(path: cstring): Image
+proc GetPixelDataSize*(w, h, format: int32): int32
+proc BeginBlendMode*(mode: int32)
+proc EndBlendMode*()
+proc rlSetBlendFactorsSeparate*(srcRGB, dstRGB, srcA, dstA, eqRGB, eqA: int32)
+proc rlDrawRenderBatchActive*()
+proc rlEnableScissorTest*()
+proc rlDisableScissorTest*()
+proc rlScissor*(x, y, w, h: int32)
 {.pop.}
 
-type CImage* {.bycopy.} = object
-  data*: pointer
-  width*, height*, mipmaps*, format*: int32
+type CImage* = Image
 proc LoadImageFromScreen*(): CImage {.cdecl, importc.}
 proc ExportImage*(img: CImage; path: cstring): bool {.cdecl, importc.}
 proc UnloadImage*(img: CImage) {.cdecl, importc.}

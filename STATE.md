@@ -48,7 +48,8 @@ block-on-mailbox/wake-on-deliver + dispatcher transport — network last.
 - [→] Residency migrations R0–R10 (BACKLOG; ARCHITECTURE residency map): historical kernel components to their proper homes; R0 device caps unblocks the drivers.
 - [x] P0 host loopback: bridge (`bridge/`, raylib 6.2 + rlsw headless) remote pixels == direct; steady frame 19 records / 424 B; command path ≈ noise (~7%), rlsw raster dominates → damage-limited compositing first (`make test-p0`).
 - [x] V7a: RUI's counter example, unchanged, runs headless on the bridge's direct backend: adapted naylib (`tools/naylib_adapt.py`) → raylib 6.2 + rlsw; Pixie text engine behind a new RUI text-engine seam; `ruiNoGlfw` (`make test-v7`; RUI changes in `patches/rui2/`).
-- [→] Vertical slice raylib + RUI2 (BACKLOG V1–V12): proposals AGREED; next V7b (remote routing at the C-symbol level), then the critical path V2→V5.
+- [x] V7b: RUI's counter, unchanged, through the **remote** bridge (draw calls → commands → loopback server): pixels byte-identical to direct after 3 clicks; steady frames ≤ 86 records / 1 KB (`make test-v7`).
+- [→] Vertical slice raylib + RUI2 (BACKLOG V1–V12): next V7c (actor-backed background/mailbox) or the critical path V2→V5.
 - [x] Region capability holes fixed (any-task minting, use-after-free on owner exit, leaked caps) — tests/test_zerocopy.nim.
 - [x] User-mode CPU faults kill the task (system continues); kernel faults halt.
 - [ ] Dispatcher in the app path: apps → `dispatch` → servers (today WASM apps

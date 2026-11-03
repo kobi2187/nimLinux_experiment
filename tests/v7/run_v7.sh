@@ -1,7 +1,10 @@
 #!/bin/sh
-# V7 (BACKLOG): RUI's counter example, unchanged, through the raylib bridge's
-# direct backend (adapted naylib -> raylib 6.2 memory platform + rlsw) with the
-# Pixie text engine. Gate: it builds, runs headless, and paints text.
+# V7 (BACKLOG): RUI's counter example, unchanged, through the raylib bridge,
+# with the Pixie text engine, built twice:
+#   direct  adapted naylib -> in-process raylib 6.2 (memory platform + rlsw)
+#   remote  routed draw calls -> commands -> loopback render server (V7b)
+# Gates: both paint; remote pixels == direct; steady frames within VISION's
+# budget (<= 200 records, <= 16 KB).
 set -e
 NIM=${NIM:-nim}
 OUT=${V7_OUT:-build/v7}
@@ -18,13 +21,25 @@ P=""
 for pkg in rui_core rui_hittest rui_events rui_drawing rui_scripting rui_widgets rui_windows rui_shaped rui; do
   P="$P --path:$RUI/packages/$pkg/src"
 done
-$NIM c --skipParentCfg --skipProjCfg --hints:off --warnings:off -d:release \
-    --path:build/bridge/naylib $P -d:ruiTextPixie -d:ruiNoGlfw \
-    --nimcache:"$OUT/nc_direct" -o:"$OUT/rui_counter" tests/v7/rui_counter.nim
 [ -z "$RUI_FONT_FILE" ] && [ -f /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf ] &&
   export RUI_FONT_FILE=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf
-line=$("$OUT/rui_counter" "$OUT/counter_direct.ppm" | grep '^v7:')
-echo "$line"
-ink=$(echo "$line" | sed 's/.*dark pixels //')
-[ "$ink" -ge 500 ] || { echo "FAIL: only $ink dark pixels: no text/widgets painted"; exit 1; }
-echo "PASS: RUI counter painted headless through the bridge (direct), $ink dark pixels"
+for be in direct remote; do
+  if [ "$be" = remote ]; then flags="-d:rlRemote --path:build/bridge/naylib_remote"
+  else flags="--path:build/bridge/naylib"; fi
+  $NIM c --skipParentCfg --skipProjCfg --hints:off --warnings:off -d:release \
+      $flags $P -d:ruiTextPixie -d:ruiNoGlfw \
+      --nimcache:"$OUT/nc_$be" -o:"$OUT/rui_counter_$be" tests/v7/rui_counter.nim
+  "$OUT/rui_counter_$be" "$OUT/counter_$be.ppm" > "$OUT/$be.log"
+  grep '^v7' "$OUT/$be.log" | sed "s/^/$be /"
+  ink=$(grep '^v7:' "$OUT/$be.log" | sed 's/.*dark pixels //')
+  [ "$ink" -ge 500 ] || { echo "FAIL: $be painted only $ink dark pixels"; exit 1; }
+done
+cmp -s "$OUT/counter_direct.ppm" "$OUT/counter_remote.ppm" ||
+  { echo "FAIL: remote pixels differ from direct"; exit 1; }
+echo "PASS: RUI counter (3 clicks through RUI's router): remote pixels identical to direct"
+st=$(grep '^v7 stats' "$OUT/remote.log")
+recs=$(echo "$st" | sed 's/.*steady_max_records=\([0-9]*\).*/\1/')
+bytes=$(echo "$st" | sed 's/.*steady_max_bytes=\([0-9]*\).*/\1/')
+[ "$recs" -le 200 ] && [ "$bytes" -le 16384 ] ||
+  { echo "FAIL: steady frame $recs records / $bytes B over budget"; exit 1; }
+echo "PASS: steady frames <= $recs records, $bytes B (budget 200 / 16384)"

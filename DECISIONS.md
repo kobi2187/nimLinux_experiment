@@ -1358,3 +1358,47 @@ raylib bridge's direct backend (`make test-v7`): raylib 6.2 memory platform
   instead of raylib, leaving types, CPU image ops and queries as naylib.
   The routing table is then the hybrid mechanism, and apps still don't
   change.
+
+## V7b: remote bridge by C-symbol routing; RUI remote == direct (2026-11-03)
+
+RUI's counter example, unchanged, clicked three times through RUI's own
+event router, renders **byte-identically** through the remote bridge (draw
+calls → command records → loopback render server → raylib) and the direct
+one, repeatably (`make test-v7`). Steady frames: at most **86 records /
+1,016 B** (budget 200 / 16 KB); the first full paint 121 / 1.6 KB, plus
+63 KB of glyph textures uploaded as blobs over the run.
+
+- **Route at the C symbol, not the Nim proc.** The adapter emits a second
+  naylib (`build/bridge/naylib_remote/`) where each proc whose C symbol has
+  an `nxr_<Name>` in `bridge/rl_route.nim` imports that instead. Encoders
+  are `exportc` with raylib's C ABI and P0's C-layout types, so there is no
+  import cycle with naylib. The routed names come from rl_route itself and
+  each must match exactly once, so the table can't drift. naylib's
+  destructors, wrappers and every call site route with no Nim changes.
+  Rejected: re-declaring naylib's API by hand (the 4,000-line surface again);
+  a per-function generator from headers (the interesting cases, ids and
+  syncs, are semantic anyway). This is also the **hybrid** mechanism: a
+  routing table per symbol.
+- **Headers:** naylib pushes `header: "raylib.h"` onto its procs, so the
+  remote variant pushes a generated `nimix_route.h` instead (raylib.h +
+  rlgl.h + the `nxr_` prototypes copied from 6.2's own declarations).
+- **One record per raylib call**, executed server-side by the same function:
+  that is what makes pixels identical (e.g. `DrawRectangleLines(int)` and
+  `DrawRectangleLinesEx` rasterize differently). The record set is still
+  frozen only at V6.
+- **Ids:** app-chosen; a render target's id also names its colour texture.
+  Destroys are idempotent (RUI frees a target's texture, then the target).
+- **Refused locally, by design:** raw rlgl framebuffers (`rlLoadFramebuffer`
+  → 0, so RUI takes its own `loadRenderTexture` path) and shaders (invalid,
+  exactly as on rlsw, so RUI uses its non-shader fallback). No raw GPU
+  objects cross the boundary.
+- **Uploads ride as blobs** beside the stream (the loopback stand-in for
+  moved/sealed buffers); `LoadImageFromScreen` is a counted **sync point**
+  (NimixOS: a SNAPSHOT command, no readback).
+- **Hardening:** every decoder read is bounded by its record; a short record
+  fails the stream (P0's decoder could read past a record before).
+- **Determinism note:** RUI's hover fades are time-based, so captures wait
+  for them to settle; direct differed from itself mid-fade.
+- **Observed for V6/RUI:** a label change costs ~63 records, because RUI
+  recomposites up the tree to the root. Within budget; damage-limited
+  compositing (P0 finding) also shrinks this.

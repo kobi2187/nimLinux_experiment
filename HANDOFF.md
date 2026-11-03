@@ -9,9 +9,11 @@ Render-server model + raylib bridge AGREED; P0 showed the command path costs
 ~nothing (rlsw raster dominates). V7a: RUI's counter example, unchanged,
 paints headless through adapted naylib (`tools/naylib_adapt.py`) on raylib
 6.2 + rlsw with a Pixie text engine (`make test-v7`). RUI changes are a
-patch set in `patches/rui2/` (pending V11 upstream; ask the human whether to
-push them as a branch/PR to kobi2187/rui2). **Next:** V7b remote routing at
-the C-symbol level (DECISIONS §V7a), then V2→V5 on the critical path.
+patch set in `patches/rui2/` (human: push to kobi2187/rui2 only after we
+stabilize). V7b: the same app through the **remote** bridge (routing at the
+C-symbol level, `bridge/rl_route.nim`) is byte-identical to direct, steady
+frames ≤ 86 records / 1 KB. **Next:** V2→V5 critical path (raylib on
+NimixOS), or V7c actor-backed background/mailbox.
 
 ## Session 9f — bulk data frozen, buffers spawned
 
