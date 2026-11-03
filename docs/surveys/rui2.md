@@ -125,6 +125,9 @@ Surveyed from source (read only):
   server rasterizes the glyphs the app positioned (`TEXT_RUN`). Identical
   metrics by construction. stb_truetype is dropped from the plan: Pixie
   avoids C (and libm) in WASM apps.
-- **Check in V7:** Pixie's font path in wasm32 needs only
+- **Superseded the same day by VISION *WASM is for isolation only*:**
+  Pixie runs natively in the app's ELF WASM host (host imports), not
+  compiled into WASM, so the wasm32/libm check below no longer applies.
+- (was) **Check in V7:** Pixie's font path in wasm32 needs only
   `sqrt/floor/ceil/round` (native wasm ops); any trig used by its path
   code must resolve in the NimixOS WASM runtime.

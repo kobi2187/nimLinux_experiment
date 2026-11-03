@@ -51,6 +51,13 @@ OS with game-engine-quality graphics and a dispatcher-based concurrency engine.
 - **Oskit libraries**: modular, encapsulated, behind small interfaces.
 - Prerequisites that enable this basis are allowed (e.g. the interim
   `sti;hlt` blocking until block-on-mailbox lands).
+- **WASM is for isolation only (human, 2026-11-03).** Operations that must be
+  fast run natively: in **servers** (coarse or shared work: rendering, decoding,
+  files) or in **ELF helpers**, i.e. native host imports granted to a WASM
+  app by its userspace WASM host (fine-grained, synchronous work such as text
+  layout). The app's own code stays in the sandbox; if it alone misses a
+  budget, ahead-of-time compilation that keeps WASM's isolation (wasm2c,
+  RLBox-style) is the measured exception.
 
 ## Rendering model and budgets (human, 2026-11-03)
 

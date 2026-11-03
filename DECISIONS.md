@@ -1193,3 +1193,25 @@ Decision (proposal-level, inside draw_protocol §5; the human leans this way):
   first RTL/complex-script user. The path then is harfbuzzy behind the
   same seam once HarfBuzz and FriBidi are ported; `TEXT_RUN` already
   carries shaped glyphs, so the protocol doesn't change.
+
+## WASM is for isolation only; fast ops run natively (2026-11-03)
+
+Human: "wasm was only required due to its isolation. All the ops that need
+to be fast may run on servers or elf helpers." Recorded in VISION (decision
+principles). Consequences:
+- **Text:** Pixie runs natively, as host imports (`text_*`) granted by the
+  app's **userspace ELF WASM host**, and in the render server. It is not
+  compiled into WASM and interpreted by wasm3. Synchronous, native speed,
+  no IPC; the app holds only handles; same code and font bytes on both
+  sides (draw_protocol §5).
+- **Prerequisite promoted into the slice:** move wasm3 out of the kernel
+  into a per-app userspace ELF host (BACKLOG V8). Native helpers must never
+  run in the kernel.
+- **Two native venues:** coarse/shared work goes to servers (render,
+  decode, files); fine-grained synchronous work goes to ELF helpers (host
+  imports). If the app's own code misses its budget under the interpreter,
+  the exception is AOT that keeps WASM's isolation (wasm2c, RLBox-style;
+  BACKLOG V12, parked until V9 measures).
+- Rejected: running RUI's framework natively with app callbacks crossing
+  into WASM. Closures and refs would cross the sandbox boundary on every
+  handler; only leaf operations with plain-data arguments become imports.

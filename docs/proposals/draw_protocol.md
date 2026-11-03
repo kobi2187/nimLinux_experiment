@@ -73,34 +73,40 @@ A bad record ends the frame with an error event; the app is never trusted
 and other sessions are never touched. Resource ids are per session, so an
 app can only name its own targets.
 
-## 5. Text: typeset in the app, rasterized by the server, with the same code
+## 5. Text: typeset natively for the app, rasterized by the server, same code
 
 RUI measures synchronously, many times per layout pass (`measure`,
-`softBreaks`, `cursorPosition`, `indexFromPosition`). A round trip per
-measure would break the frame budget, so **typesetting is app-local**.
+`softBreaks`, `cursorPosition`, `indexFromPosition`). That rules out a
+round trip per measure. Per VISION (*WASM is for isolation only*), it also
+rules out interpreting a font engine inside wasm3.
 
-**Pick: Pixie (pure Nim, MIT) on both sides of the protocol, over the same
-font bytes** (survey addendum, docs/surveys/rui2.md):
-1. The server loads fonts and shares each as a **sealed buffer**
-   (`tmShare`), so every app parses the same bytes.
-2. **App:** RUI's text backend calls Pixie's `typeset` and keeps the
-   `Arrangement` (lines, positions, selectionRects). That covers measure,
-   wrap, caret and hit-test, with no C and no libm.
+**Pick: Pixie (pure Nim, MIT), native, over the same font bytes on both
+sides** (survey addendum, docs/surveys/rui2.md):
+1. The render server loads fonts and shares each as a **sealed buffer**
+   (`tmShare`).
+2. **App side = an ELF helper:** the app's userspace WASM host links Pixie
+   natively and grants the app `text_*` host imports:
+   - `text_typeset(fontId, size, utf8, bounds, align, wrap) → layout handle`;
+   - queries on that handle: bounds, lines, glyph positions, selection
+     rects, index at point.
+
+   These are synchronous, at native speed, with no IPC. The app holds only
+   handles. RUI's text backend calls these imports.
 3. **Draw:** `TEXT_RUN(fontId, size, color, glyphs[{rune, x, y}])` sends
-   the positions the app computed. The server rasterizes those glyphs with
-   Pixie from the same font into a per-(font, size) glyph cache, so what
-   was measured is what is drawn. `TEXT(utf8)` stays for simple callers;
-   the server typesets it with the same Pixie code.
+   the positions the helper computed. The server rasterizes those glyphs
+   with the same Pixie code from the same font into a per-(font, size)
+   glyph cache, so measured equals drawn. `TEXT(utf8)` stays for simple
+   callers.
 4. **RUI change (upstream, owned by the human):** a text-backend seam
    behind `pango_text`'s API, with Pango for desktop today and Pixie for
-   desktop and NimixOS.
+   desktop and NimixOS. On NimixOS the Pixie backend calls the host
+   imports instead of linking Pixie.
 - **Bootstrap:** the Spleen 8×16 bitmap font (gfx/) as font id 0.
 - **Not in v1:** ligatures (no GSUB), complex shaping and BiDi
   (`hasRtl` → false). **Parked**, resolving signal: the first RTL or
   complex-script user. The path then is elcritch/harfbuzzy (HarfBuzz +
-  FriBidi wrappers) behind the same seam, once HarfBuzz and FriBidi are
-  ported to NimixOS. The protocol doesn't change: `TEXT_RUN` already
-  carries shaped glyphs.
+  FriBidi) in the same native helper, once they're ported. The protocol
+  doesn't change: `TEXT_RUN` already carries shaped glyphs.
 
 ## 6. Budget check (designed, to be measured)
 
@@ -136,8 +142,9 @@ plus the server's present.
    I'd pick yes.
 3. **Semantic SDF and backdrop commands instead of shaders**, plus one
    upstream hook in rui2. I'd pick yes.
-4. **Text: Pixie on both sides over shared sealed fonts**, with a text
-   backend seam in RUI (Pango | Pixie); Spleen as bootstrap; HarfBuzz via
-   harfbuzzy later for complex scripts. I'd pick yes.
+4. **Text: Pixie native on both sides** (an ELF helper in the app's WASM
+   host + the render server) over shared sealed fonts; a text-backend seam
+   in RUI (Pango | Pixie); Spleen as bootstrap; HarfBuzz via harfbuzzy
+   later. I'd pick yes.
 5. **The server decodes images** (PNG/QOI via raylib); apps move or seal
    encoded bytes. I'd pick yes.

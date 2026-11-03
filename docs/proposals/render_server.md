@@ -46,8 +46,10 @@ put a copy and a hop in every frame.
   server.
 - **Isolation by construction:** apps can't touch another app's pixels or
   the framebuffer. Resource ids are per session.
-- **WASM stays lean:** the 84-call raylib surface RUI uses becomes a thin
-  shim that writes commands. No C, GL or libm in the app.
+- **WASM stays lean (isolation only, per VISION):** the 84-call raylib
+  surface RUI uses becomes a thin shim that writes commands. Hot leaf work
+  (text layout) is a native host import from the app's ELF WASM host. No C,
+  GL or libm in the app.
 
 ## 3. The raylib port (server side)
 
