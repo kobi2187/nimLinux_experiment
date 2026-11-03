@@ -16,11 +16,14 @@ const
   ServerChanNameLen* = 64    ## Max channel name length
   MaxServerChans*    = 32    ## Max registered channels
   MaxOwnedChans*     = 8     ## Pool for channels created by userspace servers
+  MaxMsgFlights*     = 4     ## buffer handles travelling with one message (ipc/buffers)
 
 type
   ServerMsg* = object
     len*:  uint16
     data*: array[ServerMsgMaxLen, byte]
+    nFlights*: uint8                          ## buffer transfers riding along
+    flights*:  array[MaxMsgFlights, int16]    ## in-flight ids (ipc/buffers/state)
 
   ServerChan* = object
     name*: array[ServerChanNameLen, char]
@@ -34,6 +37,15 @@ type
   MaybeMsg* = object
     hasValue*: bool
     value*:    ServerMsg
+
+var onMsgDropped*: proc(m: var ServerMsg) {.nimcall.}
+  ## A message carrying buffer transfers will never be delivered (channel
+  ## released, or drained by a receiver that takes no handles): the buffers
+  ## glue cancels its flights so nothing leaks.
+
+proc dropFlights*(m: var ServerMsg) =
+  if m.nFlights > 0 and onMsgDropped != nil: onMsgDropped(m)
+  m.nFlights = 0
 
 var
   registry:      array[MaxServerChans, ptr ServerChan]
@@ -139,6 +151,11 @@ proc serverChanAllocOwned*(name: cstring; recvCap: uint64): ptr ServerChan =
 proc serverChanRelease*(ch: ptr ServerChan) =
   ## Unregister a server-owned channel and return its pool slot (owner died).
   ## Senders see "not found" from then on; the name is free to re-create.
+  while ch.count > 0:                       # queued messages die with it
+    var m = ch.buf[ch.head]
+    ch.head = (ch.head + 1) mod ServerChanDepth
+    dec ch.count
+    dropFlights(m)
   for i in 0..<registryCount:
     if registry[i] == ch:
       for j in i ..< registryCount - 1: registry[j] = registry[j + 1]

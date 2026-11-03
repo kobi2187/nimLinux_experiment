@@ -23,6 +23,8 @@ const
   RegionBase* = 0x2000000'u64      ## First app starts here (32 MB mark)
   RegionSize* = 4 * 1024 * 1024'u64  ## Each slot is 4 MB
   MaxRegions* = 16                ## Max simultaneous loaded apps
+  RegionsEnd* = RegionBase + uint64(MaxRegions) * RegionSize   ## 96 MB
+  ArenaBase*  = RegionsEnd         ## buffer arena (ipc/buffers) follows the regions
 
 type
   RegionHandle* = distinct int    ## Opaque slot index; -1 = invalid

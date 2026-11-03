@@ -96,3 +96,17 @@ them. Tests: 7, including a 200-round random-batch test against the state
 invariants. Mutants R1–R5 are all killed: no bounds check, leaked flight,
 a wake per slot, a descriptor resolved in a foreign table, an oversized
 inline slot.
+
+## 2026-11-03 — Stage A enforcement live (B5) + ELF ABI (B8, part)
+
+`kernel/buffers/kbuffers.nim` holds the global store over the arena window
+and applies `blockAccess(task)` to the arena PD entries at every switch and
+after every buffer syscall (diffed, with `invlpg` per changed block). Task
+identity is the process-table slot; a task attaches on its first buffer call
+and is detached by task cleanup. The ELF ABI is syscalls 30–36. Message
+handles use `BufMsgHandles` (count + 4 handles + 4 modes), because the
+syscall gate has 4 argument registers. `tmTransit` cannot be sent from
+userspace. QEMU-verified with `buftest` (ok, pass, and faults on move, seal
+and lend). Still open: SASOS (B6) and monolithic kernel-side (B7)
+enforcement, ring syscalls, WASM host calls (B8 rest), and the
+`ipc/buffers.nim` facade, which stays a stub for in-kernel callers until B6/B7.

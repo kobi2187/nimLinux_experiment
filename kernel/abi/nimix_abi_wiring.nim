@@ -6,6 +6,7 @@
 
 import nimix_abi
 import nimix_abi_impl
+import ../buffers/kbuffers
 
 proc wireSharedAbi*(av: var NimixAbiVTable) =
   ## Wire all shared ABI procs into av.
@@ -39,3 +40,12 @@ proc wireSharedAbi*(av: var NimixAbiVTable) =
   av.sndDrain       = abiSndDrain
   av.chanCreate     = abiChanCreate
   av.capRecv        = abiCapRecv
+  av.bufCreate      = abiBufCreate
+  av.bufMap         = abiBufMap
+  av.bufClose       = abiBufClose
+  av.bufSeal        = abiBufSeal
+  av.bufReturn      = abiBufReturn
+  av.bufMsgSend     = proc(name: cstring; data: pointer; dataLen: int; hs: pointer): int {.nimcall.} =
+    abiBufMsgSend(name, data, dataLen, cast[ptr BufMsgHandles](hs))
+  av.bufMsgRecv     = proc(tok: uint64; buf: pointer; bufLen: int; hs: pointer): int {.nimcall.} =
+    abiBufMsgRecv(tok, buf, bufLen, cast[ptr BufMsgHandles](hs))

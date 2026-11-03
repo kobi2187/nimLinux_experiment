@@ -103,8 +103,9 @@ proc abiChanSend*(name: cstring; data: pointer; dataLen: int): int {.nimcall.} =
 
 proc recvInto(ch: ptr ServerChan; buf: pointer; bufLen: int): int =
   ## Dequeue one message into buf. Bytes written, or -1 if empty.
-  let m = serverChanRecv(ch[])
+  var m = serverChanRecv(ch[])
   if not m.hasValue: return -1
+  dropFlights(m.value)                      # plain receive takes no buffer handles
   copyBytesMin(buf, bufLen, addr m.value.data[0], int(m.value.len))
 
 proc abiChanRecv*(name: cstring; buf: pointer; bufLen: int): int {.nimcall.} =

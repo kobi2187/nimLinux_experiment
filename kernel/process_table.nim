@@ -328,6 +328,10 @@ proc procSpawnRing3*(name: cstring; appMain: uint64; userStackTop: uint64;
   klog(llError, "procSpawnRing3: MaxTasks reached")
   -1
 
+var onTaskSwitch*: proc(next: int) {.nimcall.}
+  ## Called by the preemptive switch with the incoming slot (buffer
+  ## enforcement re-applies that task's arena page rights).
+
 # ── Kill / reclaim ────────────────────────────────────────────────────────────
 
 proc procKill*(slot: int): bool =

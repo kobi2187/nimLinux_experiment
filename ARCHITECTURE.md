@@ -225,6 +225,7 @@ later: app_server owns the display; GUI terminal app = same term/gfx libs in a w
 | virtio-gpu | driver verified; app_server not yet | Milestone 5 / roadmap B |
 | Virtqueue depth | one fixed 64-entry size for all queues | per-queue size if a device needs depth (net throughput) |
 | Display ownership | kernel fb console draws directly on the framebuffer | app_server owns the display; kernel console becomes the boot/fallback console (roadmap C) |
+| `?` operator (core/types) | raises a Defect on error instead of returning it: every `?` is a panic on first failure | make `?` an early-return template (cross-cutting; audit callers) |
 | Region tokens → buffer handles | fs_logic / memregion use global region tokens | migrate to `ipc/buffers` handles once the sub-project delivers (ABI change, planned) |
 | FlatBuffers schema location | per-server vs shared `schemas/` | Open question #3, resolves at Milestone 2 |
 | Rump kernel / OS threads for drivers | blocked on irqSubscribe + userspace DMA | Long-term; don't touch yet |
@@ -259,3 +260,4 @@ later: app_server owns the display; GUI terminal app = same term/gfx libs in a w
 | 2026-10-26 | Ring-3 faults kill only the task; ExceptionContext GPR order fixed (was reversed) | DECISIONS.md §User-mode faults |
 | 2026-10-27 | gfx/term/input libraries + kernel framebuffer console (serial mirror, keyboard input) | DECISIONS.md §Roadmap B step 1 |
 | 2026-10-27 | Bulk-data API FROZEN (`ipc/buffers.nim`); `buffers` SPAWNED; VISION Q6 resolved (Stage A page rights → Stage B per-app CR3) | DECISIONS.md §Bulk data FROZEN |
+| 2026-11-03 | Buffers enforced from ring 3 (arena page rights per switch, syscalls 30–36); memory windows reserved+mapped; huge-page walk + boot-stack bugs fixed; 8 KB frame guard | DECISIONS.md §Buffers enforced |

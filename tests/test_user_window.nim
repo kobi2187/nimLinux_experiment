@@ -48,3 +48,27 @@ block unmapped_window_fails:
   echo "PASS: unmapped_window_fails"
 
 echo "All user_window tests passed."
+
+block map_identity_beyond_the_boot_map:
+  let pml4 = bootLikeMap()
+  let pd = pdOf(pml4)
+  let before = pd[5]
+  assert mapIdentityHuge(pml4, 0'u64, 112 * HugePage)      # through the arena (224 MB)
+  assert pd[5] == before, "existing boot entries untouched"
+  for i in 32 ..< 112:
+    assert pd[i] == (uint64(i) * HugePage or 0x83), "new entries: identity, supervisor, RW, huge"
+  assert pd[112] == 0, "nothing past the requested range"
+  echo "PASS: map_identity_beyond_the_boot_map"
+
+block block_rights_follow_access:
+  let pml4 = bootLikeMap()
+  let pd = pdOf(pml4)
+  let va = 20 * HugePage
+  assert setBlockRights(pml4, va, user = true, writable = true)
+  assert (pd[20] and (PteUser or PteWritable)) == (PteUser or PteWritable)
+  assert setBlockRights(pml4, va, user = true, writable = false)   # sealed: read-only
+  assert (pd[20] and PteUser) != 0 and (pd[20] and PteWritable) == 0
+  assert setBlockRights(pml4, va, user = false, writable = false)  # no user access
+  assert pd[20] == (20'u64 * HugePage or 0x83), "back to the kernel-only boot flags"
+  assert not setBlockRights(pml4, va, user = false, writable = false), "unchanged: no flush needed"
+  echo "PASS: block_rights_follow_access"

@@ -74,6 +74,13 @@ proc fillStubVtable() =
   v.sndDrain       = stubSndDrain
   v.chanCreate     = stubChanCreate
   v.capRecv        = stubCapRecv
+  v.bufCreate      = proc(size: int): int {.nimcall.} = 0
+  v.bufMap         = proc(h: uint32): pointer {.nimcall.} = nil
+  v.bufClose       = proc(h: uint32): int {.nimcall.} = 0
+  v.bufSeal        = proc(h: uint32): int {.nimcall.} = 0
+  v.bufReturn      = proc(h: uint32): int {.nimcall.} = 0
+  v.bufMsgSend     = proc(name: cstring; data: pointer; dataLen: int; hs: pointer): int {.nimcall.} = 0
+  v.bufMsgRecv     = proc(tok: uint64; buf: pointer; bufLen: int; hs: pointer): int {.nimcall.} = 0
   abimod.nimixAbi = v
 
 proc testEnumOrdinals() =
@@ -107,7 +114,9 @@ proc testEnumOrdinals() =
   assert ord(scSndDrain)       == 27
   assert ord(scChanCreate)     == 28
   assert ord(scCapRecv)        == 29
-  assert NimixSyscallCount == 30
+  assert ord(scBufCreate)      == 30
+  assert ord(scBufMsgRecv)     == 36
+  assert NimixSyscallCount == 37
   echo "PASS: syscall enum ordinals"
 
 proc testTableFilled() =

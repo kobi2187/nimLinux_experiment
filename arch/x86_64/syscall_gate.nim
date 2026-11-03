@@ -61,8 +61,15 @@ type NimixSyscall* = enum
   scSndDrain       = 27
   scChanCreate     = 28
   scCapRecv        = 29
+  scBufCreate      = 30
+  scBufMap         = 31
+  scBufClose       = 32
+  scBufSeal        = 33
+  scBufReturn      = 34
+  scBufMsgSend     = 35
+  scBufMsgRecv     = 36
 
-const NimixSyscallCount* = 30   ## total number of syscalls
+const NimixSyscallCount* = 37   ## total number of syscalls
 
 const NimixSyscallSymbol*: array[NimixSyscall, cstring] = [
   ## App-side ABI symbol for each syscall — the ONE list the ELF loader patches
@@ -82,7 +89,11 @@ const NimixSyscallSymbol*: array[NimixSyscall, cstring] = [
   scUptimeSecs: "nimixUptimeSecs", scWallClock: "nimixWallClock",
   scMapAnon: "nimixMapAnon", scFreeAnon: "nimixFreeAnon",
   scSndPlay: "nimixSndPlay", scSndDrain: "nimixSndDrain",
-  scChanCreate: "nimixChanCreate", scCapRecv: "nimixCapRecv"]
+  scChanCreate: "nimixChanCreate", scCapRecv: "nimixCapRecv",
+  scBufCreate: "nimixBufCreate", scBufMap: "nimixBufMap",
+  scBufClose: "nimixBufClose", scBufSeal: "nimixBufSeal",
+  scBufReturn: "nimixBufReturn", scBufMsgSend: "nimixBufMsgSend",
+  scBufMsgRecv: "nimixBufMsgRecv"]
 
 # ── Dispatch table ────────────────────────────────────────────────────────────
 # Raw function pointers indexed by NimixSyscall ordinal.
@@ -123,6 +134,13 @@ proc syscallTableInit*() =
   syscallTable[27] = cast[uint64](v.sndDrain)
   syscallTable[28] = cast[uint64](v.chanCreate)
   syscallTable[29] = cast[uint64](v.capRecv)
+  syscallTable[30] = cast[uint64](v.bufCreate)
+  syscallTable[31] = cast[uint64](v.bufMap)
+  syscallTable[32] = cast[uint64](v.bufClose)
+  syscallTable[33] = cast[uint64](v.bufSeal)
+  syscallTable[34] = cast[uint64](v.bufReturn)
+  syscallTable[35] = cast[uint64](v.bufMsgSend)
+  syscallTable[36] = cast[uint64](v.bufMsgRecv)
 
 proc syscallDispatch*(nr, a0, a1, a2, a3: uint64): uint64 {.exportc: "syscallDispatch", cdecl.} =
   ## Called from syscall_entry asm stub. Dispatches by nr through syscallTable.

@@ -7,4 +7,5 @@ Last updated: 2026-10-27
 - Facade `ipc/buffers.nim` is still the stub (by design until enforcement exists: nothing may rely on unenforced semantics).
 - B3 done: `ipc/buffers/arena.nim` (whole-block runs, one-word free map) wired into the store; buffers are charged the blocks they occupy; `bufMapAddr` gives an address only while access holds.
 - B4 done: `ipc/buffers/ring.nim` — staged pushes, one `ringSubmit` per batch (validate, flip ownership, one wake), attached handle set, `ipc/mpsc_ring` queue.
-- Next: wire the facade `ipc/buffers.nim` into the kernel (pid → TaskId map, arena window mapping, ABI entries) = B8 groundwork, then enforcement (B5 micro, B6 SASOS, B7 mono).
+- B5 done: Stage A enforcement live (`kernel/buffers/kbuffers.nim`, per-switch PD rights over the arena); ELF ABI syscalls 30–36; QEMU `buftest` proves use-after-move / sealed-write / write-while-lent fault and kill only that task.
+- Next: B6 SASOS type-level `Buf`, B7 monolithic, ring syscalls + WASM host calls (B8), then B10 fs_server with lent buffers.

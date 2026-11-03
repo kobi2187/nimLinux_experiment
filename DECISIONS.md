@@ -1095,3 +1095,44 @@ transfer (too costly for audio/frames/packets; batching instead);
 server-allocated reply buffers (lets a client exhaust server memory);
 global/guessable tokens (authority by number); free-form shared regions with
 "protocol discipline" (the unsafe status quo the human ruled out).
+
+## Buffers enforced from ring 3; four latent memory bugs fixed on the way (2026-11-03)
+
+`subprojects/buffers` Stage A now runs in the kernel (`kernel/buffers/kbuffers.nim`).
+- **Memory windows** (`mm/memory_windows.nim`): the app regions (32–96 MB)
+  and a 64 × 2 MB buffer arena (from 96 MB) are reserved in the physical
+  allocator and identity-mapped with 2 MB pages. The arena shrinks to the
+  RAM that exists.
+- **Enforcement:** arena blocks are supervisor-only by default. At every
+  switch (`onTaskSwitch`), and after each buffer syscall, the PD entries are
+  set to exactly what the running task may access (User for any access, RW
+  only for write); only changed entries are rewritten and invalidated.
+- **ABI:** 7 syscalls (30–36: `bufCreate/Map/Close/Seal/Return`,
+  `bufMsgSend/Recv`). Handles ride channel messages out of band (≤4 per
+  `ServerMsg`); a dropped message cancels its transfers (`onMsgDropped`).
+- **Verified** (`make test-devices`, `buftest`): create/map/seal/close and a
+  buffer moved through a channel arrive intact. Use-after-move, a write to a
+  sealed buffer, and a write while lent each fault and kill only that task.
+
+Latent bugs found and fixed (each predates buffers):
+1. **Nothing reserved the app-region range** (32–96 MB) in the physical
+   allocator: DMA allocations would have landed in app memory once they
+   passed ~9 MB.
+2. **Regions 8–15 (64–96 MB) were not mapped**; the boot stub maps only
+   64 MB, so a 9th concurrent app could not start.
+3. **`getOrCreateTable` walked into 2 MB huge pages as if they were page
+   tables:** mapping any DMA page inside the boot identity map wrote a fake
+   "PTE" into the kernel's early heap (`earlyArena`). Fix: a huge entry
+   means already mapped; `kernelMapPage` maps one page without `mapRegion`'s
+   `?`, because…
+4. **core/types' `?` raises a Defect instead of propagating the error**, so
+   every `?` in the kernel is a panic on its first error, and
+   `mapOnePage`'s "already mapped is fine" branch could never run. It is
+   contained here (`kernelMapPage`) and logged as a seam: making `?` return
+   is cross-cutting.
+
+Also: `initStore` built a 32 KB temporary on the 16 KB boot stack, which sits
+right above the boot page tables, and zeroed them (the CPU ran on in its
+TLB until the first miss). It now initialises in place, and kernel builds
+fail on any stack frame over 8 KB (`-Werror=frame-larger-than=8192` in
+nim.cfg; the current kernel has none).

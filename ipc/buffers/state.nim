@@ -136,7 +136,9 @@ proc endLend(s: var BufStore; b: int) =
 
 proc initStore*(s: var BufStore; base: uint64; granule, blocks: int) =
   ## The arena window the kernel mapped (Stage A: BlockSize × 64 = ArenaSize).
-  s = BufStore()
+  ## In place: `s = BufStore()` would build a 32 KB temporary on the stack —
+  ## twice the 16 KB boot stack, which sits right above the boot page tables.
+  zeroMem(addr s, sizeof(s))
   s.arena = initArena(base, granule, blocks)
 
 proc taskAttach*(s: var BufStore; t: TaskId; budget: int): BufError =
@@ -450,3 +452,22 @@ proc handleAt*(s: BufStore; t: TaskId; slot: int): BufHandle =
   if t notin 0 ..< MaxTasks or not s.tasks[t].attached: return NoHandle
   if slot notin 0 ..< MaxHandles or not s.tasks[t].handles[slot].used: return NoHandle
   encode(slot, s.tasks[t].handles[slot].gen)
+
+# ── enforcement queries ───────────────────────────────────────────────────────
+
+proc isAttached*(s: BufStore; t: TaskId): bool =
+  t in 0 ..< MaxTasks and s.tasks[t].attached
+
+proc blockAccess*(s: BufStore; t: TaskId; acc: var array[MaxBlocks, Access]) =
+  ## Per arena block, the access task t has right now — what the enforcement
+  ## layer turns into page rights at switch-in.
+  for i in 0 ..< MaxBlocks: acc[i] = acNone
+  if not s.isAttached(t): return
+  for slot in 0 ..< MaxHandles:
+    let e = s.tasks[t].handles[slot]
+    if not e.used: continue
+    let a = s.access(t, encode(slot, e.gen))
+    if a == acNone: continue
+    let r = s.bufs[e.buf].run
+    for b in r.first ..< r.first + r.count:
+      if a > acc[b]: acc[b] = a

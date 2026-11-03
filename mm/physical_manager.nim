@@ -204,6 +204,20 @@ proc initFromBootInfo*(self: PhysicalMemManager, bootInfo: ptr BootInfo,
   # Initialize lock
   self.lock.init()
 
+proc reserveRange*(self: PhysicalMemManager; base, length: uint64): uint64 =
+  ## Take [base, base+length) out of the allocator for good (fixed-purpose
+  ## memory: app regions, the buffer arena). Returns how many of its frames
+  ## were free RAM — fewer than requested means part of the range is not
+  ## usable memory (beyond RAM, firmware-reserved, or already taken).
+  let first = base div FrameSize
+  let last = min((base + length) div FrameSize, self.totalFrames)
+  for frame in first ..< last:
+    if not self.isFrameUsed(frame):
+      self.markFrameUsed(frame)
+      inc self.usedFrames
+      dec self.zones[getZoneForFrame(frame)].freeFrames
+      inc result
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Frame Allocation
 # ═══════════════════════════════════════════════════════════════════════════

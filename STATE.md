@@ -43,7 +43,7 @@ block-on-mailbox/wake-on-deliver + dispatcher transport — network last.
 - [x] Phase A: virtio-gpu verified (screendump pixels) — plus snd/net/input.
 - [x] Phase B step 1: rasterizer + font + VT → framebuffer console (shell on screen, keyboard).
 - [x] Bulk-data API FROZEN (`ipc/buffers.nim`, spec docs/proposals/bulk_data.md v2); `subprojects/buffers` SPAWNED (first task: SURVEY). VISION Q6 resolved.
-- [→] buffers sub-project: B1 SURVEY ✅, B2 ownership state machine ✅, B3 arena ✅, B4 session rings ✅ (`ipc/buffers/`; mutation-validated tests); next kernel wiring + enforcement → enforcement → ABI/WASM.
+- [→] buffers sub-project: B1 SURVEY ✅, B2 ownership state machine ✅, B3 arena ✅, B4 session rings ✅, B5 Stage A enforcement live ✅ (ring-3 violations fault and kill only that task; `buftest` in `make test-devices`); next SASOS/mono enforcement, ring + WASM ABI, fs_server lent buffers → enforcement → ABI/WASM.
 - [ ] SPAWN app_server on top of buffers (protocol agreed, freeze at spawn).
 - [x] Region capability holes fixed (any-task minting, use-after-free on owner exit, leaked caps) — tests/test_zerocopy.nim.
 - [x] User-mode CPU faults kill the task (system continues); kernel faults halt.

@@ -86,6 +86,7 @@ when defined(kernelFull):
       # neighbouring procTable entries.
       klogInt(llError, "pit: kernel stack overflow in task slot=", int64(prev))
     procTable.current = next
+    if onTaskSwitch != nil: onTaskSwitch(int(next))
     procTable.tasks[next].state = ptsRunning
     inc procTable.tasks[next].switches
     inc procTable.stats.totalSwitches

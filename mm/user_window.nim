@@ -15,7 +15,7 @@ const
   PteUser*    = 1'u64 shl 2
   PteHuge*    = 1'u64 shl 7
   HugePage*   = 2'u64 * 1024 * 1024
-  AddrMask    = 0x000F_FFFF_FFFF_F000'u64
+  AddrMask*   = 0x000F_FFFF_FFFF_F000'u64
 
 type PageTable* = array[512, uint64]
 
@@ -42,6 +42,41 @@ proc setUserWindow*(pml4: ptr PageTable; base, len: uint64; user: bool): bool =
     else:
       pd[]  = pd[] and not PteUser
     va += HugePage
+  true
+
+const PteWritable* = 1'u64 shl 1
+
+proc mapIdentityHuge*(pml4: ptr PageTable; base, len: uint64): bool =
+  ## Identity-map [base, base+len) with 2 MB supervisor pages wherever no
+  ## mapping exists yet (the boot stub maps only the first 64 MB). Needs the
+  ## PML4/PDPT entries of that 1 GB range to exist (the boot map has them).
+  assert (base mod HugePage) == 0 and (len mod HugePage) == 0, "2 MB aligned"
+  var va = base
+  while va < base + len:
+    let l4 = pml4[(va shr 39) and 511]
+    if (l4 and PtePresent) == 0: return false
+    let l3 = tableAt(l4)[(va shr 30) and 511]
+    if (l3 and PtePresent) == 0 or (l3 and PteHuge) != 0: return false
+    let pd = addr tableAt(l3)[(va shr 21) and 511]
+    if (pd[] and PtePresent) == 0:
+      pd[] = va or PtePresent or PteWritable or PteHuge
+    va += HugePage
+  true
+
+proc setBlockRights*(pml4: ptr PageTable; va: uint64; user, writable: bool): bool =
+  ## Buffer enforcement (Stage A): User/RW of one 2 MB huge page. True if the
+  ## entry changed (the caller then flushes it from the TLB).
+  let l4 = pml4[(va shr 39) and 511]
+  if (l4 and PtePresent) == 0: return false
+  let l3 = tableAt(l4)[(va shr 30) and 511]
+  if (l3 and PtePresent) == 0: return false
+  let pd = addr tableAt(l3)[(va shr 21) and 511]
+  if (pd[] and PteHuge) == 0: return false
+  var e = pd[] and not (PteUser or PteWritable)
+  if user: e = e or PteUser
+  if writable or not user: e = e or PteWritable   # kernel keeps write when no user has it
+  if e == pd[]: return false
+  pd[] = e
   true
 
 import region_allocator

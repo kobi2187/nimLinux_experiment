@@ -112,6 +112,22 @@ type
     capRecv*:     proc(tok: uint64; buf: pointer; bufLen: int): int {.nimcall.}
       ## Receive on the channel bound to `tok`. Bytes, -1 empty, -3 bad token.
 
+    # ── Buffers: bulk data by handle (ipc/buffers, docs/proposals/bulk_data.md)
+    # Errors are -ord(BufError). A handle is a per-task value.
+    bufCreate*:   proc(size: int): int {.nimcall.}
+      ## New owned buffer charged to the caller's budget → handle (> 0).
+    bufMap*:      proc(h: uint32): pointer {.nimcall.}
+      ## Address of the buffer with the caller's current rights; nil if none.
+    bufClose*:    proc(h: uint32): int {.nimcall.}
+    bufSeal*:     proc(h: uint32): int {.nimcall.}
+      ## owned → sealed: read-only for every holder, forever.
+    bufReturn*:   proc(h: uint32): int {.nimcall.}
+      ## A borrower ends its lend.
+    bufMsgSend*:  proc(name: cstring; data: pointer; dataLen: int; hs: pointer): int {.nimcall.}
+      ## Post to a named channel with handles (hs: BufMsgHandles: n, handle[], mode[]).
+    bufMsgRecv*:  proc(tok: uint64; buf: pointer; bufLen: int; hs: pointer): int {.nimcall.}
+      ## Receive on a channel by receive capability, taking its handles (hs out).
+
 var nimixAbi*: NimixAbiVTable
   ## Global ABI vtable. Set once at boot by the chosen kernel model init.
   ## Apps never call this directly — the ELF loader patches weak stubs with

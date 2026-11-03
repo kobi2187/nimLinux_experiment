@@ -94,3 +94,11 @@ __attribute__((weak)) int  nimixSndPlay(const void* pcm, int len) { (void)pcm; (
 __attribute__((weak)) int  nimixSndDrain(void) { STUB_PAD; return -1; }
 __attribute__((weak)) unsigned long long nimixChanCreate(const char* name) { (void)name; return 0; }
 __attribute__((weak)) int  nimixCapRecv(unsigned long long tok, void* buf, int len) { (void)tok; (void)buf; (void)len; return -1; }
+/* buffers (ipc/buffers): errors are -ord(BufError) */
+__attribute__((weak)) int  nimixBufCreate(int size) { STUB_PAD; (void)size; return -1; }
+__attribute__((weak)) void* nimixBufMap(unsigned int h) { STUB_PAD; (void)h; return (void*)0; }
+__attribute__((weak)) int  nimixBufClose(unsigned int h) { STUB_PAD; (void)h; return -1; }
+__attribute__((weak)) int  nimixBufSeal(unsigned int h) { STUB_PAD; (void)h; return -1; }
+__attribute__((weak)) int  nimixBufReturn(unsigned int h) { STUB_PAD; (void)h; return -1; }
+__attribute__((weak)) int  nimixBufMsgSend(const char* name, const void* data, int len, void* hs) { STUB_PAD; (void)name; (void)data; (void)len; (void)hs; return -1; }
+__attribute__((weak)) int  nimixBufMsgRecv(unsigned long long tok, void* buf, int len, void* hs) { STUB_PAD; (void)tok; (void)buf; (void)len; (void)hs; return -1; }

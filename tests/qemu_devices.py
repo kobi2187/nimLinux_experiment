@@ -270,6 +270,43 @@ USER_FAULTS = [
 ]
 
 
+BUFFER_CASES = [
+    # (buftest mode, expected app message, must the kernel kill it?)
+    ("ok",   "buftest: ok", False),
+    ("pass", "buftest: passed through a channel intact", False),
+    ("move", "buftest: writing after giving the buffer away", True),
+    ("seal", "buftest: writing to a sealed buffer", True),
+    ("lend", "buftest: writing after giving the buffer away", True),
+]
+
+
+def test_buffers(tmp, iso, bios) -> list:
+    """ipc/buffers enforced from ring 3: the rule (owned or sealed, never
+    shared mutable) holds by page rights; a violation kills only that task."""
+    results = []
+    g = boot(tmp, iso=iso, bios=bios, devices=("blk",))
+    try:
+        for mode, said, killed in BUFFER_CASES:
+            name = f"buffers-{mode}"
+            try:
+                until = "system continues" if killed else "app exit code"
+                out = g.run(f"buftest {mode}", timeout=40, until=until)
+                assert said in out, f"app did not say '{said}': {out[-300:]}"
+                assert "still alive" not in out and "FAIL" not in out, out[-300:]
+                if killed:
+                    assert "CPU EXCEPTION 14 (Page Fault) in USER mode" in out, out[-300:]
+                    results.append((name, True, "violation faulted; only buftest was killed"))
+                else:
+                    assert "app exit code: 0" in out, out[-300:]
+                    results.append((name, True, said.split(": ", 1)[1]))
+            except Exception as e:             # noqa: BLE001
+                results.append((name, False, str(e)))
+        assert "NimixOS" in g.run("version"), "shell dead after buffer violations"
+    finally:
+        g.close()
+    return results
+
+
 def test_user_faults(tmp, iso, bios, kernel) -> list:
     """Ring-3 faults kill only the faulting task: one boot survives them all."""
     results = []
@@ -312,6 +349,7 @@ def main():
             results += test_devices(tmp, a.iso, a.bios)
         if a.only in (None, "crashes"):
             results += test_user_faults(tmp, a.iso, a.bios, a.kernel)
+            results += test_buffers(tmp, a.iso, a.bios)
             results += test_crashes(tmp, a.iso, a.bios, a.kernel)
     for name, ok, msg in results:
         print(f"{'PASS' if ok else 'FAIL'}: {name:12} {msg}")
