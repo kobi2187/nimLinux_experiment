@@ -7,6 +7,7 @@ import rl_types
 
 const RlSrc = currentSourcePath()[0 ..< currentSourcePath().len - "bridge/rl_c.nim".len] & "vendor/raylib/src/"
 {.passC: "-DPLATFORM_MEMORY -DGRAPHICS_API_OPENGL_SOFTWARE -DSUPPORT_MODULE_RAUDIO=0 -I" & RlSrc.}
+{.passC: "-DRLSW_MAX_FRAMEBUFFERS=512 -DRLSW_MAX_TEXTURES=2048".}  # RUI: a target per widget
 {.compile: RlSrc & "rcore.c".}
 {.compile: RlSrc & "rshapes.c".}
 {.compile: RlSrc & "rtextures.c".}

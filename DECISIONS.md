@@ -1317,3 +1317,44 @@ server → the same raylib.
   `LoadImageFromScreen` readback is vertically flipped with R/B swapped
   (it assumes GL's origin). `PLATFORM_NIMIX` blits from `swGetColorBuffer`
   directly, with a pixel test to pin orientation.
+
+## V7a: RUI on the bridge, direct, via adapted naylib + a Pixie text engine (2026-11-03)
+
+RUI's counter example builds **unchanged** and paints headless through the
+raylib bridge's direct backend (`make test-v7`): raylib 6.2 memory platform
++ rlsw, Pixie text.
+
+- **Bridge base = adapted naylib, not hand-written** (SURVEY: RUI re-exports
+  naylib's whole type/enum surface, ~4,000 lines with RAII destructors RUI
+  relies on). naylib v25.51.1 (pinned submodule, `vendor/naylib`) binds
+  raylib 5.6-dev and hard-wires a GLFW build, so **adapt**, reproducibly:
+  `tools/naylib_adapt.py` generates `build/bridge/naylib/` with (1) the
+  build header replaced by raylib 6.2 from `vendor/raylib` (memory
+  platform, rlsw, no GLFW/utils/raudio), (2) naylib's 5.x config `-D` flags
+  dropped so 6.2's `config.h` applies, (3) the 6.2 ABI fixes
+  (`DrawCircleGradient`, `ImageColorContrast`, `ImageDrawRectangleLines`,
+  `UpdateModelAnimation`, `DrawCapsule(Wires)`), (4) naylib's Win32-clash
+  renames back to upstream symbols (`rlRectangle`, `rlCloseWindow`,
+  `rlDrawText`, ...). Each patch must match exactly once or the script
+  fails, so a naylib bump surfaces drift instead of hiding it. Rejected:
+  forking naylib (a second repo to keep in sync); hand-writing the 84-call
+  surface (RUI uses the full types, not just the calls).
+- **rlsw caps raised** to 512 framebuffers / 2048 textures (defaults 8/128):
+  RUI keeps a render target per widget. Pools are heap handle tables, so
+  the cost is small; the render server will want a per-session budget.
+- **RUI changes ride as a patch set** (`patches/rui2/`, applied by the test
+  runner) until they land upstream (V11): the text-engine seam
+  (`text_engine` → Pango | Pixie, `pango_text` keeps its API and caches),
+  the Pixie engine, and `-d:ruiNoGlfw` (RUI's two direct GLFW uses: idle
+  wait sleeps, mouse-button hooks fall back to raylib polling). The Pango
+  path still type-checks.
+- **Upstream raylib 6.2 bug found:** `rlReadScreenPixels` flips rows for
+  GL's bottom-left origin, but rlsw's `swReadPixels` already returns them
+  top-down, so `LoadImageFromScreen` is upside down under rlsw (this also
+  hits RUI's modal freeze). Our test unflips; the fix (skip the flip for
+  `GRAPHICS_API_OPENGL_SOFTWARE`) goes upstream with V5.
+- **Next (V7b): route at the C-symbol level.** The adapter can emit a
+  remote variant whose routed procs `importc` our encoders (`exportc`)
+  instead of raylib, leaving types, CPU image ops and queries as naylib.
+  The routing table is then the hybrid mechanism, and apps still don't
+  change.

@@ -11,3 +11,7 @@
 	path = vendor/raylib
 	url = https://github.com/raysan5/raylib
 	shallow = true
+[submodule "vendor/naylib"]
+	path = vendor/naylib
+	url = https://github.com/planetis-m/naylib
+	shallow = true

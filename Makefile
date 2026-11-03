@@ -45,7 +45,7 @@ KERNEL_OUT = build/main
 ISO_OUT    = nimixos.iso
 ISO_ALL_OUT = nimixos-all-kernels.iso
 
-.PHONY: all build apps nim-apps wasm-apps test-wasm iso iso-all qemu qemu-all qemu-gui qemu-debug gdb-attach symbolize run clean test test-valgrind test-asan test-qemu test-qemu-models test-devices test-arc
+.PHONY: all build apps nim-apps wasm-apps test-wasm iso iso-all qemu qemu-all qemu-gui qemu-debug gdb-attach symbolize run clean test test-valgrind test-asan test-qemu test-qemu-models test-devices test-arc test-p0 test-v7
 
 # Default target: full cycle
 all: build iso qemu
@@ -414,6 +414,9 @@ gfx/font_spleen8x16.nim: vendor/fonts/spleen-8x16.bdf tools/bdf2nim.py
 
 # P0: raylib bridge loopback (host only) — remote pixels == direct pixels and
 # the steady-state frame within VISION's command budgets (BACKLOG P0).
+test-v7:
+	NIM=$(NIM) sh tests/v7/run_v7.sh
+
 test-p0:
 	NIM=$(NIM) sh tests/p0/run_p0.sh
 

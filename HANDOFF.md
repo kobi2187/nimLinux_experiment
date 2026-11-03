@@ -2,6 +2,17 @@
 
 Last updated: 2026-10-27 (session 9e, branch `ccr-56330414-wo65nx`, cloud container)
 
+
+## Session 9g — vertical slice: P0 done, V7a done (RUI on the bridge, direct)
+
+Render-server model + raylib bridge AGREED; P0 showed the command path costs
+~nothing (rlsw raster dominates). V7a: RUI's counter example, unchanged,
+paints headless through adapted naylib (`tools/naylib_adapt.py`) on raylib
+6.2 + rlsw with a Pixie text engine (`make test-v7`). RUI changes are a
+patch set in `patches/rui2/` (pending V11 upstream; ask the human whether to
+push them as a branch/PR to kobi2187/rui2). **Next:** V7b remote routing at
+the C-symbol level (DECISIONS §V7a), then V2→V5 on the critical path.
+
 ## Session 9f — bulk data frozen, buffers spawned
 
 The human wanted big data moved formally, with no unsafe shared memory. The
