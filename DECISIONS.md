@@ -1136,3 +1136,37 @@ right above the boot page tables, and zeroed them (the CPU ran on in its
 TLB until the first miss). It now initialises in place, and kernel builds
 fail on any stack frame over 8 KB (`-Werror=frame-larger-than=8192` in
 nim.cfg; the current kernel has none).
+
+## RUI2 vendored and surveyed; render-server model proposed (2026-11-03)
+
+Human: RUI2 (`kobi2187/rui2`) is to be the foundational GUI toolkit; raylib
+gets ported; WASM apps send draw commands to a native raylib render server
+(server provides). VISION now states that model as the default and the
+experiment, with exceptions as measured ADRs, plus end-to-end budgets.
+- **Vendored** `vendor/rui2` as a git submodule @0038051 (like wasm3/printf).
+- **SURVEY** (docs/surveys/rui2.md):
+  - **Model:** immediate mode, with per-widget cached render textures
+    → the server needs app-id'd render targets.
+  - **raylib surface:** 84 calls, ≈ 25 draw ops; shaders only for 4 SDF
+    primitives + the modal backdrop, which already fall back
+    → semantic commands.
+  - **Threads:** one UI thread + one background worker + a Mailbox, which
+    map onto actors.
+  - **Direct rlgl texture ids** → app-chosen resource ids.
+  - **Build:** no WASM build yet; cyclic widget trees need ORC.
+  - **Text:** all of it is Pango/Cairo and synchronous
+    → measurement must be app-local.
+- **Prior art adopted for the server:** raylib 6.0's `rlsw` software
+  renderer, used GPU-less upstream (ESP32), behind a `PLATFORM_NIMIX`.
+  Rejected: our own rasterizer (rlsw exists upstream); GLSL (no GPU);
+  Pango in the app or server (synchronous, heavy).
+- **Proposals PROPOSED** (awaiting agreement):
+  - docs/proposals/render_server.md: the hybrid app_server, one server with
+    two faces, rlsw, picolibc lean, TSC clock;
+  - docs/proposals/draw_protocol.md: flat binary records, app-chosen ids,
+    semantic SDF ops, text measured locally over shared sealed fonts with
+    stb_truetype on both sides.
+- **Budgets:** counts (commands/frame, kernel calls/frame, idle frames)
+  gate CI on any accelerator. Times (key-to-pixel ≤ 33 ms p95, frame
+  ≤ 16.7 ms) are judged under KVM and only tracked under TCG.
+- Vertical-slice tasks V1–V11 are in BACKLOG.

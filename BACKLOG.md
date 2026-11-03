@@ -127,6 +127,27 @@ Tags: CLEAR = path obvious | FUZZY = outcome known, path uncertain | OPEN = unde
 | 21 | FUZZY | net_server ELF — userspace network stack, cap-gated socket API | app can open socket via net_server |
 | 20 | CLEAR | TFTP client — load ELF/WASM from QEMU TFTP server | ELF loads from network |
 
+## Vertical slice — raylib render server + RUI2 apps (2026-11-03) [PARENT]
+
+Outcome: a WASM app built on RUI2 (vendor/rui2) shows a working window through
+the raylib render server, within VISION's budgets, and is benchmarked against
+in-process raylib. Proposals: docs/proposals/render_server.md and
+draw_protocol.md (PROPOSED, awaiting agreement); survey docs/surveys/rui2.md.
+
+| # | Tag | Task | Done-check | Depends |
+|---|-----|------|-----------|---------|
+| V1 | DONE | vendor rui2 (submodule @0038051) + SURVEY | docs/surveys/rui2.md | — |
+| V2 | CLEAR | SURVEY + adopt libc/libm: picolibc vs musl math, freestanding, for the raylib/rlsw server ELF | hosted build of rlsw links; libm functions raylib uses resolve | — |
+| V3 | CLEAR | fine monotonic clock: TSC calibrated against the PIT; `nanoTime` syscall | host test of the calibration math; QEMU: 1 s sleep measures 1 s ± 1 % | — |
+| V4 | FUZZY | large memory for servers/apps (> 4 MB): a large-region class or an arena-backed heap | render server gets ≥ 32 MB; app regions unchanged | buffers |
+| V5 | CLEAR | raylib 6.0 + rlsw built for NimixOS: `PLATFORM_NIMIX` (virtio-gpu fb blit of damage, fine clock, event-ring input) | ELF demo draws shapes+text; screendump == host render (pixel test) | V2 V3 V4 |
+| V6 | SPAWN | **render server** (app_server's second face): sessions, command-ring execution, targets, composite, present | draw_protocol conformance tests (host) + QEMU pixel test | V5, buffers rings ABI, protocol agreed |
+| V7 | CLEAR | app side: `raylib`/`rlgl` shim encoding commands (naylib names/types), actor-backed `background`/`mailbox`, `pango_text` shim on stb_truetype + sealed fonts | RUI2 builds for WASM (`--mm:orc`) unchanged; host test decodes its command stream | protocol agreed |
+| V8 | CLEAR | WASM runtime: ORC, larger linear memory, buffer/ring host calls | counter example runs in wasm3 | buffers B8 |
+| V9 | CLEAR | **benchmark**: same RUI screen in-process (RUI + raylib/rlsw, ELF) vs server path (WASM → commands → server) | report: frame time, key-to-pixel, commands/frame, kernel calls/frame; CI gates the counts | V6 V7 V8 |
+| V10 | CLEAR | audio: thread-free miniaudio backend → virtio-snd via session ring (audio server) | 440 Hz test tone through the ring (existing wav check) | buffers rings |
+| V11 | CLEAR | upstream to rui2: SDF/backdrop backend hook; `{.cursor.}` parent or ORC note; optional rui_scripting / rui_shaped | PRs to kobi2187/rui2 | V7 |
+
 ## Compiler target (long-term)
 
 | TW# | Tag | Description |

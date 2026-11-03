@@ -52,6 +52,33 @@ OS with game-engine-quality graphics and a dispatcher-based concurrency engine.
 - Prerequisites that enable this basis are allowed (e.g. the interim
   `sti;hlt` blocking until block-on-mailbox lands).
 
+## Rendering model and budgets (human, 2026-11-03)
+
+**The server-provides model is the default and the experiment; exceptions are
+allowed when a measured budget is missed and the cause can't be fixed within
+the model; each exception is an ADR with its measurement.**
+
+In practice:
+- WASM apps (with RUI2 logic in the app) send draw commands to a native
+  render server (raylib), which provides resources and composites.
+- ELF apps and games may render client-side or in direct mode, as the
+  measured exception.
+
+End-to-end budgets: the yardstick for the model and for every exception.
+
+| budget | target | gated where |
+|--------|--------|-------------|
+| key-to-pixel latency (key event in → changed pixels presented) | ≤ 2 frames = **33 ms p95** | KVM runs; TCG: tracked, not gated |
+| RUI frame time at 60 fps (app layout + encode, plus server raster + composite + present) | **≤ 16.7 ms**, split app ≤ 4 ms / server ≤ 10 ms / present ≤ 2.7 ms | KVM; TCG tracked |
+| draw commands per frame | steady state (one widget changed) **≤ 200** and ≤ 16 KB of stream; full repaint of a typical screen ≤ 2,000 | **CI, any accelerator** (deterministic count) |
+| kernel calls per frame | **≈ 1 `ringSubmit`** per app frame (+ 1 wake); ≤ 4 kernel transitions per frame per app including present | **CI** (counted by the kernel) |
+| idle | **0 frames** when nothing changed (RUI sleeps; the server presents nothing) | CI |
+
+The model's cost is measured, not argued: the same RUI screen is rendered
+in-process (RUI + raylib/rlsw linked into one ELF) and through the render
+server (WASM RUI → commands → server → the same rlsw). Frame time,
+key-to-pixel and counts are compared (BACKLOG: vertical slice, V9).
+
 ## Open questions
 
 | # | Question | Resolving signal |
