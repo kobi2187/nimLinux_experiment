@@ -1242,3 +1242,25 @@ WASM host leaves the kernel (R1/V8).
 The kernel *model* still decides where a component runs: monolithic may
 link a server in, by design. What changes is that no component is *forced*
 into the kernel for every model.
+
+## The raylib bridge: apps don't change; route decided per op (2026-11-03)
+
+Human: commands-to-a-render-server means every RUI app must change; put a
+bridge layer in between that decides whether to forward an operation to
+raylib or create a command from it. Added to draw_protocol §7 (proposal):
+- **The bridge** is a naylib-compatible `raylib`/`rlgl` module pair, so
+  RUI and stock raylib programs compile against it unchanged.
+- **Routing by class:** draw ops are routed per op; CPU image ops are
+  always local; queries are answered locally from session state; window and
+  input go to app_server when remote.
+- **Backends:**
+  - `direct`: inline forwards to in-process raylib, zero cost;
+  - `remote`: commands; the only backend in WASM;
+  - `hybrid`: per-op routing from server feature bits, encodability and
+    policy, with counted local fallback through an uploaded texture.
+- **Per-window switching** between remote and direct is VISION's exception
+  mechanism, decided by policy rather than by rewriting the app.
+
+Rejected: a pure command shim (forces every app onto one path and leaves
+no fallback for ops the server lacks); changing RUI's call sites (RUI is
+one of many raylib clients the bridge should serve).

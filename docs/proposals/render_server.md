@@ -68,7 +68,9 @@ put a copy and a hop in every frame.
 - **Memory manager:** `--mm:orc` for WASM, or a `{.cursor.}` parent
   upstream in rui2. RUI's widget trees are cyclic.
 - **Shims, unchanged RUI where possible:**
-  - `raylib`/`rlgl` (command encoders, same names and types as naylib);
+  - the **raylib bridge** (draw_protocol §7): naylib-compatible
+    `raylib`/`rlgl`; per op `direct` (in-process raylib), `remote`
+    (commands) or `hybrid`; apps don't change;
   - `background`/`mailbox` (actors);
   - `pango_text` API → the local text engine.
 - **Larger linear memory** than today's 1 MB WASM arena.
@@ -87,7 +89,8 @@ put a copy and a hop in every frame.
 ## 6. Decisions for agreement (my pick first)
 
 1. **raylib as one native render server; apps send draw commands** (the
-   hybrid above). I'd pick yes. This amends app_server's "client-side
+   hybrid above), reached through the **raylib bridge**, so existing
+   raylib/RUI apps don't change and the route is decided per op. I'd pick yes. This amends app_server's "client-side
    rendering" to "server provides by default, client-side as the measured
    exception".
 2. **One server, two faces** (window manager + renderer). I'd pick yes; the

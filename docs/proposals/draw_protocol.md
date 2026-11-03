@@ -123,16 +123,47 @@ A steady-state frame where one button changes:
 That is within ≤ 200 commands and ≤ 16 KB, and costs **1 `ringSubmit`**
 plus the server's present.
 
-## 7. The app side: the `raylib` shim
+## 7. The app side: the raylib bridge (apps don't change)
 
-`vendor/rui2` compiles unchanged against NimixOS modules named `raylib` and
-`rlgl` (path override in the WASM build):
-- the same type names and layouts as naylib (`Rectangle`, `Color`,
-  `Texture`, `RenderTexture2D`, …);
-- each drawing proc appends a record;
-- `loadRenderTexture` and the rlgl framebuffer calls allocate session ids;
-- `isShaderValid` returns false, so RUI takes its fallback path, until the
-  upstream SDF hook lands.
+Human, 2026-11-03: sending commands means every RUI app would have to
+change; mitigate with a bridge that decides, per operation, whether to
+forward it to raylib or turn it into a command.
+
+**The bridge is a module named `raylib`** (plus `rlgl`) with naylib's exact
+names and types. RUI, and any raylib program, compiles against it
+unchanged. Behind it:
+
+| class | examples | route |
+|-------|----------|-------|
+| **draw** | shapes, `drawTexture*`, `drawText`, targets (`loadRenderTexture`, `begin/endTextureMode`, rlgl framebuffers), scissor, blend, SDF/backdrop | **decided per op**: `direct` → real raylib in-process; `remote` → a command (§3) into the session |
+| **CPU image ops** | `loadImage*`, `loadImageColors`, `imageAlphaPremultiply`, `genImageColor`, `exportImage` | always local: a raylib `Image` is CPU memory; only `loadTextureFromImage` crosses (a texture upload by moved/sealed buffer) |
+| **queries** | `getScreenWidth/Height`, `getTime`, `isKeyDown`, `getMousePosition`, `measureText` | always local: session state from configure/input events, the fine clock, the text helper; never a round trip |
+| **window / input** | `initWindow`, `setWindow*`, cursor, clipboard, `pollInputEvents`, `windowShouldClose` | remote: app_server control channel + event ring; direct: raylib itself |
+
+**Backends:**
+- **`direct`**: every draw op goes to raylib (rlsw on NimixOS, GL on
+  desktop). For desktop RUI, games, and ELF apps that are a measured
+  exception (VISION). Compile-time selected, and the bridge procs are
+  `{.inline.}` forwards, so **zero cost** against plain naylib.
+- **`remote`**: every draw op becomes a command. The only backend for WASM
+  apps (no raylib in the sandbox), and the default for NimixOS GUI apps.
+- **`hybrid`** (ELF apps only): per-op routing from a table that combines
+  (a) what the server supports (feature bits from `hello`), (b) what the
+  bridge can encode, and (c) policy. An op the server lacks (e.g. a custom
+  shader) is rasterized locally by in-process raylib into a local target,
+  uploaded as a texture, and composited with `DRAW_TEXTURE`. Complete, at a
+  measured cost: the bridge counts every local fallback, which is what an
+  exception ADR cites.
+
+**Per-window switching:** the bridge is also where VISION's exception
+mechanism lives. The same app code moves a window between `remote`
+(server provides) and `direct` client-side or direct-scanout rendering
+(the agreed buffers swapchain) by policy, not by rewriting the app.
+
+**Not changed:** RUI's text goes through its text-backend seam (§5), not
+`measureText`; the semantic SDF/backdrop ops reach the bridge through
+RUI's upstream SDF hook. `isShaderValid` → false keeps RUI's fallback until
+that hook exists.
 
 ## 8. Decisions for agreement
 
@@ -148,3 +179,8 @@ plus the server's present.
    later. I'd pick yes.
 5. **The server decodes images** (PNG/QOI via raylib); apps move or seal
    encoded bytes. I'd pick yes.
+6. **The raylib bridge** (§7): naylib-compatible `raylib`/`rlgl` modules,
+   with backends `direct` (zero-cost forwards), `remote` (commands; the
+   only one in WASM) and `hybrid` (per-op routing with counted local
+   fallback); per-window switching is the exception mechanism. Apps and
+   RUI don't change. I'd pick yes.
