@@ -46,6 +46,7 @@ block-on-mailbox/wake-on-deliver + dispatcher transport — network last.
 - [→] buffers sub-project: B1 SURVEY ✅, B2 ownership state machine ✅, B3 arena ✅, B4 session rings ✅, B5 Stage A enforcement live ✅ (ring-3 violations fault and kill only that task; `buftest` in `make test-devices`); next SASOS/mono enforcement, ring + WASM ABI, fs_server lent buffers → enforcement → ABI/WASM.
 - [ ] SPAWN app_server on top of buffers (protocol agreed, freeze at spawn).
 - [→] Residency migrations R0–R10 (BACKLOG; ARCHITECTURE residency map): historical kernel components to their proper homes; R0 device caps unblocks the drivers.
+- [x] P0 host loopback: bridge (`bridge/`, raylib 6.2 + rlsw headless) remote pixels == direct; steady frame 19 records / 424 B; command path ≈ noise (~7%), rlsw raster dominates → damage-limited compositing first (`make test-p0`).
 - [→] Vertical slice raylib + RUI2 (BACKLOG V1–V12): rui2 vendored + surveyed; render_server.md + draw_protocol.md PROPOSED — awaiting agreement; VISION gained the server-provides principle + budgets.
 - [x] Region capability holes fixed (any-task minting, use-after-free on owner exit, leaked caps) — tests/test_zerocopy.nim.
 - [x] User-mode CPU faults kill the task (system continues); kernel faults halt.

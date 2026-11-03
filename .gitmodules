@@ -7,3 +7,7 @@
 [submodule "vendor/rui2"]
 	path = vendor/rui2
 	url = https://github.com/kobi2187/rui2
+[submodule "vendor/raylib"]
+	path = vendor/raylib
+	url = https://github.com/raysan5/raylib
+	shallow = true

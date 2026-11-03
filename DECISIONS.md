@@ -1285,3 +1285,35 @@ work.
   5.x → 6.x API differences.
 - `rcore_memory.c` is also the template for `PLATFORM_NIMIX` (memory
   platform + damage blit to virtio-gpu).
+
+## P0 result: the command path costs ~nothing; rasterization is the cost (2026-11-03)
+
+`make test-p0` (host only, tests/p0): one RUI-shaped screen (each widget
+cached in its own render target, parents composite, one widget changes per
+steady frame), built twice from the same source against the raylib bridge
+(`bridge/`). The direct build is in-process raylib 6.2 + rlsw, headless
+(`rcore_memory`). The remote build encodes commands → loopback render
+server → the same raylib.
+- **Conformance:** remote pixels are **byte-identical** to direct (82,815
+  painted pixels at 640×400).
+- **Command budget:**
+  - steady frame: **19 records, 424 B** (budget ≤ 200 / 16 KB; design
+    estimate ~15 / 0.6 KB);
+  - full repaint: 88 records, 2.2 KB.
+- **Model cost:** encoding < 1 µs per frame. Over 3 × 200 steady frames,
+  direct was 9.8–10.4 ms and remote 10.3–11.6 ms, a **~0.5–1 ms (~7%)
+  difference inside run-to-run noise**. Not yet included: the IPC hop (one
+  `ringSubmit` + a switch), measured on NimixOS in V9.
+- **The real cost is rlsw raster time (~10 ms at 640×400 on this host):**
+  RUI's steady frame recomposites the whole root and blits it full-screen.
+  The lever is **damage-limited compositing** (scissor to the dirty rect;
+  present only damage). That is a renderer change, not a protocol change.
+  Recorded as the first optimisation for the render server (V6).
+- **The bridge is our own naylib-compatible binding to raylib 6.2**
+  (`rl_types`, `rl_c`, `rl_direct`, `rl_remote`, `rl_server`,
+  `rl_protocol`). Direct = inline forwards; the server validates record
+  lengths and session ids and stops a malformed frame.
+- **Known for V5:** rlsw's colour buffer is R8G8B8A8, but the
+  `LoadImageFromScreen` readback is vertically flipped with R/B swapped
+  (it assumes GL's origin). `PLATFORM_NIMIX` blits from `swGetColorBuffer`
+  directly, with a pixel test to pin orientation.

@@ -412,6 +412,11 @@ build/term_replay: tools/term_replay.nim term/vt.nim term/term_render.nim gfx/ca
 gfx/font_spleen8x16.nim: vendor/fonts/spleen-8x16.bdf tools/bdf2nim.py
 	python3 tools/bdf2nim.py $< spleen8x16 > $@
 
+# P0: raylib bridge loopback (host only) — remote pixels == direct pixels and
+# the steady-state frame within VISION's command budgets (BACKLOG P0).
+test-p0:
+	NIM=$(NIM) sh tests/p0/run_p0.sh
+
 # ── Structured in-kernel test suite ───────────────────────────────
 # Boots a testMode kernel, parses TEST PASS/FAIL/DONE from serial.
 TESTMODE_ISO = build/nimixos-test.iso
