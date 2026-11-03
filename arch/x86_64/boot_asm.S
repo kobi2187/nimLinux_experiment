@@ -248,7 +248,8 @@ stack_top:
  * We push all GPRs, call the Nim dispatcher, pop, iretq.
  *
  * Stack layout at nimInterruptDispatch call (RSP = &rax, low addr first):
- *   rax rbx rcx rdx rsi rdi rbp r8..r15  <- pushed here (15 regs × 8 = 120 bytes)
+ *   r15..r8 rbp rdi rsi rdx rcx rbx rax  <- pushed here, rax first (15 regs × 8 = 120 bytes)
+ *                                          (kern/interrupts.ExceptionContext mirrors this)
  *   vector_num (uint64)                   <- pushed by entry stub (second)
  *   error_code (uint64)                   <- pushed by entry stub or fake 0 (first)
  *   rip cs rflags rsp ss                  <- pushed by CPU on interrupt
@@ -268,6 +269,11 @@ isr_common_stub:
     mov %rsp, %rdi
     call nimInterruptDispatch
 
+    /* isr_restore: the exit path. A freshly spawned ring-3 task's kstack starts
+     * with this address so the first preemptiveSwitch `ret` lands here, exactly
+     * like a preempted task returning out of the PIT handler. */
+.global isr_restore
+isr_restore:
     /* Restore GPRs */
     pop %r15; pop %r14; pop %r13; pop %r12
     pop %r11; pop %r10; pop %r9;  pop %r8
@@ -399,9 +405,13 @@ syscall_entry:
     mov  %rsp, syscallScratchRsp(%rip)
     mov  globalTss+4(%rip), %rsp      /* load TSS.rsp0 (offset 4 in Tss) */
 
-    /* 2. Align stack to 16 bytes and make room */
+    /* 2. Align, then move the user RSP onto THIS task's kernel stack. The
+     *    global is only a one-instruction scratch (IF=0 here): a syscall that
+     *    blocks (sleep/yield) lets other tasks syscall and overwrite it, and the
+     *    sleeper then sysret'd onto another app's stack. 4 pushes = 32 bytes,
+     *    so RSP stays 16-aligned at the call. */
     and  $~15, %rsp
-    sub  $8,   %rsp
+    push syscallScratchRsp(%rip)       /* user RSP (per-task from here on) */
 
     /* 3. Save what we need across the call:
      *    - RCX (user RIP) and R11 (user RFLAGS) for SYSRETQ
@@ -415,13 +425,14 @@ syscall_entry:
      *    System V AMD64: RDI=nr, RSI=a0, RDX=a1, RCX=a2, R8=a3
      *    But our ABI is: RAX=nr, RDI=a0, RSI=a1, RDX=a2, R10=a3
      *    Shift: RCX←R10(a3), then shuffle nr into RDI, a0 into RSI, etc. */
-    mov  %r10, %rcx                    /* a3: R10 → RCX (4th arg slot) */
-    mov  %rdx, %r8                     /* a2: RDX → R8  (5th arg slot) — wait, sig is (nr,a0,a1,a2,a3) = 5 args */
+    /* syscallDispatch(nr, a0, a1, a2, a3) → System V: rdi, rsi, rdx, rcx, r8.
+     * Order matters: each source is read before its register is overwritten.
+     * (Previously a2/a3 were swapped: rcx←a3, r8←a2.) */
+    mov  %r10, %r8                     /* a3: R10 → R8  (5th arg slot) */
+    mov  %rdx, %rcx                    /* a2: RDX → RCX (4th arg slot) */
     mov  %rsi, %rdx                    /* a1: RSI → RDX (3rd arg slot) */
     mov  %rdi, %rsi                    /* a0: RDI → RSI (2nd arg slot) */
     mov  %rax, %rdi                    /* nr: RAX → RDI (1st arg slot) */
-    /* rcx already = a3, r8 = a2 — but syscallDispatch takes 5 params:
-       (nr: uint64, a0,a1,a2,a3: uint64) → System V: rdi,rsi,rdx,rcx,r8 */
 
     call syscallDispatch               /* RAX = return value */
 
@@ -430,7 +441,7 @@ syscall_entry:
     pop  %r11                          /* user RFLAGS → R11 for SYSRETQ */
     pop  %rcx                          /* user RIP   → RCX for SYSRETQ */
 
-    mov  syscallScratchRsp(%rip), %rsp /* restore user RSP */
+    pop  %rsp                          /* user RSP, from this task's kstack */
     sysretq                            /* → ring-3, RIP=RCX, RFLAGS=R11 */
 
 /* Mark the stack as non-executable (silences linker warning) */

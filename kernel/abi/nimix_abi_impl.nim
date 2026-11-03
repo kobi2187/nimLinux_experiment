@@ -13,6 +13,9 @@ import ../../kernel/traits/event
 import ../../kernel/process_table
 import ../../mm/sip_heap
 import ../../mm/region_allocator
+import ../../mm/user_window
+import task_cleanup
+import ../../arch/x86_64/cpu_primitives
 import ../../drivers/pit
 import ../../drivers/rtc
 import ../../drivers/virtio/virtio_snd
@@ -29,22 +32,19 @@ export nimix_abi_sysinfo
 
 proc currentSlot(): int {.inline.} = procTable.current
 
-proc yieldToNext() =
-  ## Hand the CPU to the next ready task in the scheduler ring.
-  let next = procPickNext(procTable)
-  if next >= 0 and next != procTable.current:
-    let prev = procTable.current
-    procTable.tasks[prev].state = ptsReady
-    ringInsertTail(procTable, int16(prev), int(procTable.tasks[prev].class))
-    procTable.current = next
-    procTable.tasks[next].state = ptsRunning
-    inc procTable.tasks[next].switches
-    inc procTable.stats.totalSwitches
+proc waitForTick() =
+  ## Give the CPU away until the next PIT tick. Syscalls enter with IF=0
+  ## (SFMASK), so a plain spin can never be preempted; enable interrupts, halt,
+  ## and let pitIrqHandler perform the switch — the one switch path that saves
+  ## and restores a full context. Masked again before returning to sysretq.
+  sti()
+  hlt()
+  cli()
 
-proc freeCurrentRegion() =
-  ## Release the region slot owned by the current task (if any).
-  let regionSlot = procTable.tasks[currentSlot()].regionSlot
-  if regionSlot >= 0: regionFree(RegionHandle(regionSlot))
+proc releaseCurrentTask() =
+  ## Release everything the current task owns (region, channels, events).
+  let t = addr procTable.tasks[currentSlot()]
+  releaseTaskResources(t.pid, int(t.regionSlot))
 
 # ── I/O ───────────────────────────────────────────────────────────────────────
 
@@ -56,17 +56,43 @@ proc abiWrite*(buf: pointer; len: int) {.nimcall.} =
 
 proc abiExit*(code: int) {.nimcall, noreturn.} =
   klogInt(llInfo, "app exit code: ", int64(code))
-  freeCurrentRegion()
+  releaseCurrentTask()
   discard procKill(currentSlot())
-  yieldToNext()
-  while true: discard  # unreachable; satisfies noreturn
+  # The dead task is out of every ring; the next tick switches away for good.
+  while true: waitForTick()
+
+# ── Faults in user tasks ──────────────────────────────────────────────────────
+# Installed as kern/interrupts.userFaultKill/userStackBounds by initSyscallGate.
+
+proc abiKillFaultingTask*() {.nimcall.} =
+  ## A ring-3 task faulted (report already printed). The kernel's own state is
+  ## untouched, so end just this task exactly like exit: release what it owns,
+  ## drop it from the scheduler, and never return to it.
+  let t = addr procTable.tasks[currentSlot()]
+  defaultSerial.putString("=== killed pid ")
+  defaultSerial.putInt(int64(t.pid))
+  defaultSerial.putString(" (")
+  for c in t.name:
+    if c == '\0': break
+    defaultSerial.putChar(c)
+  defaultSerial.putString(") — system continues (symbolize: tools/symbolize.py --app) ===\n")
+  releaseCurrentTask()
+  discard procKill(currentSlot())
+  while true: waitForTick()
+
+proc abiCurrentTaskBounds*(): tuple[lo, hi: uint64] {.nimcall.} =
+  ## The faulting task's own region: the only memory its frames may live in.
+  let slot = procTable.tasks[currentSlot()].regionSlot
+  if slot < 0: return (0'u64, 0'u64)
+  let base = regionBase(RegionHandle(slot))
+  (base, base + RegionSize)
 
 # ── IPC: named channel ────────────────────────────────────────────────────────
 
 proc abiChanSend*(name: cstring; data: pointer; dataLen: int): int {.nimcall.} =
   ## Post a message to the named ServerChan.
   ## Returns: 0=ok, -1=channel not found, -2=buffer full, -3=msg too large.
-  let ch = serverChanFind($name)
+  let ch = serverChanFind(name)
   if ch == nil: return -1
   if dataLen > ServerMsgMaxLen: return -3
   var msg: ServerMsg
@@ -75,15 +101,42 @@ proc abiChanSend*(name: cstring; data: pointer; dataLen: int): int {.nimcall.} =
   if not serverChanPost(ch[], msg): return -2
   0
 
+proc recvInto(ch: ptr ServerChan; buf: pointer; bufLen: int): int =
+  ## Dequeue one message into buf. Bytes written, or -1 if empty.
+  var m = serverChanRecv(ch[])
+  if not m.hasValue: return -1
+  dropFlights(m.value)                      # plain receive takes no buffer handles
+  copyBytesMin(buf, bufLen, addr m.value.data[0], int(m.value.len))
+
 proc abiChanRecv*(name: cstring; buf: pointer; bufLen: int): int {.nimcall.} =
   ## Dequeue one message from the named ServerChan into buf.
-  ## Returns bytes written, or -1 if empty/not found.
-  let ch = serverChanFind($name)
+  ## Returns bytes written, -1 if empty/not found, -3 if the channel is
+  ## server-owned (only its receive capability may drain it: abiCapRecv).
+  let ch = serverChanFind(name)
   if ch == nil: return -1
-  let m = serverChanRecv(ch[])
-  if not m.hasValue: return -1
-  let copyLen = copyBytesMin(buf, bufLen, addr m.value.data[0], int(m.value.len))
-  copyLen
+  if ch.recvCap != 0: return -3
+  recvInto(ch, buf, bufLen)
+
+proc abiChanCreate*(name: cstring): uint64 {.nimcall.} =
+  ## Create a named channel owned by the calling server. Returns its receive
+  ## capability (capIpc), or 0 if the name is taken or no slot/cap is free.
+  ## Senders keep addressing it by name; only the token holder can receive.
+  if name == nil: return 0
+  let pid = procTable.tasks[procTable.current].pid
+  let tok = cap.capGrant(pid, capIpc)
+  if tok.isNull: return 0
+  if serverChanAllocOwned(name, uint64(tok)) == nil:
+    cap.capRevoke(tok)
+    return 0
+  uint64(tok)
+
+proc abiCapRecv*(tok: uint64; buf: pointer; bufLen: int): int {.nimcall.} =
+  ## Receive on the channel bound to `tok`. Bytes written, -1 if empty,
+  ## -3 if the token is invalid/revoked or bound to no channel.
+  if not cap.capCheck(CapToken(tok), capIpc): return -3
+  let ch = serverChanFindByCap(tok)
+  if ch == nil: return -3
+  recvInto(ch, buf, bufLen)
 
 proc abiChanCall*(server: cstring; data: pointer; dataLen: int;
                   replyBuf: pointer; replyBufLen: int): int {.nimcall.} =
@@ -109,7 +162,7 @@ proc abiEventPublish*(topic: cstring; data: pointer; dataLen: int) {.nimcall.} =
   eventPublish(topic, data, dataLen)
 
 proc abiEventSubscribe*(topic: cstring): uint32 {.nimcall.} =
-  uint32(eventSubscribe(topic))
+  uint32(eventSubscribe(topic, procTable.tasks[procTable.current].pid))
 
 proc abiEventPoll*(token: uint32; buf: pointer; bufLen: int): int {.nimcall.} =
   ## Poll for one event on token. Copies payload into buf.
@@ -123,7 +176,8 @@ proc abiEventPoll*(token: uint32; buf: pointer; bufLen: int): int {.nimcall.} =
 # ── Scheduler ─────────────────────────────────────────────────────────────────
 
 proc abiYield*() {.nimcall.} =
-  yieldToNext()
+  ## Yield the rest of this quantum (round-robin picks the next ready task).
+  waitForTick()
 
 # ── Audio ─────────────────────────────────────────────────────────────────────
 
@@ -144,8 +198,12 @@ proc abiSndDrain*(): int {.nimcall.} =
 # ── Timing ────────────────────────────────────────────────────────────────────
 
 proc abiGrantRegion*(slot: int; right: uint32): uint64 {.nimcall.} =
-  ## Mint a memory cap for the current task.
-  let pid = procTable.tasks[procTable.current].pid
+  ## Mint a memory cap for the current task — only on its own region or one
+  ## it holds capMemGrant for (0 otherwise). Rights outside the enum: 0.
+  let t = addr procTable.tasks[procTable.current]
+  let pid = t.pid
+  if right > uint32(high(cap.CapRight)) or
+     not cap.capMayGrantRegion(pid, int(t.regionSlot), slot): return 0
   let capRight = cap.CapRight(right)
   let tok = cap.capGrantRegion(slot, pid, capRight)
   uint64(tok)
@@ -153,9 +211,10 @@ proc abiGrantRegion*(slot: int; right: uint32): uint64 {.nimcall.} =
 proc abiSleep*(ticks: uint64) {.nimcall.} =
   ## Cooperative sleep: spin-wait until ticks have elapsed.
   let target = pitTicks() + ticks
-  procSleepUntil(int(procTable.current), target)
-  while procTable.tasks[procTable.current].state == ptsBlocked:
-    discard
+  let me = int(procTable.current)
+  procSleepUntil(me, target)
+  while procTable.tasks[me].state == ptsBlocked:
+    waitForTick()
 
 # ── RTC / wall clock ──────────────────────────────────────────────────────────
 
@@ -192,6 +251,20 @@ proc abiWallClock*(buf: pointer; len: int): int {.nimcall.} =
   20
 
 # ── mmap-style heap growth ────────────────────────────────────────────────────
+
+proc abiAllocRegion*(size: int): pointer {.nimcall.} =
+  ## Ring-3 apps allocate from their OWN region (SIP bump heap) — never kernel
+  ## heap memory, which is supervisor-only and not the app's to own. Kernel
+  ## tasks (no region) use the kernel heap. Same in every kernel model.
+  let slot = int(procTable.tasks[procTable.current].regionSlot)
+  if slot < 0: return alloc(size)
+  sipAlloc(slot, size)
+
+proc abiFreeRegion*(p: pointer; size: int) {.nimcall.} =
+  ## Kernel-task memory is returned to the kernel heap; app-region memory is a
+  ## bump heap reclaimed whole when the app exits.
+  if p == nil: return
+  if procTable.tasks[procTable.current].regionSlot < 0: dealloc(p)
 
 proc abiMapAnon*(size: int): pointer {.nimcall.} =
   ## Allocate `size` bytes from the calling app's SIP bump heap.

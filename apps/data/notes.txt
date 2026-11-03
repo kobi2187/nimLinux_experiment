@@ -1,0 +1,4 @@
+NimixOS notes
+- regular apps are WASM (sandboxed, capability-limited)
+- system tools and servers are ELF (ring 3, own channels)
+This file was read by cat.wasm through fs_server.

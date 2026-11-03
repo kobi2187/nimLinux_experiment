@@ -161,9 +161,6 @@ proc initMonolithicModel*() =
   ## Populate the global scheduler and ipc vtables.
   ## Must be called once during kernel init before any task or IPC operations.
 
-  # Initialise process table (three-class ring scheduler)
-  procTableInit()
-
   # Zero out channel table
   for i in 0 ..< MaxChannels:
     channels[i].isOpen = false
@@ -191,10 +188,6 @@ proc initMonolithicModel*() =
   ipcTrait.ipc.close   = monoClose
 
   # Wire app ABI vtable — monolithic: alloc from global kernel heap
-  proc monoAlloc(size: int): pointer {.nimcall.} = cast[pointer](alloc(size))
-  proc monoFree(p: pointer; size: int) {.nimcall.} = dealloc(p)
   var av: abiModule.NimixAbiVTable
   wireSharedAbi(av)
-  av.allocRegion = monoAlloc
-  av.freeRegion  = monoFree
   abiModule.nimixAbi = av

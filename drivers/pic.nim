@@ -63,6 +63,8 @@ proc picUnmask*(irq: uint8) {.inline.} =
     outb(PicMasterData, inb(PicMasterData) and not (1'u8 shl int(irq)))
   else:
     outb(PicSlaveData,  inb(PicSlaveData)  and not (1'u8 shl int(irq - 8)))
+    # Slave lines only reach the CPU through the master's cascade input (IRQ2).
+    outb(PicMasterData, inb(PicMasterData) and not (1'u8 shl 2))
 
 proc picMask*(irq: uint8) {.inline.} =
   ## Disable (mask) a specific IRQ line.
@@ -70,3 +72,16 @@ proc picMask*(irq: uint8) {.inline.} =
     outb(PicMasterData, inb(PicMasterData) or (1'u8 shl int(irq)))
   else:
     outb(PicSlaveData,  inb(PicSlaveData)  or (1'u8 shl int(irq - 8)))
+
+const
+  PicElcrMaster* = 0x4D0'u16   ## Edge/Level Control: IRQ 0-7  (bit set = level)
+  PicElcrSlave*  = 0x4D1'u16   ## Edge/Level Control: IRQ 8-15
+
+proc picSetLevelTriggered*(irq: uint8) =
+  ## PCI INTx is level-triggered and shared: in edge mode a line that is still
+  ## asserted by a second device after the first is acknowledged never edges
+  ## again, and that device's interrupts are lost for good.
+  if irq < 8:
+    outb(PicElcrMaster, inb(PicElcrMaster) or (1'u8 shl int(irq)))
+  else:
+    outb(PicElcrSlave,  inb(PicElcrSlave)  or (1'u8 shl int(irq - 8)))

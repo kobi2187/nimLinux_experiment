@@ -4,3 +4,14 @@
 [submodule "vendor/wasm3"]
 	path = vendor/wasm3
 	url = https://github.com/wasm3/wasm3
+[submodule "vendor/rui2"]
+	path = vendor/rui2
+	url = https://github.com/kobi2187/rui2
+[submodule "vendor/raylib"]
+	path = vendor/raylib
+	url = https://github.com/raysan5/raylib
+	shallow = true
+[submodule "vendor/naylib"]
+	path = vendor/naylib
+	url = https://github.com/planetis-m/naylib
+	shallow = true

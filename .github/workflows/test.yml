@@ -1,50 +1,81 @@
 # SPDX-License-Identifier: GPL-2.0
-# NimixOS CI — build all 3 kernel models, run host tests, run QEMU integration tests
+# NimixOS CI — build all 3 kernel models, ELF + WASM apps, run host tests
+# (plain, valgrind, ASan+UBSan),
+# the in-kernel structured suite, and the QEMU shell suite on every model.
 
 name: CI
 
 on:
   push:
-    branches: [ master ]
+    branches: [ main, master ]
   pull_request:
-    branches: [ master ]
+    branches: [ main, master ]
 
 jobs:
   test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
 
     steps:
       - uses: actions/checkout@v4
 
+      # Only the submodules the build uses (vendor/arsenal is a bare gitlink
+      # with no .gitmodules entry and is not imported).
+      - name: Fetch vendored submodules
+        run: git submodule update --init vendor/wasm3 vendor/printf
+
       - name: Install system dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y \
+          sudo apt-get install -y -qq \
             qemu-system-x86 ovmf \
-            grub-pc-bin grub-efi-amd64-bin grub-common xorriso mtools \
-            gcc clang
+            grub-pc-bin grub-efi-amd64-bin grub-common xorriso mtools dosfstools \
+            gcc clang lld wasi-libc valgrind
+          pip install --quiet wasmtime
 
-      - name: Install Nim via choosenim
+      - name: Install Nim 2.2.4
         run: |
-          curl -sSf https://nim-lang.org/choosenim/init.sh | sh -s -- -y
-          echo "$HOME/.nimble/bin" >> $GITHUB_PATH
+          curl -sSL https://nim-lang.org/download/nim-2.2.4-linux_x64.tar.xz | tar xJ -C "$HOME"
+          echo "$HOME/nim-2.2.4/bin" >> "$GITHUB_PATH"
 
+      # cps is not in the nimble package index: install it from its repository.
       - name: Install Nim package dependencies
-        run: nimble install -y --depsOnly
+        run: |
+          nimble install -y https://github.com/nim-works/cps
+          nimble install -y msgpack4nim
 
-      - name: Build all 3 kernel models
-        run: make build
-
-      - name: Run host unit tests
+      - name: Host unit tests
         run: make test
 
-      - name: Build disk image with apps
-        run: make disk nim-apps disk-add-apps
+      - name: ARC / CPS tests (dispatcher, actor, MPSC ring)
+        run: make test-arc
 
-      - name: Build ISO
-        run: make iso
+      - name: Host tests under valgrind memcheck
+        run: make test-valgrind
 
-      - name: Run QEMU integration tests
-        run: make test-qemu DISK=disk.img OVMF=/usr/share/ovmf/OVMF.fd
-        timeout-minutes: 5
+      - name: Host tests under ASan + UBSan
+        run: make test-asan
+
+      - name: Build all 3 kernel models (checks heap alignment)
+        run: make build
+
+      - name: Build apps (ELF system tools + servers, WASM regular apps)
+        run: make nim-apps wasm-apps
+
+      - name: WASM app host tests
+        run: make test-wasm
+
+      - name: Disk image
+        run: make disk
+
+      - name: In-kernel structured suite (kernel + ring-3 user tests)
+        run: make test-structured OVMF=/usr/share/ovmf/OVMF.fd
+        timeout-minutes: 10
+
+      - name: QEMU shell suite on every kernel model
+        run: make test-qemu-models OVMF=/usr/share/ovmf/OVMF.fd
+        timeout-minutes: 30
+
+      - name: virtio devices verified on the host + serial crash reports
+        run: make test-devices OVMF=/usr/share/ovmf/OVMF.fd
+        timeout-minutes: 15

@@ -42,6 +42,7 @@ type
     common*:     ptr VirtioPciCommonCfg
     notifyBase*: uint64
     notifyMult*: uint32
+    isrBase*:    uint64
 
   VirtioInput* = object
     evQueue*:  Virtqueue
@@ -71,9 +72,7 @@ proc inMapCap(loc: VirtioCapLoc): uint64 =
   uint64(mapDeviceMmio(PhysAddr(phys), uint64(loc.length)))
 
 proc inNotify(queueIdx: uint16) =
-  let qno = gInputDev.common.queueNotifyOff
-  let at  = notifyAddr(gInputDev.notifyBase, qno, gInputDev.notifyMult)
-  cast[ptr uint16](at)[] = queueIdx
+  commonKick(gInputDev.common, gInputDev.notifyBase, gInputDev.notifyMult, queueIdx)
 
 # ── RX buffer pre-post ────────────────────────────────────────────────────────
 
@@ -99,6 +98,7 @@ proc virtioInputInit*(): bool =
   gInputDev.common     = cast[ptr VirtioPciCommonCfg](inMapCap(caps.common))
   gInputDev.notifyBase = inMapCap(caps.notify)
   gInputDev.notifyMult = caps.notifyOffMultiplier
+  gInputDev.isrBase    = inMapCap(caps.isr)
   if gInputDev.common == nil or gInputDev.notifyBase == 0:
     klog(llError, "virtio-input: cap map failed"); return false
   if not commonNegotiate(gInputDev.common, 0'u64):
@@ -110,9 +110,8 @@ proc virtioInputInit*(): bool =
   gInput.evQueue = virtqueueInitNoWire(0, mem)
   gInput.qMem    = mem
   gInput.irqLine = inCfgReader(PciRegIrqLine)
-  gInputDev.common.queueSelect = 0
-  if not commonQueueSetup(gInputDev.common, 0'u16, phys,
-                          phys + availRingOffset(), phys + usedRingOffset()):
+  cfgSet(gInputDev.common, queueSelect, 0)
+  if not pciQueueAttach(gInputDev.common, 0'u16, phys):
     klog(llError, "virtio-input: queue setup failed"); return false
   commonSetDriverOk(gInputDev.common)
   prePostEventBufs()
@@ -125,6 +124,8 @@ proc virtioInputInit*(): bool =
 proc virtioInputIrqHandler*() =
   ## Drain the event queue and dispatch each event to onEvent (if set).
   if not gInput.ready: return
+  # Reading ISR acknowledges the (level-triggered, possibly shared) interrupt.
+  if gInputDev.isrBase != 0: discard isrRead(gInputDev.isrBase)
   while true:
     let pop = virtqueuePop(gInput.evQueue)
     if not pop.found: break

@@ -33,13 +33,18 @@ type
 
 # ── wasm3 C API ───────────────────────────────────────────────────────────────
 
-{.passC: "-I/home/kl/prog/nimLinux_experiment/vendor/wasm3/source".}
+{.passC: "-I" & currentSourcePath()[0 .. ^("runtime/wasm_runner.nim".len + 1)] &
+  "vendor/wasm3/source".}
 
 proc m3_NewEnvironment(): M3Env
   {.importc: "m3_NewEnvironment", header: "wasm3.h".}
 
 proc m3_NewRuntime(env: M3Env, stackSize: uint32, userData: pointer): M3Runtime
   {.importc: "m3_NewRuntime", header: "wasm3.h".}
+
+proc m3_FreeRuntime(rt: M3Runtime) {.importc: "m3_FreeRuntime", header: "wasm3.h".}
+proc m3_FreeEnvironment(env: M3Env) {.importc: "m3_FreeEnvironment", header: "wasm3.h".}
+proc m3_FreeModule(m: M3Module) {.importc: "m3_FreeModule", header: "wasm3.h".}
 
 proc m3_ParseModule(env: M3Env, outMod: ptr M3Module,
                     bytes: ptr uint8, numBytes: uint32): M3Result
@@ -117,6 +122,36 @@ proc hostChanSend(rt: M3Runtime, ctx: pointer,
     discard sipChanSend(name, data, int(dataLen))
   nil
 
+var gWasmArgs: array[128, char]   ## args for the next wasmRun (shell-set)
+var gWasmSubs: array[16, EventToken]   ## subscriptions of the running module
+var gWasmSubCount = 0
+
+proc wasmSetArgs*(args: cstring) =
+  ## Set the argument string the next app sees via env.args_get.
+  var i = 0
+  if args != nil:
+    while i < gWasmArgs.len - 1 and args[i] != '\0':
+      gWasmArgs[i] = args[i]; inc i
+  gWasmArgs[i] = '\0'
+
+proc hostArgsGet(rt: M3Runtime, ctx: pointer,
+                 sp: M3Stack, mem: pointer): pointer {.cdecl, exportc.} =
+  ## env.args_get(buf_ptr: i32, max_len: i32) -> i32 bytes copied (no NUL).
+  ## Stack layout for (i32,i32)->i32: sp[0]=return, sp[1]=buf, sp[2]=maxlen
+  let bufPtr = uint32(sp[1])
+  let maxLen = uint32(sp[2])
+  var size: uint32
+  let wasmMem = m3_GetMemory(rt, addr size, 0)
+  if wasmMem == nil or bufPtr + maxLen > size:
+    sp[0] = 0xFFFFFFFF'u64
+    return nil
+  let dst = cast[ptr UncheckedArray[char]](cast[uint64](wasmMem) + uint64(bufPtr))
+  var n = 0'u32
+  while n < maxLen and gWasmArgs[n] != '\0':
+    dst[n] = gWasmArgs[n]; inc n
+  sp[0] = uint64(n)
+  nil
+
 proc hostSipExit(rt: M3Runtime, ctx: pointer,
                  sp: M3Stack, mem: pointer): pointer {.cdecl, exportc.} =
   ## env.sip_exit(code: i32)
@@ -135,6 +170,9 @@ proc hostEventSubscribe(rt: M3Runtime, ctx: pointer,
     return nil
   let topic = cast[cstring](cast[uint64](wasmMem) + uint64(topicPtr))
   let token = eventSubscribe(topic)
+  if int(uint32(token)) != 0 and gWasmSubCount < gWasmSubs.len:
+    gWasmSubs[gWasmSubCount] = token   # released when the module finishes
+    inc gWasmSubCount
   sp[0] = uint64(uint32(token))  # write return value to sp[0]
   nil
 
@@ -182,22 +220,37 @@ type
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
+const WasmStackBytes = 64 * 1024   ## wasm3 value stack (8 KB was tight for Nim)
+
+proc runInRuntime(env: M3Env; rt: M3Runtime; wasmBytes: ptr byte; wasmLen: int;
+                  caps: openArray[uint64]): WasmResult
+
 proc wasmRun*(wasmBytes: ptr byte, wasmLen: int,
               caps: openArray[uint64] = []): WasmResult =
   ## Load and run a WASM module from a byte array.
   ## Binds only host functions whose capability is in `caps`.
-  ## Calls _start() as the entry point.
-
+  ## Calls _start() as the entry point. The runtime and environment are freed
+  ## on every path (they leaked kernel heap on each launch before).
   let env = m3_NewEnvironment()
   if pointer(env) == nil:
     klog(llError, "wasm3: NewEnvironment failed")
     return wasmEnvError
-
-  let rt = m3_NewRuntime(env, 8192, nil)
+  let rt = m3_NewRuntime(env, WasmStackBytes, nil)
   if pointer(rt) == nil:
     klog(llError, "wasm3: NewRuntime failed")
+    m3_FreeEnvironment(env)
     return wasmEnvError
   gRuntime = rt
+  result = runInRuntime(env, rt, wasmBytes, wasmLen, caps)
+  gRuntime = M3Runtime(nil)
+  for i in 0 ..< gWasmSubCount: eventUnsubscribe(gWasmSubs[i])
+  gWasmSubCount = 0
+  m3_FreeRuntime(rt)
+  m3_FreeEnvironment(env)
+  wasmSetArgs(nil)
+
+proc runInRuntime(env: M3Env; rt: M3Runtime; wasmBytes: ptr byte; wasmLen: int;
+                  caps: openArray[uint64]): WasmResult =
 
   var module: M3Module
   let parseErr = m3_ParseModule(env, addr module,
@@ -211,6 +264,7 @@ proc wasmRun*(wasmBytes: ptr byte, wasmLen: int,
   let loadErr = m3_LoadModule(rt, module)
   if loadErr != nil:
     logWasm3Error(rt, "load")
+    m3_FreeModule(module)   # not yet owned by the runtime
     return wasmLinkError
 
   # Link host functions after LoadModule
@@ -219,6 +273,7 @@ proc wasmRun*(wasmBytes: ptr byte, wasmLen: int,
   discard m3_LinkRawFunction(module, "env", "sip_exit",        "v(i)",   hostSipExit)
   discard m3_LinkRawFunction(module, "env", "event_subscribe", "i(i)",   hostEventSubscribe)
   discard m3_LinkRawFunction(module, "env", "event_wait",      "i(iii)", hostEventWait)
+  discard m3_LinkRawFunction(module, "env", "args_get",        "i(ii)",  hostArgsGet)
   # Capability-gated
   for c in caps:
     if c == CapIpc:

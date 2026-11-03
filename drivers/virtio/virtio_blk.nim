@@ -200,6 +200,8 @@ proc blkPciReady(t: VirtioTransport): bool =
 proc virtioBlkInitPci(): bool =
   var t = pciTransport(VirtioVendorBlk, VirtioBlkDevice)
   if not blkPciReady(t): return false
+  let loc = pciVirtioFind(VirtioVendorBlk, VirtioBlkDevice)
+  pciDisableIntx(loc.bus, loc.slot, loc.fn)   # polled driver
   # Allocate DMA ring from physMgr (above boot identity map), mapped uncached.
   # Queue needs 2 pages (desc+avail+used=7193B) + DMA bufs. 3 pages = safe margin.
   let mem = allocDmaPages(3)
@@ -243,31 +245,37 @@ proc virtioBlkRW(sector: uint64; buf: pointer; write: bool): bool =
   let b  = blkDmaBufs()
   let vq = addr gVirtioBlk.queue
   # ── Contract traces: DMA layout + ring state ──────────────────────────────
-  earlyPutString("[TRACE blkRW] sector="); earlyPutInt(int64(sector))
-  earlyPutString(" write="); earlyPutInt(if write: 1 else: 0); earlyPutString("\n")
-  earlyPutString("[TRACE blkRW] queueMem(virt)="); earlyPutHex(cast[uint64](gVirtioBlk.queueMem)); earlyPutString("\n")
-  earlyPutString("[TRACE blkRW] desc(virt)="); earlyPutHex(cast[uint64](vq.desc))
-  earlyPutString(" desc(phys)="); earlyPutHex(translatePhys(vq.desc)); earlyPutString("\n")
-  earlyPutString("[TRACE blkRW] hdr(virt)="); earlyPutHex(cast[uint64](b.hdr))
-  earlyPutString(" hdr(phys)="); earlyPutHex(translatePhys(b.hdr)); earlyPutString("\n")
-  earlyPutString("[TRACE blkRW] usePci="); earlyPutInt(if gVirtioBlk.usePci: 1 else: 0); earlyPutString("\n")
+  when defined(virtioTrace):  # -d:virtioTrace: per-request trace
+    earlyPutString("[TRACE blkRW] sector="); earlyPutInt(int64(sector))
+    earlyPutString(" write="); earlyPutInt(if write: 1 else: 0); earlyPutString("\n")
+    earlyPutString("[TRACE blkRW] queueMem(virt)="); earlyPutHex(cast[uint64](gVirtioBlk.queueMem)); earlyPutString("\n")
+    earlyPutString("[TRACE blkRW] desc(virt)="); earlyPutHex(cast[uint64](vq.desc))
+    earlyPutString(" desc(phys)="); earlyPutHex(translatePhys(vq.desc)); earlyPutString("\n")
+    earlyPutString("[TRACE blkRW] hdr(virt)="); earlyPutHex(cast[uint64](b.hdr))
+    earlyPutString(" hdr(phys)="); earlyPutHex(translatePhys(b.hdr)); earlyPutString("\n")
+    earlyPutString("[TRACE blkRW] usePci="); earlyPutInt(if gVirtioBlk.usePci: 1 else: 0); earlyPutString("\n")
   blkFillHdr(b, sector, write)
   if write: copyToDevice(buf, b.data)
   let head = blkDescHdr(vq, b)
   blkDescData(vq, b, write)
   blkDescStat(vq, b)
-  earlyPutString("[TRACE blkRW] descs filled, head="); earlyPutInt(int64(head)); earlyPutString("\n")
-  earlyPutString("[TRACE blkRW] avail.idx(pre)="); earlyPutInt(int64(vq.avail.idx)); earlyPutString("\n")
+  when defined(virtioTrace):  # -d:virtioTrace: per-request trace
+    earlyPutString("[TRACE blkRW] descs filled, head="); earlyPutInt(int64(head)); earlyPutString("\n")
+    earlyPutString("[TRACE blkRW] avail.idx(pre)="); earlyPutInt(int64(vq.avail.idx)); earlyPutString("\n")
   blkPostChain(vq, head)
-  earlyPutString("[TRACE blkRW] posted, avail.idx(post)="); earlyPutInt(int64(vq.avail.idx))
-  earlyPutString(" used.idx(pre-kick)="); earlyPutInt(int64(vq.used.idx)); earlyPutString("\n")
+  when defined(virtioTrace):  # -d:virtioTrace: per-request trace
+    earlyPutString("[TRACE blkRW] posted, avail.idx(post)="); earlyPutInt(int64(vq.avail.idx))
+    earlyPutString(" used.idx(pre-kick)="); earlyPutInt(int64(vq.used.idx)); earlyPutString("\n")
   blkKick()
-  earlyPutString("[TRACE blkRW] kicked, used.idx(post-kick)="); earlyPutInt(int64(vq.used.idx)); earlyPutString("\n")
-  earlyPutString("[TRACE blkRW] spinning for used ring...\n")
+  when defined(virtioTrace):  # -d:virtioTrace: per-request trace
+    earlyPutString("[TRACE blkRW] kicked, used.idx(post-kick)="); earlyPutInt(int64(vq.used.idx)); earlyPutString("\n")
+    earlyPutString("[TRACE blkRW] spinning for used ring...\n")
   if not blkConsumeUsed(vq):
-    earlyPutString("[TRACE blkRW] SPIN TIMED OUT — device never advanced used.idx\n")
+    when defined(virtioTrace):  # -d:virtioTrace: per-request trace
+      earlyPutString("[TRACE blkRW] SPIN TIMED OUT — device never advanced used.idx\n")
     return false
-  earlyPutString("[TRACE blkRW] used ring advanced, status="); earlyPutInt(int64(b.stat[])); earlyPutString("\n")
+  when defined(virtioTrace):  # -d:virtioTrace: per-request trace
+    earlyPutString("[TRACE blkRW] used ring advanced, status="); earlyPutInt(int64(b.stat[])); earlyPutString("\n")
   if b.stat[] != BlkStatusOk:
     klogInt(llError, "virtio-blk: device error, status=", int64(b.stat[]))
     return false

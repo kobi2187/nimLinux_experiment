@@ -277,10 +277,6 @@ proc initMicrokernelModel*() =
 
   # Wire app ABI vtable — microkernel: alloc from kernel heap.
   # In a real micro, allocRegion would be a user-space allocator server.
-  proc mkAlloc(size: int): pointer {.nimcall.} = cast[pointer](alloc(size))
-  proc mkFree(p: pointer; size: int) {.nimcall.} = dealloc(p)
   var av: abiModule.NimixAbiVTable
   wireSharedAbi(av)
-  av.allocRegion = mkAlloc
-  av.freeRegion  = mkFree
   abiModule.nimixAbi = av

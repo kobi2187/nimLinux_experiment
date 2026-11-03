@@ -713,3 +713,692 @@ affordable: 328 B + ~60 ns per in-flight request.
 - Two actors (ingest + route): route has nothing to park on while sends are
   fire-and-forget — a seam with no payoff.
 - Pop-then-requeue drain: resets aging clock (above).
+
+## V10b — virtio-pci CommonCfg needs volatile access; root cause of blk timeouts (2026-10-25)
+
+### Context
+Every virtio-blk(pci) request timed out (`used.idx` never advanced), so `mount`,
+`ls`, `exec` — the whole disk path — were dead. The V10 "uncached DMA ring" fix
+had not cured it; the author's own `qemu_test.log` also stops at the first sector
+read.
+
+### Evidence (QEMU 8.2, TCG)
+- `-trace virtio_*`: status reaches 15 (DRIVER_OK) and QEMU *receives* both
+  notifies, but never pops a buffer.
+- HMP `info virtio-queue-status`: device holds `desc=0x19d8000` (correct) but
+  **`avail=0, used=0`**. QEMU latches all three ring addresses on the
+  `queue_enable=1` write.
+- `objdump` of `commonQueueSetup`: GCC emitted select → descLo → **enable** →
+  descHi → avail (merged 64-bit) → used. Plain stores through `ptr` to a struct
+  are reorderable/mergeable/eliminable; an uncached mapping only stops CPU
+  caching, not the compiler. `writeGuestFeatures`' first `select=0` is likewise a
+  dead store the compiler may drop.
+
+### Decision (SURVEY: adopt `std/volatile`, the Nim analogue of Linux readl/writel)
+- `cfgGet`/`cfgSet` templates in `virtio_pci.nim`; every CommonCfg access in
+  virtio_pci, the PCI transport, gpu, net, snd, input goes through them.
+- `notifyWrite` = compiler barrier + volatile 16-bit store (Linux virtio_wmb +
+  iowrite16); `isrRead` volatile (a discarded plain load is deleted outright, yet
+  the read is what acks the IRQ); `deviceConfigRead32` volatile.
+- `commonKick` selects the queue before reading `queue_notify_off` — that field
+  reads back for the *selected* queue and QEMU derives the kicked queue from the
+  doorbell address, so the old code could kick the wrong queue (net RX after TX
+  setup). Latent; fixed in the same pass.
+
+### Result
+`mount` → "FAT volume mounted"; ELFs load from disk. QEMU harness 4/11 → 5/11
+(remaining failures cascade from the pre-existing post-ring-3-spawn hang, TW#65).
+
+### Rejected
+- `asm volatile("" ::: "memory")` between every store — works, but one forgotten
+  barrier silently reintroduces the bug; per-access volatile is local and auditable.
+- Marking the `common` pointer target `{.volatile.}` — Nim applies it to the
+  variable, not pointee fields.
+
+## Dispatcher transport pump + strict untrusted decode (2026-10-25)
+
+### Decision
+- `dispatchPump(ds, actor)` in `dispatch_logic.nim`: one quantum = drain up to
+  `PumpMaxPerQuantum` (64) messages from `iface.recv("dispatch")` into the actor,
+  then deliver one tick. Transport-neutral — kmod and ELF variants share it. A
+  recv that fills the buffer may be truncated (`abiChanRecv` copies min) → dropped.
+- `tryDecodeRequest` in `dispatch_wire.nim`: strict hand decoder for
+  `[uint, uint]`. msgpack4nim validates shape with `assert` → AssertionDefect →
+  fatal under `--panics:on`, so one malformed app message killed the dispatcher
+  (caught by a new test). `decodeRequest` kept for trusted callers.
+- ELF variant builds with `--os:any --panics:on` (CPS on): nim-cps references
+  `getCurrentException`, which system.nim omits for `hostOS == "standalone"`.
+  Four libc no-ops added to `nimix_abi_stub.c` (ferror, clearerr, strerror,
+  __errno_location) for syncio error paths — same pattern as the existing
+  fwrite/fflush stubs. Verified: links with only `_start` unresolved (like every
+  app), RELATIVE relocs only, loads + spawns in ring 3 in QEMU.
+
+### Not done — cross-cutting, needs dialogue
+- No `"dispatch"` ServerChan is ever registered and the ABI has no way for an ELF
+  to register one: the ELF dispatcher receives nothing until a `chanCreate` ABI
+  call (or kernel-side pre-registration) exists.
+- kmod variant: running CPS in the kernel needs `--panics:on` on the kernel build
+  and a boot hook; deferred.
+
+## Capability table valid when zero-initialised (2026-10-25)
+`capTableInit` is never called by the kernel, so `nextSerial` started at 0 and the
+first grant minted `makeToken(0, 0) == NullCap` (in-kernel tests
+`cap_grant_not_null`/`cap_check_right` failed). `capGrant` now skips serial 0
+*before* minting, making the zero value valid without an init call. Regression
+test `testGrantOnZeroInitTable` (fails before, passes after). Structured suite 24/24.
+
+## Build portability + stale-kernel trap (2026-10-25)
+- Hardcoded `/home/kl/prog/...` paths in `fs/fatfs.nim`, `runtime/wasm_*.nim`
+  replaced with `{.compile.}` paths relative to the module and `currentSourcePath`
+  -derived `-I` flags; Makefile `NIM ?= nim`; nimble path in `TEST_FLAGS`.
+- `build/kernel-%` and `build/kernel-test` listed no prerequisites, so edits never
+  rebuilt them (`make iso` booted a stale kernel; `make test-structured` ran an old
+  one). Both now depend on `FORCE`; nim's own cache keeps rebuilds fast.
+- `kernel/init/main.nim` testMode branch lost its `process_table`/`pit` imports in
+  the c6d7425 refactor and no longer compiled; restored.
+
+## Review of ccfeb6d modules (2026-10-25)
+`ipc/mpsc_ring.nim` (Vyukov bounded MPSC), `arch/common/bit_intrinsics.nim`,
+`fs/littlefs_wearleveling.nim` landed with no callers and no ADR. Tests pass and
+are now wired into `make test` / `make test-arc`. Flags for the human:
+- `mpsc_ring` duplicates `ipc/mailbox.nim`'s role; it is the natural SMP backend
+  for Mailbox behind Mailbox's unchanged interface — swap when SMP (open question
+  #5) starts, not before (single-CPU cost with no benefit today).
+- `littlefs_wearleveling` is a 16 KB in-RAM toy FS registered at `/lfs_wl/`, not
+  littlefs. It conflicts with §VFS (vendor real littlefs/lwext4) and had no SURVEY.
+  Keep as a VFS test double or delete — human's call.
+
+## Decision principles from the human (2026-10-26)
+"Decisions should match the general vision: microkernel, functionality in
+servers, actors and lightweight fibers, capabilities, and libraries for an
+oskit, modular and encapsulated. Not a POSIX OS-threads type of operating
+system. Some prerequisites are allowed to enable the basis." Recorded in
+VISION.md as design axioms; the four open calls of 2026-10-25 resolved by it:
+
+| Call | Resolution | Rejected |
+|------|-----------|----------|
+| Who creates the dispatch channel | Server creates it: `chanCreate(name)` → receive capability; `capRecv(tok)`; plain `chanRecv` refused on owned channels | Kernel pre-registration (policy in kernel); pid-based receive check (ambient authority) |
+| `--panics:on` in kernel for dispatch_kmod | PARKED. Dispatcher is a userspace server; no CPS runtime in the kernel | Changing kernel flags for a kmod variant the microkernel path doesn't need |
+| littlefs_wearleveling | Renamed `ramfs` (honest oskit VFS lib / test double); real littlefs after Nim-ecosystem survey | Delete (loses a useful test double); keep misleading name |
+| mpsc_ring | PARKED as Mailbox's SMP backend; fibers are single-CPU today | Adopting now (cost, no benefit, OS-thread test harness only) |
+
+## Ring-3 bring-up — eleven root causes (2026-10-26)
+Method: QEMU `-d int`, HMP, gdb backtraces, objdump — every fix has evidence.
+TW#72 "RIP=0x101e" was REAL, not stale. In discovery order:
+1. **Trampoline** 12 B, no `ret`/`mov r10,rcx` → ran stub leftovers after
+   sysret. → 16 B complete function; loader refuses stubs < 16 B.
+2. **Patch table** hand list 20/28 → single `NimixSyscallSymbol` table +
+   test cross-checking `nimix_abi_stub.c`.
+3. **syscall_entry** arg shuffle swapped a2/a3.
+4. **First switch** to a ring-3 task `ret` to 0 → kstack starts with
+   `isr_restore`.
+5. **User RW/X**: boot map has no User bit → `mm/user_window` grants the
+   app's own region at spawn, revokes at exit. Interim: one shared address
+   space; per-app CR3 remains the real isolation step (OPEN, see VISION).
+6. **TLS**: Nim threads:on → `%fs` loads, FS=0 → apps `--threads:off`
+   (matches "no OS threads").
+7. **Shell not a task** (current=-1) → `procAdoptCurrent`; exit/sleep/yield
+   block with `sti;hlt` (`waitForTick`) so the PIT does the real switch.
+   Interim until Phase E block-on-mailbox/wake-on-deliver.
+8. **fxsave** buffer unaligned (#GP) → `{.align(16).}`.
+9. **Kernel stack overflow**: 4 KB kstack, `abiProcList` copied a whole Task
+   (>4 KB frame) into procTable → 16 KB stacks, in-place `claimSlot`, ptr
+   reads, canary checked every tick.
+10. **GDT order**: SYSRETQ needs user data before user code; got CS=0x2B
+    (TSS) → #GP(0x28) on the next ring-3 IRQ. Standard layout (DS 0x1B,
+    CS 0x23, STAR[63:48]=KernelDS). Shared `syscallScratchRsp` → user RSP
+    now on the task's own kstack.
+11. **Heap**: apps never ran `NimMain` (`--noMain`) → `nimixAppInit()`;
+    Nim's standalone heap is `array[float64]` → 8-aligned in EVERY binary,
+    so `p & ~PageMask` found wrong chunk headers (also the likely root of the
+    kernel "seq/string corruption" sharp edge). SURVEY: adopt Nim's own
+    `-d:nimAllocPagesViaMalloc` for apps (page-aligned arena malloc);
+    kernel keeps its malloc (wasm3 needs it; it logs via Nim strings so it
+    can't back Nim's allocator) and page-aligns `theHeap` via
+    `-fdata-sections` + kernel.ld. `tests/check_heap_alignment.sh` runs in
+    `make build`/`nim-apps`. Rejected: patching stdlib; linker trick for apps.
+Also: allocRegion gave apps kernel heap in mono/micro → all models allocate
+from the app's region; nim-cps tracing off for the dispatcher ELF (4096-entry
+trace deque per continuation in debug builds).
+
+### Result
+Structured 41/41 (user_tests 17/17 — first ring-3 suite run); harness 10/11;
+dispatcher + apps concurrent, zero faults. Known open: `ls` → fsReadDir("/")
+fails (FS layer); kernel string compare failed before the heap fix — kernel
+strings should be re-verified (metadata_db sharp edge).
+
+## Apps are WASM, system + servers are ELF; everything works end to end (2026-10-26)
+Human: "Regular apps are wasm, servers and system are elf." Implemented:
+
+- **Shell** resolves a bare name on disk: `name`, `name.elf`, `name.wasm`;
+  launches by magic (`\x7fELF` / `\0asm`), passes args to both. The hard-coded
+  ls/ps/stats/kill commands are gone (they are just ELF tools now).
+- **Nim → WASM app SDK** (`apps/wasm/`): `--cpu:wasm32` via clang +
+  wasm32-wasi *headers only* (apt wasi-libc); `nimix_wasm_rt.c` supplies the
+  libc corner Nim needs, so a module imports ONLY `env.*` NimixOS calls —
+  enforced by `tests/test_wasm_apps.py`. Same entry rules as ELF apps
+  (NimMain first; page-aligned arena via nimAllocPagesViaMalloc; 1 MB — Nim's
+  first page request is ~516 KB). SURVEY: rejected linking WASI libc (would
+  import wasi_snapshot_preview1 — ambient OS authority the sandbox must not
+  have) and writing apps in C (keeps the OS one language).
+- **Client/server pattern for WASM apps** (already used by pingpong): send to
+  a server channel (needs CapIpc), reply as an event on a client topic.
+  fs_server protocol: `"<topic>\0<path>\0"` → event: int32 status + ≤508 B.
+  Larger reads → zero-copy region caps once WASM can map regions (seam).
+- **Servers own channels** (`chanCreate`/`capRecv`) and yield when idle.
+- **Ownership-scoped cleanup** (`kernel/abi/task_cleanup.nim`): exit AND kill
+  release region + user window, owned channels + their capabilities, and event
+  subscriptions; WASM modules release their subscriptions when they end. Fixes:
+  killed server could never restart; subscriptions leaked (256-run limit).
+- **Every model works**: procTableInit was monolithic-only → micro/sasos
+  booted with a corrupt scheduler table and kernelMain silently returned.
+- **Kernel `--panics:on`** + `rtl_stubs` stderr → serial: a failed check now
+  prints and halts instead of unwinding silently out of kernelMain (that is
+  how the microkernel failure hid). Overrides the 2026-10-26 "PARKED" note for
+  a different reason: fatal-and-visible kernel defects, not CPS.
+- VFS drivers registered at boot (FatFs default `/`, ramfs `/ram/`) — `ls`.
+- wasm3 runtime/env freed per run (leaked every launch), 64 KB value stack.
+- Per-request virtio TRACE output gated behind `-d:virtioTrace`.
+
+Verified: host + ARC + WASM host tests; structured 41/41; QEMU harness
+16/16 on microkernel, SASOS and monolithic; kill/restart/duplicate scenarios.
+
+## QEMU integration, virtio drivers verified on the host, debug tooling (2026-10-26)
+
+Request: improve QEMU integration and the virtio drivers; enable valgrind and
+debugging tools over serial and natively.
+
+**One QEMU launcher** — `tools/nimix_qemu.py` (library + CLI) is now the only
+place that builds a QEMU command line: device set (`blk net gpu snd input |
+all`), display, accel (KVM when available), serial, gdb stub, QMP (unix
+socket client with `screendump`/`send_key`/`hmp`), event log, pcap, wav.
+`tests/qemu_harness.py`, `tests/qemu_debug.py`, `tests/qemu_devices.py` and
+the Makefile `qemu*` targets all use it (four duplicated command lines and a
+second QMP client removed). SURVEY: rejected the `qemu.qmp` PyPI package (an
+extra dependency for ~40 lines) and libvirt (far heavier than the need).
+
+**Devices are verified by their effect on the host, not the guest's word**
+(`make test-devices`, `shell/devtest.nim`): gpu → screendump pixels of four
+colour bars; snd → wav recording at ~440 Hz; net → our UDP marker in a pcap;
+input → keys injected via QMP arrive as evdev codes through the IRQ path.
+Writing that test exposed six real driver bugs, all fixed:
+1. **virtio-gpu showed nothing**: `gpuSubmitCmd` spun on a non-volatile
+   `used.idx` (hoisted load → "done" before the device answered); responses
+   were never checked. Now acquire-load + per-command OK_NODATA check, and the
+   framebuffer has its own DMA allocation (it overran the 3 ring pages by 4 MB).
+2. **virtio-snd**: wrong request codes/enums, event+tx sharing a ring, non-spec
+   tx chains → rewritten to spec 5.14 (3-descriptor xfer/data/status chains).
+3. **Queue size mismatch (all virtio-pci devices)**: drivers assumed 256-entry
+   rings but never wrote `queue_size`; snd/input default to 64, so ring indices
+   diverged after 64 entries (QEMU: "Desc next is 64" → device broken).
+   `QueueSize = 64` for every queue and the driver states it
+   (`pciQueueAttach` → `commonQueueSetup(..., ringSize)`, additive API — see
+   subprojects/virtio-pci DECISIONS). Rejected per-queue sizes for now: the
+   ring arrays are typed by the constant; revisit if a queue needs depth.
+4. **Shared INTx lines**: the slave PIC cascade (IRQ2) was never unmasked, the
+   lines were edge-triggered, and polled devices (blk/gpu/snd) raised the
+   shared line with nobody acknowledging it — after blk's first interrupt line
+   11 stayed high and net/input never interrupted again. Now: per-line fan-out
+   dispatcher (`wirePciIrq`), ELCR level-triggered PCI lines, IRQ2 unmasked,
+   polled drivers set PCI Command.InterruptDisable, IRQ drivers read their ISR.
+5. **snd completions**: QEMU 8.2 fills tx used entries without publishing
+   used.idx; completion is taken from the per-request status the device writes
+   (spec-valid), and `virtioSndFinish` cycles STOP/RELEASE/PREPARE/START to
+   hand back the last held period. Sounds are padded to whole periods.
+6. Init order: virtio before modules/filesystems (FAT mounts at boot).
+
+**Debugging over serial**: every CPU exception (except #DB/NMI/#BP) prints a
+crash report — vector, error code, CR2/CR3, all registers, frame-pointer
+backtrace — and halts (previously only 4 vectors had handlers and they
+*returned*, re-faulting forever). Nim runtime panics (`rtl_stubs.c exit/abort`)
+print a backtrace too. The kernel builds `-fno-omit-frame-pointer`.
+`tools/symbolize.py` names frames from the ELF (`nm`; `addr2line` lines with
+`make DEBUG=1`), apps via the logged PIE load bias. `dmesg` shows a 16 KB
+klog ring (`core/klog_ring.nim`). `devtest crash-pf|crash-ud|crash-panic`
+exercise the whole path in `make test-devices`.
+
+**Debugging natively**: `make test-valgrind` (memcheck, `-d:useMalloc`) and
+`make test-asan` (ASan + UBSan) run every host test; the host-test list is
+now one Makefile variable shared by `test`/`test-valgrind`/`test-asan`.
+UBSan's first run found a real defect: the per-task kernel stack started
+4 bytes past an 8-byte boundary (misaligned canary, misaligned stack base) →
+`kstack {.align(16).}`. `make qemu-debug` + `make gdb-attach` load
+`tools/gdb/nimix.gdb` (nimix-bt frame-pointer backtrace without debug info,
+nimix-dmesg, nimix-sym, nimix-app for PIE apps, nimix-breaks).
+
+Verified: `make test`, `test-arc`, `test-valgrind`, `test-asan` clean;
+`test-devices` 7/7; `test-structured` 41/41; `test-qemu-models` 16/16 × 3.
+
+## User-mode faults kill the task, not the machine (2026-10-26)
+
+Human asked whether crashes halting the system follow from the joined address
+space and the absence of OS threads. They do not. A ring-3 fault traps into
+ring 0 on the task's own kernel stack with `cs & 3 == 3`; the kernel's state
+is untouched, so the task can be ended exactly like `exit` (release region,
+channels, caps, subscriptions; `procKill`; never resume it) whatever the
+concurrency model. The shared address space weakens *isolation* (per-app CR3,
+VISION open question 6), not *recovery*: only the running app's region is
+user-accessible, so a stray user access faults instead of corrupting others.
+Kernel-mode faults still halt — shared kernel state may be corrupt, and the
+SASOS model's type-safe "apps" run in ring 0, so that is the honest policy.
+WASM apps never reach this path (wasm3 traps are soft errors).
+
+Mechanism: `kern/interrupts` exposes `userFaultKill` / `userStackBounds`
+hooks (no dependency on the process table); `initSyscallGate` — where ring 3
+becomes possible — installs `abiKillFaultingTask` / `abiCurrentTaskBounds`.
+The user backtrace only follows frames inside the task's own region, so a
+corrupt user rbp cannot make the kernel fault while reporting. Rejected:
+installing the hooks from `wireSharedAbi` (drags the IDT asm into host tests
+that import a model).
+
+Found on the way: **`ExceptionContext` declared the 15 GPRs in reverse** of
+`isr_common_stub`'s push order, so every register read from a trap frame was
+another register (ctx.rbp was r9; kernel backtraces only worked by luck).
+Fixed and pinned with compile-time `offsetOf` checks. Ring-3 spawn and the
+sched/* copies were order-independent, so nothing else moved.
+Apps now build with frame pointers; `fault.elf` (system tool) faults on
+purpose; the Makefile's per-tool rules became one pattern rule (`NIM_TOOLS`).
+
+Verified: `make test-devices` 10/10 (two user faults in one boot, shell alive,
+region reused, frames symbolized to nullWrite/invalidOpcode via --app).
+
+## Roadmap B, step 1: rasterizer, bitmap font, VT terminal, framebuffer console (2026-10-27)
+
+**Boundary (reversible, logged for the human):** the drawing and terminal
+code are *libraries* with no kernel imports — `gfx/` (canvas, UTF-8, bitmap
+font), `term/` (VT model, incremental renderer), `input/` (evdev keymap) —
+host-tested and usable unchanged by a userspace app_server / terminal app.
+Their first consumer is a kernel **framebuffer console** (`kernel/console/`),
+the fbcon equivalent: a basis prerequisite (see the principles: "some
+prerequisites are allowed to enable the basis"), not GUI policy. The GUI
+terminal *app* in a window comes with app_server (roadmap C) and reuses the
+same libs; the kernel console can then become the fallback/boot console.
+
+SURVEY:
+- Font — adopted **Spleen 8x16** (BSD-2, Frederic Cambus; vendored BDF +
+  licence; `tools/bdf2nim.py` → `gfx/font_spleen8x16.nim`, 351 glyphs:
+  ASCII, Latin-1, box drawing). Rejected for the console: stb_truetype
+  (needs libm + malloc + a TTF; stays vendored for userspace TTF later),
+  font8x8 (too small at 1280x800), Terminus (OFL, no gain over Spleen),
+  Unifont (huge).
+- VT parser — built a subset on Paul Williams' DEC parser states. Rejected
+  libvterm (~10k LOC, libc + malloc — far beyond a VT100 subset) and st's
+  parser (entangled with X11). Fixed storage, no allocation.
+- Rasterizer — built (clipped fill/rect/line/1-bpp blit/scroll, ~120 lines).
+  raylib's software renderer stays the plan for apps (task 41) — it needs a
+  platform layer and libc we don't have in-kernel.
+
+Mechanism: `serial.putChar` gains a `consoleMirror` hook (core stays
+dependency-free); output updates only the character grid; the shell's idle
+loop (`consoleGetChar`, which also reads keys from the `input` topic via the
+keymap) flushes at most every 2 ticks, presenting only the damaged rectangle
+(`virtioGpuPresentRect`). Crash reports call `consoleFlushNow` so they are
+visible on screen.
+
+**Race found by the pixel test:** ring-3 apps write (and scroll) the grid
+while the shell task renders it, so rows shifted under the renderer and
+damage was lost (duplicated lines, gaps). The flush now copies the grid and
+takes its damage with interrupts off (~190 KB memcpy) and renders the copy.
+
+Verified: `make test-devices` 11/11 — the screen equals the serial byte
+stream rendered on the host by the same code (`tools/term_replay.nim`),
+pixel for pixel, with keyboard input and concurrent ring-3 output.
+
+## Region capabilities: ownership + lifetime holes fixed (2026-10-27)
+
+Human asked for big data to move formally, with no unsafe shared memory, and
+asked us to *test* what exists. The region-capability "zero-copy" mechanism
+was a sketch. A probe showed: (1) `abiGrantRegion` let any task mint a
+write cap on any slot number; (2) owner exit freed the slot while caps still
+named it, and the next app was given that memory (cross-app use-after-free);
+(3) freed handles still read as valid, and exiting tasks leaked every cap
+(including the spawn-time `ipcCap`). Fixed locally, with no API change:
+the owner holds a reference from `regionAlloc`; a slot is recycled, and its
+user window closed (`regionOnRelease`), only at the last reference; only
+the owner or a `capMemGrant` holder may mint (`capMayGrantRegion`); exit
+revokes all caps (`capRevokeAllOf`). Regressions in `tests/test_zerocopy.nim`.
+Still open: rights are not enforced on access, and tokens are global. The
+formal model (owned / move / lend / sealed buffers + typed rings, enforced by
+page rights or the type system) is PROPOSED in docs/proposals/bulk_data.md.
+
+## Bulk data FROZEN; buffers SPAWNED (2026-10-27)
+
+Human agreed to all seven decisions of docs/proposals/bulk_data.md v2, which is
+now FROZEN. The API is `ipc/buffers.nim` (a stub returning `beNotImplemented`;
+layouts pinned by `tests/test_buffers_api.nim`), implemented by the new
+sub-project `subprojects/buffers/`.
+1. **The rule:** mutable memory is never shared. Owned or sealed; move/lend;
+   rings are the only concurrent sharing. Two lanes: ≤240 B inline (copied),
+   larger by buffer (moved or lent).
+2. **Dispatcher-brokered sessions:** control messages and session setup go
+   through the dispatcher, which forwards handles in `tmTransit` (no map
+   right, never touches data). Steady-state streams flow on direct session
+   rings under dispatcher policy (resize/reprioritise/revoke). VISION axiom
+   clarified accordingly.
+3. **Budgets follow ownership.** The requester provides the buffer by
+   default; servers never allocate on a client's behalf.
+4. **Enforcement:** Stage A = 2 MB blocks, ownership flipped in batches at
+   `ringSubmit` and at context switch. Stage B = per-app CR3, the next kernel
+   milestone. **Resolves VISION open question 6** (signal: app_server is the
+   first service that must be protected from its clients); SASOS keeps the
+   shared space and enforces by type.
+5. **Per-task handle tables**, with handles carried out-of-band in messages
+   (≤4) and translated by the kernel. Replaces global region tokens: an ABI
+   change for `grantRegion` / `capSend` / fs replies, migrated by the
+   sub-project.
+6. **WASM:** copy at the sandbox edge (v1), region-backed aperture (v2).
+7. **Arena:** 128 MB in 2 MB blocks (tunable constant).
+
+Rejected (from v1 and the survey of the option space): direct app→server
+transfers bypassing the dispatcher (violates axiom 1); a kernel call per
+transfer (too costly for audio/frames/packets; batching instead);
+server-allocated reply buffers (lets a client exhaust server memory);
+global/guessable tokens (authority by number); free-form shared regions with
+"protocol discipline" (the unsafe status quo the human ruled out).
+
+## Buffers enforced from ring 3; four latent memory bugs fixed on the way (2026-11-03)
+
+`subprojects/buffers` Stage A now runs in the kernel (`kernel/buffers/kbuffers.nim`).
+- **Memory windows** (`mm/memory_windows.nim`): the app regions (32–96 MB)
+  and a 64 × 2 MB buffer arena (from 96 MB) are reserved in the physical
+  allocator and identity-mapped with 2 MB pages. The arena shrinks to the
+  RAM that exists.
+- **Enforcement:** arena blocks are supervisor-only by default. At every
+  switch (`onTaskSwitch`), and after each buffer syscall, the PD entries are
+  set to exactly what the running task may access (User for any access, RW
+  only for write); only changed entries are rewritten and invalidated.
+- **ABI:** 7 syscalls (30–36: `bufCreate/Map/Close/Seal/Return`,
+  `bufMsgSend/Recv`). Handles ride channel messages out of band (≤4 per
+  `ServerMsg`); a dropped message cancels its transfers (`onMsgDropped`).
+- **Verified** (`make test-devices`, `buftest`): create/map/seal/close and a
+  buffer moved through a channel arrive intact. Use-after-move, a write to a
+  sealed buffer, and a write while lent each fault and kill only that task.
+
+Latent bugs found and fixed (each predates buffers):
+1. **Nothing reserved the app-region range** (32–96 MB) in the physical
+   allocator: DMA allocations would have landed in app memory once they
+   passed ~9 MB.
+2. **Regions 8–15 (64–96 MB) were not mapped**; the boot stub maps only
+   64 MB, so a 9th concurrent app could not start.
+3. **`getOrCreateTable` walked into 2 MB huge pages as if they were page
+   tables:** mapping any DMA page inside the boot identity map wrote a fake
+   "PTE" into the kernel's early heap (`earlyArena`). Fix: a huge entry
+   means already mapped; `kernelMapPage` maps one page without `mapRegion`'s
+   `?`, because…
+4. **core/types' `?` raises a Defect instead of propagating the error**, so
+   every `?` in the kernel is a panic on its first error, and
+   `mapOnePage`'s "already mapped is fine" branch could never run. It is
+   contained here (`kernelMapPage`) and logged as a seam: making `?` return
+   is cross-cutting.
+
+Also: `initStore` built a 32 KB temporary on the 16 KB boot stack, which sits
+right above the boot page tables, and zeroed them (the CPU ran on in its
+TLB until the first miss). It now initialises in place, and kernel builds
+fail on any stack frame over 8 KB (`-Werror=frame-larger-than=8192` in
+nim.cfg; the current kernel has none).
+
+## RUI2 vendored and surveyed; render-server model proposed (2026-11-03)
+
+Human: RUI2 (`kobi2187/rui2`) is to be the foundational GUI toolkit; raylib
+gets ported; WASM apps send draw commands to a native raylib render server
+(server provides). VISION now states that model as the default and the
+experiment, with exceptions as measured ADRs, plus end-to-end budgets.
+- **Vendored** `vendor/rui2` as a git submodule @0038051 (like wasm3/printf).
+- **SURVEY** (docs/surveys/rui2.md):
+  - **Model:** immediate mode, with per-widget cached render textures
+    → the server needs app-id'd render targets.
+  - **raylib surface:** 84 calls, ≈ 25 draw ops; shaders only for 4 SDF
+    primitives + the modal backdrop, which already fall back
+    → semantic commands.
+  - **Threads:** one UI thread + one background worker + a Mailbox, which
+    map onto actors.
+  - **Direct rlgl texture ids** → app-chosen resource ids.
+  - **Build:** no WASM build yet; cyclic widget trees need ORC.
+  - **Text:** all of it is Pango/Cairo and synchronous
+    → measurement must be app-local.
+- **Prior art adopted for the server:** raylib 6.0's `rlsw` software
+  renderer, used GPU-less upstream (ESP32), behind a `PLATFORM_NIMIX`.
+  Rejected: our own rasterizer (rlsw exists upstream); GLSL (no GPU);
+  Pango in the app or server (synchronous, heavy).
+- **Proposals PROPOSED** (awaiting agreement):
+  - docs/proposals/render_server.md: the hybrid app_server, one server with
+    two faces, rlsw, picolibc lean, TSC clock;
+  - docs/proposals/draw_protocol.md: flat binary records, app-chosen ids,
+    semantic SDF ops, text measured locally over shared sealed fonts with
+    stb_truetype on both sides.
+- **Budgets:** counts (commands/frame, kernel calls/frame, idle frames)
+  gate CI on any accelerator. Times (key-to-pixel ≤ 33 ms p95, frame
+  ≤ 16.7 ms) are judged under KVM and only tracked under TCG.
+- Vertical-slice tasks V1–V11 are in BACKLOG.
+
+## Text engine: Pixie (pure Nim) on both sides; HarfBuzz later (2026-11-03)
+
+Human: RUI is theirs to modify; prefer a pure-Nim equivalent where binding
+Pango/Cairo is impractical. Surveyed (docs/surveys/rui2.md addendum):
+- **treeform/typography** is retired, merged into **Pixie**.
+- **Pixie** (pure Nim, MIT, active) parses TTF/OTF from bytes, kerns
+  (kern + GPOS), typesets spans with wrapping, and returns positions and
+  selection rects. That covers RUI's measure / wrap / caret / hit-test
+  API. Its SIMD is amd64-only, so wasm32 takes the scalar path.
+- **elcritch/harfbuzzy** is wrappers over the system HarfBuzz (C++) +
+  FriBidi, **not** pure Nim.
+
+Decision (proposal-level, inside draw_protocol §5; the human leans this way):
+- Pixie typesets in the app and rasterizes in the server, over the same
+  sealed font bytes, so measured equals drawn by construction.
+- RUI gets a text-backend seam (Pango | Pixie) upstream.
+- stb_truetype is dropped from the plan: it would put C and libm into
+  every WASM app.
+- **Parked:** ligatures, complex shaping, BiDi. Resolving signal: the
+  first RTL/complex-script user. The path then is harfbuzzy behind the
+  same seam once HarfBuzz and FriBidi are ported; `TEXT_RUN` already
+  carries shaped glyphs, so the protocol doesn't change.
+
+## WASM is for isolation only; fast ops run natively (2026-11-03)
+
+Human: "wasm was only required due to its isolation. All the ops that need
+to be fast may run on servers or elf helpers." Recorded in VISION (decision
+principles). Consequences:
+- **Text:** Pixie runs natively, as host imports (`text_*`) granted by the
+  app's **userspace ELF WASM host**, and in the render server. It is not
+  compiled into WASM and interpreted by wasm3. Synchronous, native speed,
+  no IPC; the app holds only handles; same code and font bytes on both
+  sides (draw_protocol §5).
+- **Prerequisite promoted into the slice:** move wasm3 out of the kernel
+  into a per-app userspace ELF host (BACKLOG V8). Native helpers must never
+  run in the kernel.
+- **Two native venues:** coarse/shared work goes to servers (render,
+  decode, files); fine-grained synchronous work goes to ELF helpers (host
+  imports). If the app's own code misses its budget under the interpreter,
+  the exception is AOT that keeps WASM's isolation (wasm2c, RLBox-style;
+  BACKLOG V12, parked until V9 measures).
+- Rejected: running RUI's framework natively with app callbacks crossing
+  into WASM. Closures and refs would cross the sandbox boundary on every
+  handler; only leaf operations with plain-data arguments become imports.
+
+## Kernel residency is historical, not design (2026-11-03)
+
+Human: "if something runs in the kernel, it's only because the os started
+with kernel decisions and kernel was all we had, so over time, these move to
+their proper place. if it's not inherent and part of the design, then we
+find where each component should reside." Recorded in VISION (decision
+principles). Made concrete as the **residency map** in ARCHITECTURE.md:
+- every kernel-resident component, classified as inherent (privilege or
+  universal trust: scheduling, memory, interrupts, caps, IPC transport,
+  buffer enforcement, crash output) or historical;
+- for each historical one, its proper home and the blocker.
+
+**Historical:** wasm3, the shell, the fb console/VT, all device drivers
+(gpu, snd, input, net, blk, PS/2, RTC), VFS/FatFs, the ping/dispatch kmods,
+the event topic registry.
+
+The common blocker is **R0, device capabilities** (IRQ subscription, MMIO,
+DMA buffers, PCI config): VISION open question 4's prerequisite, which
+buffers (DMA-able, owned memory) now makes tractable. Migrations R0–R10
+are in BACKLOG, ordered to coincide with the vertical slice: the render
+server takes the GPU (R2/V6), the audio server takes snd (R4/V10), and the
+WASM host leaves the kernel (R1/V8).
+
+The kernel *model* still decides where a component runs: monolithic may
+link a server in, by design. What changes is that no component is *forced*
+into the kernel for every model.
+
+## The raylib bridge: apps don't change; route decided per op (2026-11-03)
+
+Human: commands-to-a-render-server means every RUI app must change; put a
+bridge layer in between that decides whether to forward an operation to
+raylib or create a command from it. Added to draw_protocol §7 (proposal):
+- **The bridge** is a naylib-compatible `raylib`/`rlgl` module pair, so
+  RUI and stock raylib programs compile against it unchanged.
+- **Routing by class:** draw ops are routed per op; CPU image ops are
+  always local; queries are answered locally from session state; window and
+  input go to app_server when remote.
+- **Backends:**
+  - `direct`: inline forwards to in-process raylib, zero cost;
+  - `remote`: commands; the only backend in WASM;
+  - `hybrid`: per-op routing from server feature bits, encodability and
+    policy, with counted local fallback through an uploaded texture.
+- **Per-window switching** between remote and direct is VISION's exception
+  mechanism, decided by policy rather than by rewriting the app.
+
+Rejected: a pure command shim (forces every app onto one path and leaves
+no fallback for ops the server lacks); changing RUI's call sites (RUI is
+one of many raylib clients the bridge should serve).
+
+## Render-server model + raylib bridge AGREED; P0 host prototype first (2026-11-03)
+
+Human agreed ("let's do that") to the render-server model with the raylib
+bridge, noting the possible performance penalty and the amount of support
+work.
+- **Status:** render_server.md is AGREED; draw_protocol.md is agreed in
+  principle. The record set is frozen at V6 spawn, after P0 validates it.
+- **Performance answered early, not at V9:** P0 is a host-only loopback
+  prototype. The same screen goes through the bridge `direct` (raylib
+  in-process) and `remote` (encode → decode → raylib) paths in one
+  process. Equal pixels are the protocol conformance test; frame time and
+  records/frame give the model's cost before any kernel work.
+- **Pin raylib 6.2**, the latest release; `rlsw` and the `rcore_memory`
+  headless platform are both present since 6.0.
+- naylib master bundles raylib 5.6-dev (no rlsw, no memory platform), and
+  RUI pins an older naylib. So **the bridge is our own naylib-compatible
+  binding to raylib 6.2**, not a layer over naylib, and it absorbs the
+  5.x → 6.x API differences.
+- `rcore_memory.c` is also the template for `PLATFORM_NIMIX` (memory
+  platform + damage blit to virtio-gpu).
+
+## P0 result: the command path costs ~nothing; rasterization is the cost (2026-11-03)
+
+`make test-p0` (host only, tests/p0): one RUI-shaped screen (each widget
+cached in its own render target, parents composite, one widget changes per
+steady frame), built twice from the same source against the raylib bridge
+(`bridge/`). The direct build is in-process raylib 6.2 + rlsw, headless
+(`rcore_memory`). The remote build encodes commands → loopback render
+server → the same raylib.
+- **Conformance:** remote pixels are **byte-identical** to direct (82,815
+  painted pixels at 640×400).
+- **Command budget:**
+  - steady frame: **19 records, 424 B** (budget ≤ 200 / 16 KB; design
+    estimate ~15 / 0.6 KB);
+  - full repaint: 88 records, 2.2 KB.
+- **Model cost:** encoding < 1 µs per frame. Over 3 × 200 steady frames,
+  direct was 9.8–10.4 ms and remote 10.3–11.6 ms, a **~0.5–1 ms (~7%)
+  difference inside run-to-run noise**. Not yet included: the IPC hop (one
+  `ringSubmit` + a switch), measured on NimixOS in V9.
+- **The real cost is rlsw raster time (~10 ms at 640×400 on this host):**
+  RUI's steady frame recomposites the whole root and blits it full-screen.
+  The lever is **damage-limited compositing** (scissor to the dirty rect;
+  present only damage). That is a renderer change, not a protocol change.
+  Recorded as the first optimisation for the render server (V6).
+- **The bridge is our own naylib-compatible binding to raylib 6.2**
+  (`rl_types`, `rl_c`, `rl_direct`, `rl_remote`, `rl_server`,
+  `rl_protocol`). Direct = inline forwards; the server validates record
+  lengths and session ids and stops a malformed frame.
+- **Known for V5:** rlsw's colour buffer is R8G8B8A8, but the
+  `LoadImageFromScreen` readback is vertically flipped with R/B swapped
+  (it assumes GL's origin). `PLATFORM_NIMIX` blits from `swGetColorBuffer`
+  directly, with a pixel test to pin orientation.
+
+## V7a: RUI on the bridge, direct, via adapted naylib + a Pixie text engine (2026-11-03)
+
+RUI's counter example builds **unchanged** and paints headless through the
+raylib bridge's direct backend (`make test-v7`): raylib 6.2 memory platform
++ rlsw, Pixie text.
+
+- **Bridge base = adapted naylib, not hand-written** (SURVEY: RUI re-exports
+  naylib's whole type/enum surface, ~4,000 lines with RAII destructors RUI
+  relies on). naylib v25.51.1 (pinned submodule, `vendor/naylib`) binds
+  raylib 5.6-dev and hard-wires a GLFW build, so **adapt**, reproducibly:
+  `tools/naylib_adapt.py` generates `build/bridge/naylib/` with (1) the
+  build header replaced by raylib 6.2 from `vendor/raylib` (memory
+  platform, rlsw, no GLFW/utils/raudio), (2) naylib's 5.x config `-D` flags
+  dropped so 6.2's `config.h` applies, (3) the 6.2 ABI fixes
+  (`DrawCircleGradient`, `ImageColorContrast`, `ImageDrawRectangleLines`,
+  `UpdateModelAnimation`, `DrawCapsule(Wires)`), (4) naylib's Win32-clash
+  renames back to upstream symbols (`rlRectangle`, `rlCloseWindow`,
+  `rlDrawText`, ...). Each patch must match exactly once or the script
+  fails, so a naylib bump surfaces drift instead of hiding it. Rejected:
+  forking naylib (a second repo to keep in sync); hand-writing the 84-call
+  surface (RUI uses the full types, not just the calls).
+- **rlsw caps raised** to 512 framebuffers / 2048 textures (defaults 8/128):
+  RUI keeps a render target per widget. Pools are heap handle tables, so
+  the cost is small; the render server will want a per-session budget.
+- **RUI changes ride as a patch set** (`patches/rui2/`, applied by the test
+  runner) until they land upstream (V11): the text-engine seam
+  (`text_engine` → Pango | Pixie, `pango_text` keeps its API and caches),
+  the Pixie engine, and `-d:ruiNoGlfw` (RUI's two direct GLFW uses: idle
+  wait sleeps, mouse-button hooks fall back to raylib polling). The Pango
+  path still type-checks.
+- **Upstream raylib 6.2 bug found:** `rlReadScreenPixels` flips rows for
+  GL's bottom-left origin, but rlsw's `swReadPixels` already returns them
+  top-down, so `LoadImageFromScreen` is upside down under rlsw (this also
+  hits RUI's modal freeze). Our test unflips; the fix (skip the flip for
+  `GRAPHICS_API_OPENGL_SOFTWARE`) goes upstream with V5.
+- **Next (V7b): route at the C-symbol level.** The adapter can emit a
+  remote variant whose routed procs `importc` our encoders (`exportc`)
+  instead of raylib, leaving types, CPU image ops and queries as naylib.
+  The routing table is then the hybrid mechanism, and apps still don't
+  change.
+
+## V7b: remote bridge by C-symbol routing; RUI remote == direct (2026-11-03)
+
+RUI's counter example, unchanged, clicked three times through RUI's own
+event router, renders **byte-identically** through the remote bridge (draw
+calls → command records → loopback render server → raylib) and the direct
+one, repeatably (`make test-v7`). Steady frames: at most **86 records /
+1,016 B** (budget 200 / 16 KB); the first full paint 121 / 1.6 KB, plus
+63 KB of glyph textures uploaded as blobs over the run.
+
+- **Route at the C symbol, not the Nim proc.** The adapter emits a second
+  naylib (`build/bridge/naylib_remote/`) where each proc whose C symbol has
+  an `nxr_<Name>` in `bridge/rl_route.nim` imports that instead. Encoders
+  are `exportc` with raylib's C ABI and P0's C-layout types, so there is no
+  import cycle with naylib. The routed names come from rl_route itself and
+  each must match exactly once, so the table can't drift. naylib's
+  destructors, wrappers and every call site route with no Nim changes.
+  Rejected: re-declaring naylib's API by hand (the 4,000-line surface again);
+  a per-function generator from headers (the interesting cases, ids and
+  syncs, are semantic anyway). This is also the **hybrid** mechanism: a
+  routing table per symbol.
+- **Headers:** naylib pushes `header: "raylib.h"` onto its procs, so the
+  remote variant pushes a generated `nimix_route.h` instead (raylib.h +
+  rlgl.h + the `nxr_` prototypes copied from 6.2's own declarations).
+- **One record per raylib call**, executed server-side by the same function:
+  that is what makes pixels identical (e.g. `DrawRectangleLines(int)` and
+  `DrawRectangleLinesEx` rasterize differently). The record set is still
+  frozen only at V6.
+- **Ids:** app-chosen; a render target's id also names its colour texture.
+  Destroys are idempotent (RUI frees a target's texture, then the target).
+- **Refused locally, by design:** raw rlgl framebuffers (`rlLoadFramebuffer`
+  → 0, so RUI takes its own `loadRenderTexture` path) and shaders (invalid,
+  exactly as on rlsw, so RUI uses its non-shader fallback). No raw GPU
+  objects cross the boundary.
+- **Uploads ride as blobs** beside the stream (the loopback stand-in for
+  moved/sealed buffers); `LoadImageFromScreen` is a counted **sync point**
+  (NimixOS: a SNAPSHOT command, no readback).
+- **Hardening:** every decoder read is bounded by its record; a short record
+  fails the stream (P0's decoder could read past a record before).
+- **Determinism note:** RUI's hover fades are time-based, so captures wait
+  for them to settle; direct differed from itself mid-fade.
+- **Observed for V6/RUI:** a label change costs ~63 records, because RUI
+  recomposites up the tree to the root. Within budget; damage-limited
+  compositing (P0 finding) also shrinks this.

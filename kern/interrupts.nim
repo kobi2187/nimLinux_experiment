@@ -15,6 +15,7 @@ import ../core/types
 import ../arch/x86_64/cpu_primitives
 import ../sync/spinlock
 import ../core/serial
+import ../core/backtrace
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Exception Context
@@ -25,25 +26,28 @@ type
     ## CPU context saved on exception.
     ## Field order MUST match the assembly push sequence in isr_common_stub exactly.
     ##
-    ## Stack layout at nimInterruptDispatch entry (RSP → rax, low addr first):
-    ##   [pushed by isr_common_stub]  rax rbx rcx rdx rsi rdi rbp r8..r15
+    ## Stack layout at nimInterruptDispatch entry (RSP → r15, low addr first).
+    ## isr_common_stub pushes rax first and r15 last, so r15 is at the LOWEST
+    ## address (this order was once declared reversed: every GPR read back as
+    ## a different register — ctx.rbp was r9).
+    ##   [pushed by isr_common_stub]  r15 r14 .. r8 rbp rdi rsi rdx rcx rbx rax
     ##   [pushed by entry stub]       vectorNum  errorCode
     ##   [pushed by CPU on interrupt] rip cs rflags rsp ss
-    rax*:      uint64
-    rbx*:      uint64
-    rcx*:      uint64
-    rdx*:      uint64
-    rsi*:      uint64
-    rdi*:      uint64
-    rbp*:      uint64
-    r8*:       uint64
-    r9*:       uint64
-    r10*:      uint64
-    r11*:      uint64
-    r12*:      uint64
-    r13*:      uint64
-    r14*:      uint64
     r15*:      uint64
+    r14*:      uint64
+    r13*:      uint64
+    r12*:      uint64
+    r11*:      uint64
+    r10*:      uint64
+    r9*:       uint64
+    r8*:       uint64
+    rbp*:      uint64
+    rdi*:      uint64
+    rsi*:      uint64
+    rdx*:      uint64
+    rcx*:      uint64
+    rbx*:      uint64
+    rax*:      uint64
     vectorNum*: uint64       ## Interrupt/exception vector number (pushed second)
     errorCode*: uint64       ## Error code pushed first (or fake 0)
     rip*:      uint64        ## CPU interrupt frame: instruction pointer
@@ -62,6 +66,13 @@ type
     eeStackOverflow     ## Kernel stack overflow
 
   ExceptionHandler* = proc(ctx: ptr ExceptionContext): void {.nimcall.}
+
+# The layout is a contract with isr_common_stub (arch/x86_64/boot_asm.S).
+static:
+  doAssert offsetOf(ExceptionContext, r15) == 0
+  doAssert offsetOf(ExceptionContext, rax) == 14 * 8
+  doAssert offsetOf(ExceptionContext, vectorNum) == 15 * 8
+  doAssert offsetOf(ExceptionContext, rip) == 17 * 8
 
 # ═══════════════════════════════════════════════════════════════════════════
 # IDT (Interrupt Descriptor Table) Structures
@@ -353,53 +364,90 @@ proc dispatchException*(manager: InterruptManager, ctx: ptr ExceptionContext): R
   handler(ctx)
   ok()
 
+proc fatalExceptionHandler*(ctx: ptr ExceptionContext)   # crash report, below
+
 proc nimInterruptDispatch*(ctx: ptr ExceptionContext) {.exportc, cdecl.} =
   ## Called from isr_common_stub. Dispatches to registered Nim handler.
   let mgr = getInterruptManager()
   if mgr != nil:
-    discard mgr.dispatchException(ctx)
+    let r = mgr.dispatchException(ctx)
+    if r.isErr and ctx.vectorNum < 32:
+      fatalExceptionHandler(ctx)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Default Exception Handlers
 # ═══════════════════════════════════════════════════════════════════════════
 
-proc defaultDivideErrorHandler*(ctx: ptr ExceptionContext) =
-  ## Default divide by zero handler
-  kprint("EXCEPTION: Divide Error\n")
-  kprint("  RIP: 0x")
-  kprintHex(ctx.rip)
-  kprint("\n  RAX: 0x")
-  kprintHex(ctx.rax)
-  kprint("\n")
+const ExceptionNames: array[32, cstring] = [
+  "Divide Error", "Debug", "NMI", "Breakpoint", "Overflow", "Bound Range",
+  "Invalid Opcode", "Device Not Available", "Double Fault", "Coprocessor Overrun",
+  "Invalid TSS", "Segment Not Present", "Stack-Segment Fault",
+  "General Protection Fault", "Page Fault", "Reserved", "x87 FP Error",
+  "Alignment Check", "Machine Check", "SIMD FP Error", "Virtualization",
+  "Control Protection", "Reserved", "Reserved", "Reserved", "Reserved",
+  "Reserved", "Reserved", "Hypervisor Injection", "VMM Communication",
+  "Security", "Reserved"]
 
-proc defaultPageFaultHandler*(ctx: ptr ExceptionContext) =
-  ## Default page fault handler
-  kprint("EXCEPTION: Page Fault\n")
-  kprint("  Error Code: 0x")
-  kprintHex(ctx.errorCode)
-  kprint("\n  RIP: 0x")
-  kprintHex(ctx.rip)
-  kprint("\n")
-  # In real implementation, would check if it's a valid fault we can recover from
+proc putReg(name: cstring; v: uint64) =
+  defaultSerial.putString(name)
+  defaultSerial.putString("=0x")
+  defaultSerial.putHex(v)
 
-proc defaultGeneralProtectionHandler*(ctx: ptr ExceptionContext) =
-  ## Default general protection fault handler
-  kprint("EXCEPTION: General Protection Fault\n")
-  kprint("  Error Code: 0x")
-  kprintHex(ctx.errorCode)
-  kprint("\n  RIP: 0x")
-  kprintHex(ctx.rip)
-  kprint("\nHalting.\n")
+type
+  UserFaultKill* = proc() {.nimcall.}
+    ## Ends the current task for good (never returns). Set by the task layer.
+  UserStackBounds* = proc(): tuple[lo, hi: uint64] {.nimcall.}
+    ## Memory the current user task may own — bounds the backtrace walk.
 
-proc defaultDoubleFaultHandler*(ctx: ptr ExceptionContext) =
-  ## Default double fault handler (attempted recovery failed)
-  kprint("EXCEPTION: Double Fault\n")
-  kprint("  ERROR Code: 0x")
-  kprintHex(ctx.errorCode)
-  kprint("\nTriple fault imminent. Halting.\n")
-  # Spin forever
+var
+  userFaultKill*: UserFaultKill
+  userStackBounds*: UserStackBounds
+
+proc printRegisters(ctx: ptr ExceptionContext) =
+  putReg("err", ctx.errorCode); putReg("  cr2", readCr2()); putReg("  cr3", readCr3())
+  defaultSerial.putChar('\n')
+  putReg("rip", ctx.rip); putReg("  rsp", ctx.rsp); putReg("  rbp", ctx.rbp)
+  putReg("  rflags", ctx.rflags); defaultSerial.putChar('\n')
+  putReg("rax", ctx.rax); putReg("  rbx", ctx.rbx); putReg("  rcx", ctx.rcx)
+  putReg("  rdx", ctx.rdx); defaultSerial.putChar('\n')
+  putReg("rsi", ctx.rsi); putReg("  rdi", ctx.rdi); putReg("  r8", ctx.r8)
+  putReg("  r9", ctx.r9); defaultSerial.putChar('\n')
+  putReg("r10", ctx.r10); putReg("  r11", ctx.r11); putReg("  r12", ctx.r12)
+  putReg("  r13", ctx.r13); defaultSerial.putChar('\n')
+  putReg("r14", ctx.r14); putReg("  r15", ctx.r15); putReg("  cs", ctx.cs)
+  putReg("  ss", ctx.ss); defaultSerial.putChar('\n')
+
+proc printCrashReport(ctx: ptr ExceptionContext; user: bool) =
+  ## Vector, registers and a frame-pointer backtrace (tools/symbolize.py
+  ## names the frames; --app for a user task).
+  defaultSerial.putString("\n=== CPU EXCEPTION ")
+  defaultSerial.putInt(int64(ctx.vectorNum))
+  defaultSerial.putString(" (")
+  defaultSerial.putString(ExceptionNames[int(ctx.vectorNum and 31)])
+  defaultSerial.putString(if user: ") in USER mode ===\n" else: ") in kernel mode ===\n")
+  printRegisters(ctx)
+  if user and userStackBounds != nil:
+    let b = userStackBounds()
+    printBacktrace(ctx.rip, ctx.rbp, b.lo, b.hi)
+  elif user:
+    printBacktrace(ctx.rip, 0'u64)          # bounds unknown: don't walk user memory
+  else:
+    printBacktrace(ctx.rip, ctx.rbp)
+
+proc fatalExceptionHandler*(ctx: ptr ExceptionContext) =
+  ## A fault in a user task kills that task — the kernel's own state is
+  ## intact, so everything else keeps running. A fault in kernel mode means
+  ## shared kernel state may be corrupt: report and halt. Returning instead
+  ## would iretq onto the faulting instruction and loop.
+  {.emit: "asm volatile(\"cli\");".}
+  let user = (ctx.cs and 3) == 3
+  printCrashReport(ctx, user)
+  consoleFlushNow()                         # show it on the display too
+  if user and userFaultKill != nil:
+    userFaultKill()                         # never returns
+  defaultSerial.putString("=== halted (symbolize: tools/symbolize.py <serial log>) ===\n")
   while true:
-    discard
+    {.emit: "asm volatile(\"cli; hlt\");".}
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Initialization Utilities
@@ -407,10 +455,10 @@ proc defaultDoubleFaultHandler*(ctx: ptr ExceptionContext) =
 
 proc installDefaultHandlers*(manager: InterruptManager): Result[void, ExceptionError] =
   ## Install default handlers for common exceptions
-  ?manager.registerExceptionHandler(EX_DIVIDE_ERROR, defaultDivideErrorHandler)
-  ?manager.registerExceptionHandler(EX_PAGE_FAULT, defaultPageFaultHandler)
-  ?manager.registerExceptionHandler(EX_GENERAL_PROTECTION, defaultGeneralProtectionHandler)
-  ?manager.registerExceptionHandler(EX_DOUBLE_FAULT, defaultDoubleFaultHandler)
+  ## Every CPU exception except the debug traps (#DB, NMI, #BP) is fatal.
+  for v in 0'u32 ..< 32'u32:
+    if int(v) notin [EX_DEBUG, EX_NMI, EX_BREAKPOINT]:
+      ?manager.registerExceptionHandler(v, fatalExceptionHandler)
   ok()
 
 proc initInterruptSystem*(kernelCodeSelector: uint16): Result[void, ExceptionError] =

@@ -29,7 +29,7 @@ proc abiSysInfo*(buf: pointer; len: int): int {.nimcall.} =
   emit("  app: ");           emitU(s.ticksPerClass[2]);                     emit("\n")
   emit("tasks:\n")
   for i in 0 ..< MaxTasks:
-    let t = procTable.tasks[i]
+    let t = addr procTable.tasks[i]   # never copy a Task: it holds a 16 KB kstack
     if not t.used: continue
     emit("  - pid: ");    emitU(uint64(t.pid));                             emit("\n")
     emit("    name: ");   emit(cast[cstring](unsafeAddr t.name[0]));        emit("\n")

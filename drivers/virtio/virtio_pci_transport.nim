@@ -67,13 +67,14 @@ proc pciProbe(): bool {.nimcall.} =
   gDev.caps = walkVirtioCaps(cfgReader)
   if not gDev.caps.common.found: return false
   mapCaps()
-  earlyPutString("[TRACE probe] common bar="); earlyPutInt(int64(gDev.caps.common.bar))
-  earlyPutString(" off="); earlyPutHex(uint64(gDev.caps.common.offset))
-  earlyPutString(" -> common(virt)="); earlyPutHex(cast[uint64](gDev.common)); earlyPutString("\n")
-  earlyPutString("[TRACE probe] notify bar="); earlyPutInt(int64(gDev.caps.notify.bar))
-  earlyPutString(" off="); earlyPutHex(uint64(gDev.caps.notify.offset))
-  earlyPutString(" mult="); earlyPutInt(int64(gDev.caps.notifyOffMultiplier))
-  earlyPutString(" -> notifyBase="); earlyPutHex(gDev.notifyBase); earlyPutString("\n")
+  when defined(virtioTrace):  # -d:virtioTrace: per-request trace
+    earlyPutString("[TRACE probe] common bar="); earlyPutInt(int64(gDev.caps.common.bar))
+    earlyPutString(" off="); earlyPutHex(uint64(gDev.caps.common.offset))
+    earlyPutString(" -> common(virt)="); earlyPutHex(cast[uint64](gDev.common)); earlyPutString("\n")
+    earlyPutString("[TRACE probe] notify bar="); earlyPutInt(int64(gDev.caps.notify.bar))
+    earlyPutString(" off="); earlyPutHex(uint64(gDev.caps.notify.offset))
+    earlyPutString(" mult="); earlyPutInt(int64(gDev.caps.notifyOffMultiplier))
+    earlyPutString(" -> notifyBase="); earlyPutHex(gDev.notifyBase); earlyPutString("\n")
   capsResolved()
 
 proc pciNegotiate(features: uint64): bool {.nimcall.} =
@@ -83,28 +84,30 @@ proc pciQueueSetup(idx: uint16; ringPhys: uint64): bool {.nimcall.} =
   ## Split the ring base into desc/avail/used using the shared virtqueue layout,
   ## then set DRIVER_OK so the device starts servicing the queue (spec §3.1.1 —
   ## DRIVER_OK comes after virtqueue setup; without it used.idx never advances).
-  if not commonQueueSetup(gDev.common, idx, ringPhys,
-                          ringPhys + availRingOffset(), ringPhys + usedRingOffset()):
+  if not pciQueueAttach(gDev.common, idx, ringPhys):
     return false
   commonSetDriverOk(gDev.common)
   when defined(virtioDebug):
-    klogHex(llInfo, "vblk: deviceStatus(after DRIVER_OK)=", uint64(gDev.common.deviceStatus))
+    klogHex(llInfo, "vblk: deviceStatus(after DRIVER_OK)=", uint64(cfgGet(gDev.common, deviceStatus)))
   true
 
 proc pciNotify(idx: uint16) {.nimcall.} =
   let off = gDev.caps.notifyOffMultiplier
-  let qno = gDev.common.queueNotifyOff
+  cfgSet(gDev.common, queueSelect, idx)
+  let qno = cfgGet(gDev.common, queueNotifyOff)
   let at  = notifyAddr(gDev.notifyBase, qno, off)
-  earlyPutString("[TRACE notify] base="); earlyPutHex(gDev.notifyBase)
-  earlyPutString(" mult="); earlyPutInt(int64(off))
-  earlyPutString(" qNotifyOff="); earlyPutInt(int64(qno))
-  earlyPutString(" at="); earlyPutHex(at)
-  earlyPutString(" status="); earlyPutHex(uint64(gDev.common.deviceStatus)); earlyPutString("\n")
-  cast[ptr uint16](at)[] = idx
-  # Decisive probe: read ISR after the kick. Non-zero ⇒ device acted on the queue.
-  if gDev.isrBase != 0:
-    let isr = cast[ptr uint8](gDev.isrBase)[]
-    earlyPutString("[TRACE notify] ISR(post-kick)="); earlyPutHex(uint64(isr)); earlyPutString("\n")
+  when defined(virtioTrace):  # -d:virtioTrace: per-request trace
+    earlyPutString("[TRACE notify] base="); earlyPutHex(gDev.notifyBase)
+    earlyPutString(" mult="); earlyPutInt(int64(off))
+    earlyPutString(" qNotifyOff="); earlyPutInt(int64(qno))
+    earlyPutString(" at="); earlyPutHex(at)
+    earlyPutString(" status="); earlyPutHex(uint64(cfgGet(gDev.common, deviceStatus))); earlyPutString("\n")
+  notifyWrite(at, idx)
+  when defined(virtioTrace):
+    # Decisive probe: read ISR after the kick. Non-zero ⇒ device acted on the queue.
+    if gDev.isrBase != 0:
+      let isr = isrRead(gDev.isrBase)
+      earlyPutString("[TRACE notify] ISR(post-kick)="); earlyPutHex(uint64(isr)); earlyPutString("\n")
 
 proc pciReadConfig(off: uint32): uint32 {.nimcall.} =
   deviceConfigRead32(gDev.deviceBase, off)

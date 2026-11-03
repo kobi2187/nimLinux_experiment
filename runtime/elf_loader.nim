@@ -197,6 +197,7 @@ proc mapAllLoadSegments(r: var ElfLoadResult; fileBase, bias: uint64;
     if not mapLoadSegment(r, fileBase, bias, ph, fileSize): return false
   r.loadBase += bias
   r.loadEnd  += bias
+  klogHex(llInfo, "ELF PIE: load bias=", bias)   # tools/symbolize.py --app
   true
 
 # ── RELA relocations ──────────────────────────────────────────────────────────
@@ -256,19 +257,33 @@ proc applyRelocations(fileBase, bias: uint64; h: Ehdr) =
 
 # ── Symbol table — ABI patching ───────────────────────────────────────────────
 
-proc emitSyscallTrampoline(stubAddr, nr: uint64) =
+const SyscallTrampolineLen* = 16
+
+proc emitSyscallTrampoline*(stubAddr, nr: uint64) =
+  ## Overwrite a weak ABI stub with a complete function (16 bytes):
+  ##   movabs rax, nr ; mov r10, rcx ; syscall ; ret
+  ## `mov r10, rcx`: SysV passes arg 4 in RCX, which SYSCALL clobbers.
+  ## `ret`: SYSRETQ resumes right after `syscall` — without it the CPU ran the
+  ## stub's leftover prologue bytes (wrote the caller's frame, popped the return
+  ## address into RBP) and every ring-3 app died on its first syscall (TW#65).
   let stub = asBytes(stubAddr)
   stub[0] = 0x48; stub[1] = 0xB8        # movabs rax, imm64
   for k in 0..<8: stub[2+k] = uint8((nr shr (k*8)) and 0xFF)
-  stub[10] = 0x0F; stub[11] = 0x05      # syscall
+  stub[10] = 0x49; stub[11] = 0x89; stub[12] = 0xCA   # mov r10, rcx
+  stub[13] = 0x0F; stub[14] = 0x05      # syscall
+  stub[15] = 0xC3                       # ret
 
 proc patchSymbol(sym: Sym; namePtr: Bytes; bias: uint64;
                  patches: ptr UncheckedArray[AbiPatch]; patchCount: int) =
   if (sym.st_info shr 4) != STB_WEAK: return
   for p in 0 ..< patchCount:
     if cstrEq(namePtr, patches[p].name):
-      emitSyscallTrampoline(bias + sym.st_value, patches[p].nr)
-      klog(llInfo, "ELF PIE: patched ABI stub → syscall")
+      if sym.st_size < SyscallTrampolineLen:
+        # Patching would overwrite the next function; leave the stub alone.
+        klog(llError, "ELF PIE: ABI stub too small for trampoline, not patched")
+      else:
+        emitSyscallTrampoline(bias + sym.st_value, patches[p].nr)
+        klog(llInfo, "ELF PIE: patched ABI stub → syscall")
       break
 
 proc findAppMain(sym: Sym; namePtr: Bytes; bias: uint64): uint64 =

@@ -1,16 +1,18 @@
 # SPDX-License-Identifier: GPL-2.0
-## littlefs Wear-Leveling Filesystem Driver (Independent Implementation)
+## ramfs — small RAM-backed block filesystem behind the VFS FSDriver interface
 ## ====================================================================
 ##
-## Functional in-memory wear-leveling filesystem driver based on LittleFS principles.
-## Manages block structures, formats, performs wear-leveling allocations, and reads/writes files.
-## Registers itself to the VFS system under the "/lfs_wl/" prefix to avoid conflicts.
+## 32 × 512 B blocks in RAM with a simulated erase-before-write flash and
+## least-erased block allocation. Volatile, flat namespace, one block per file.
+## Oskit role: VFS test double and scratch volume. NOT littlefs (renamed from
+## littlefs_wearleveling, DECISIONS 2026-10-26); real littlefs goes behind the
+## same FSDriver interface after a Nim-ecosystem survey. Prefix "/ram/".
 
 import ../core/log
 import vfs
 
 # =============================================================================
-# LittleFS Core Structures
+# Core structures
 # =============================================================================
 
 type
@@ -30,7 +32,7 @@ type
     name: array[32, char]
 
 const
-  LfsMagic = 0x53464C21'u32    ## "LFS!" marker
+  RamFsMagic = 0x53464C21'u32    ## "LFS!" marker
   BlockCount = 32
   BlockSize = 512
   FileHeaderSize = 40          ## sizeof(FileHeader)
@@ -90,7 +92,7 @@ proc allocateBlock(self: var LittleFsState): int =
     if self.eraseCycles[i] < minCycles:
       minCycles = self.eraseCycles[i]
       bestBlock = i
-  doAssert bestBlock != -1, "littlefs: out of physical flash blocks"
+  doAssert bestBlock != -1, "ramfs: out of blocks"
   
   flashErase(self.dev, bestBlock)
   inc self.eraseCycles[bestBlock]
@@ -100,13 +102,13 @@ proc allocateBlock(self: var LittleFsState): int =
 # Driver VFS Interface
 # =============================================================================
 
-proc lfsMount(): bool {.nimcall.} =
+proc ramfsMount(): bool {.nimcall.} =
   initLfsState()
   gLfs.mounted = true
-  klog(llInfo, "littlefs_wl: wear-leveling volume mounted successfully")
+  klog(llInfo, "ramfs: volume mounted")
   true
 
-proc lfsReadInto(path: cstring; buf: ptr byte; len: int): int {.nimcall.} =
+proc ramfsReadInto(path: cstring; buf: ptr byte; len: int): int {.nimcall.} =
   initLfsState()
   if not gLfs.mounted: return -1
   
@@ -118,7 +120,7 @@ proc lfsReadInto(path: cstring; buf: ptr byte; len: int): int {.nimcall.} =
     if entryMagic == 0xFFFFFFFF'u32:
       break
       
-    if entryMagic == LfsMagic:
+    if entryMagic == RamFsMagic:
       var blockIdx: uint32 = 0
       flashRead(gLfs.dev, 0, slotOffset + 4, cast[ptr byte](addr blockIdx), 4)
       
@@ -139,7 +141,7 @@ proc lfsReadInto(path: cstring; buf: ptr byte; len: int): int {.nimcall.} =
     slotOffset += 8
   -1
 
-proc lfsWriteFile(path: cstring; data: pointer; len: int): int {.nimcall.} =
+proc ramfsWriteFile(path: cstring; data: pointer; len: int): int {.nimcall.} =
   initLfsState()
   if not gLfs.mounted: return -1
   
@@ -148,7 +150,7 @@ proc lfsWriteFile(path: cstring; data: pointer; len: int): int {.nimcall.} =
   
   let blockIdx = gLfs.allocateBlock()
   
-  var header = FileHeader(magic: LfsMagic, size: len.uint32)
+  var header = FileHeader(magic: RamFsMagic, size: len.uint32)
   for i in 0..<targetName.len:
     header.name[i] = targetName[i]
   flashWrite(gLfs.dev, blockIdx, 0, addr header, FileHeaderSize)
@@ -161,13 +163,13 @@ proc lfsWriteFile(path: cstring; data: pointer; len: int): int {.nimcall.} =
     var entryMagic: uint32 = 0
     flashRead(gLfs.dev, 0, slotOffset, cast[ptr byte](addr entryMagic), 4)
     if entryMagic == 0xFFFFFFFF'u32:
-      var entryData: array[2, uint32] = [LfsMagic, blockIdx.uint32]
+      var entryData: array[2, uint32] = [RamFsMagic, blockIdx.uint32]
       flashWrite(gLfs.dev, 0, slotOffset, addr entryData[0], 8)
       return 0
     slotOffset += 8
   -1
 
-proc lfsDirList(path: cstring; buf: pointer; len: int): int {.nimcall.} =
+proc ramfsDirList(path: cstring; buf: pointer; len: int): int {.nimcall.} =
   initLfsState()
   if not gLfs.mounted: return -1
   
@@ -180,7 +182,7 @@ proc lfsDirList(path: cstring; buf: pointer; len: int): int {.nimcall.} =
     if entryMagic == 0xFFFFFFFF'u32:
       break
       
-    if entryMagic == LfsMagic:
+    if entryMagic == RamFsMagic:
       var blockIdx: uint32 = 0
       flashRead(gLfs.dev, 0, slotOffset + 4, cast[ptr byte](addr blockIdx), 4)
       
@@ -203,12 +205,12 @@ proc lfsDirList(path: cstring; buf: pointer; len: int): int {.nimcall.} =
     return writeLen
   0
 
-proc registerLittleFSWearLeveling*() =
+proc registerRamFs*() =
   registerDriver(FSDriver(
-    name: "littlefs_wl",
-    prefix: "/lfs_wl/",
-    mount: lfsMount,
-    readInto: lfsReadInto,
-    writeFile: lfsWriteFile,
-    dirList: lfsDirList
+    name: "ramfs",
+    prefix: "/ram/",
+    mount: ramfsMount,
+    readInto: ramfsReadInto,
+    writeFile: ramfsWriteFile,
+    dirList: ramfsDirList
   ))

@@ -16,8 +16,16 @@ import ../arch/x86_64/tss
 when defined(testing):
   var mockTicks*: uint64
 
+when defined(kernelFull):
+  var isrRestore {.importc: "isr_restore".}: uint8   ## label in boot_asm.S
+  proc isrRestoreAddr(): uint64 = cast[uint64](addr isrRestore)
+else:
+  proc isrRestoreAddr(): uint64 = 0   ## host tests never switch to the frame
+
 const
   MaxTasks*    = 32
+  KStackSize*  = 16384   ## 4 KB overflowed: abiProcList's frame alone is >4 KB
+  KStackCanary = 0x57AC_C0DE_DEAD_BEEF'u64   ## at kstack[0]: overwritten ⇒ overflow
   TaskNameLen* = 32
 
 type
@@ -67,11 +75,11 @@ type
     classPrev*:  int16
 
     # ── Kernel stack (per-task, for context switching) ─────────────────────
-    kstack*:     array[4096, byte]   ## 4 KB kernel stack for this task
+    kstack* {.align(16).}: array[KStackSize, byte]  ## per-task kernel stack (syscalls, IRQs); aligned: canary + rsp0
     rsp*:        uint64              ## saved RSP (set by contextSwitch/preemptiveSwitch)
 
     # ── FPU/SSE state (512 bytes, must be 16-byte aligned for fxsave64) ────
-    fpuState*:   array[512, byte]    ## saved by fxSave, restored by fxRestore
+    fpuState* {.align(16).}: array[512, byte]  ## fxSave/fxRestore: MUST be 16-aligned (#GP)
     fpuValid*:   bool                ## false = FPU state not yet saved (lazy)
 
   SchedulerStats* = object
@@ -162,6 +170,23 @@ proc procTableInit*() =
 
 # ── Spawn ─────────────────────────────────────────────────────────────────────
 
+proc claimSlot(i: int): ptr Task =
+  ## Zero slot i in place and arm its stack canary. In place, not `var t: Task`
+  ## + copy: a Task carries its kernel stack, so a temporary would be ~17 KB on
+  ## the caller's stack (the 16 KB boot stack sits right above the boot page
+  ## tables).
+  result = addr procTable.tasks[i]
+  zeroMem(result, sizeof(Task))
+  cast[ptr uint64](addr result.kstack[0])[] = KStackCanary
+
+proc kstackTop*(i: int): uint64 {.inline.} =
+  ## 16-byte aligned top of task i's kernel stack (TSS.rsp0 / initial frames).
+  cast[uint64](addr procTable.tasks[i].kstack[KStackSize - 1]) and not 15'u64
+
+proc kstackIntact*(i: int): bool {.inline.} =
+  ## False once task i's kernel stack has overflowed into its canary.
+  cast[ptr uint64](addr procTable.tasks[i].kstack[0])[] == KStackCanary
+
 proc procSpawn*(name: cstring; entry: TaskProc;
                 cls: TaskClass; priority: uint8;
                 regionSlot: int32 = -1): int =
@@ -169,10 +194,10 @@ proc procSpawn*(name: cstring; entry: TaskProc;
   ## Returns slot index (>=0) or -1 on failure.
   for i in 0 ..< MaxTasks:
     if not procTable.tasks[i].used:
-      var t: Task
+      let t = claimSlot(i)
       t.used       = true
       t.pid        = procTable.nextPid
-      t.setName(name)
+      t[].setName(name)
       t.class      = cls
       t.priority   = priority
       t.state      = ptsReady
@@ -185,17 +210,16 @@ proc procSpawn*(name: cstring; entry: TaskProc;
       t.classPrev  = -1
       t.ipcCap     = NullCap
       t.wakeAt     = 0
-      procTable.tasks[i] = t
       # Build initial stack frame so contextSwitch can switch TO this task.
       # contextSwitch pops r15,r14,r13,r12,rbx,rbp then does ret.
       # We push: entry address (ret target) + 6 zero callee-saved regs.
-      # Stack grows down; top of kstack is at index 4095 (16-byte aligned).
+      # Stack grows down; kstackTop(i) is the 16-byte aligned top.
       # Build initial stack frame so contextSwitch can switch TO this task.
       # contextSwitch does: pop r15,r14,r13,r12,rbx,rbp; ret
       # Frame layout (low addr = rsp, high addr = top):
       #   [rsp+0]  r15  [rsp+8]  r14  [rsp+16] r13  [rsp+24] r12
       #   [rsp+32] rbx  [rsp+40] rbp  [rsp+48] entry (ret target)
-      let stackTop = (cast[uint64](addr procTable.tasks[i].kstack[4095])) and not 15'u64
+      let stackTop = kstackTop(i)
       let rsp = stackTop - 56
       let frame = cast[ptr UncheckedArray[uint64]](rsp)
       frame[0] = 0  # r15
@@ -217,28 +241,58 @@ proc procSpawn*(name: cstring; entry: TaskProc;
   klog(llError, "procSpawn: MaxTasks reached")
   -1
 
-proc procSpawnRing3*(name: cstring; appMain: uint64; userStackTop: uint64;
-                     regionSlot: int32): int =
-  ## Spawn a ring-3 app task. Builds an iretq frame on the kernel stack so
-  ## the first time the scheduler switches to this task, isr_common_stub's
-  ## iretq drops execution into ring 3 at appMain with the user stack.
-  ##
-  ## Frame layout on kstack (low RSP → high):
-  ##   [0..119]  15 GPRs × 8 bytes  (zeroed)
-  ##   [120..127] vector_num         (0)
-  ##   [128..135] error_code         (0)
-  ##   [136..143] RIP  = appMain
-  ##   [144..151] CS   = UserCS
-  ##   [152..159] RFLAGS = 0x202 (IF=1, reserved bit 1)
-  ##   [160..167] RSP  = userStackTop
-  ##   [168..175] SS   = UserDS
-  ## Total: 176 bytes
+proc procAdoptCurrent*(name: cstring; cls: TaskClass): int =
+  ## Make the context that is running right now (the boot flow → shell) a real
+  ## task, so the scheduler can switch away from it AND back. No initial frame:
+  ## its rsp is saved by the first preemptiveSwitch away from it. Before this,
+  ## the shell ran as "idle" (current = -1) and its context was discarded on the
+  ## first switch to an app, so the shell never answered again.
+  assert procTable.current < 0, "procAdoptCurrent: a task is already current"
   for i in 0 ..< MaxTasks:
     if not procTable.tasks[i].used:
-      var t: Task
+      let t = claimSlot(i)
+      t.used      = true
+      t.pid       = procTable.nextPid
+      t[].setName(name)
+      t.class     = cls
+      t.priority  = 128
+      t.state     = ptsRunning
+      t.regionSlot = -1
+      t.birthTick = pitTicks()
+      t.classNext = -1
+      t.classPrev = -1
+      inc procTable.nextPid
+      inc procTable.taskCount
+      ringInsertTail(procTable, int16(i), int(cls))
+      procTable.current = int16(i)
+      return i
+  -1
+
+proc procSpawnRing3*(name: cstring; appMain: uint64; userStackTop: uint64;
+                     regionSlot: int32): int =
+  ## Spawn a ring-3 app task. The kstack is built to look exactly like a task
+  ## preempted inside the PIT handler: preemptiveSwitch `ret`s through slot 0
+  ## into isr_restore, which pops the GPRs and iretq's into ring 3 at appMain.
+  ## (Without slot 0 the `ret` popped the zeroed r15 slot and jumped to address
+  ## 0 in ring 0 — the #UD loop at RIP=0x101e, TW#65/TW#72.)
+  ##
+  ## Frame layout on kstack (low RSP → high):
+  ##   [0..7]     return address = isr_restore
+  ##   [8..127]   15 GPRs × 8 bytes  (zeroed)
+  ##   [128..135] vector_num         (0)
+  ##   [136..143] error_code         (0)
+  ##   [144..151] RIP  = appMain
+  ##   [152..159] CS   = UserCS
+  ##   [160..167] RFLAGS = 0x202 (IF=1, reserved bit 1)
+  ##   [168..175] RSP  = userStackTop
+  ##   [176..183] SS   = UserDS
+  ## Total: 184 bytes
+  for i in 0 ..< MaxTasks:
+    if not procTable.tasks[i].used:
+      let t = claimSlot(i)
       t.used       = true
       t.pid        = procTable.nextPid
-      t.setName(name)
+      t[].setName(name)
       t.class      = tcApp
       t.priority   = 128
       t.state      = ptsReady
@@ -251,20 +305,19 @@ proc procSpawnRing3*(name: cstring; appMain: uint64; userStackTop: uint64;
       t.classPrev  = -1
       t.ipcCap     = capGrant(procTable.nextPid, capIpc)
       t.wakeAt     = 0
-      procTable.tasks[i] = t
 
-      let kstackTop = (cast[uint64](addr procTable.tasks[i].kstack[4095])) and not 15'u64
-      let rsp = kstackTop - 176
+      let rsp = kstackTop(i) - 184
       let f = cast[ptr UncheckedArray[uint64]](rsp)
-      # 15 GPRs (indices 0..14) — all zero
-      for j in 0 .. 14: f[j] = 0
-      f[15] = 0                    # vector_num
-      f[16] = 0                    # error_code
-      f[17] = appMain              # RIP
-      f[18] = uint64(UserCS)       # CS
-      f[19] = 0x202'u64            # RFLAGS: IF=1, bit1 always set
-      f[20] = userStackTop         # RSP (user stack)
-      f[21] = uint64(UserDS)       # SS
+      f[0] = isrRestoreAddr()      # preemptiveSwitch `ret` target
+      # 15 GPRs (indices 1..15) — all zero
+      for j in 1 .. 15: f[j] = 0
+      f[16] = 0                    # vector_num
+      f[17] = 0                    # error_code
+      f[18] = appMain              # RIP
+      f[19] = uint64(UserCS)       # CS
+      f[20] = 0x202'u64            # RFLAGS: IF=1, bit1 always set
+      f[21] = userStackTop         # RSP (user stack)
+      f[22] = uint64(UserDS)       # SS
 
       procTable.tasks[i].rsp = rsp
       inc procTable.nextPid
@@ -274,6 +327,10 @@ proc procSpawnRing3*(name: cstring; appMain: uint64; userStackTop: uint64;
       return i
   klog(llError, "procSpawnRing3: MaxTasks reached")
   -1
+
+var onTaskSwitch*: proc(next: int) {.nimcall.}
+  ## Called by the preemptive switch with the incoming slot (buffer
+  ## enforcement re-applies that task's arena page rights).
 
 # ── Kill / reclaim ────────────────────────────────────────────────────────────
 

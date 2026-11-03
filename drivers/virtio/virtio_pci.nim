@@ -10,6 +10,8 @@
 ## Struct layouts verified against linux/include/uapi/linux/virtio_pci.h
 ## (see subprojects/virtio-pci/DECISIONS.md V1 survey).
 
+import std/volatile
+
 when defined(virtioDebug):
   import ../../core/log
 
@@ -125,8 +127,18 @@ proc capAddr*(loc: VirtioCapLoc; barBase: BarBaseFn): uint64 =
 
 # ── CommonCfg operations (spec §4.1.4.3) ──────────────────────────────────────
 # `cfg` points at the device's mapped CommonCfg MMIO window (or a plain struct in
-# host tests). Field writes must reach the device; on the kernel path the region
-# is mapped uncached so ordinary stores are MMIO writes.
+# host tests). Every access MUST go through cfgGet/cfgSet: an uncached mapping
+# stops the CPU caching, not the compiler reordering, merging or dropping plain
+# stores. (A plain-store queueSetup compiled to enable-before-avail/used, so the
+# device latched avail=used=0 and never serviced a request — DECISIONS V10b.)
+
+template cfgGet*(cfg: ptr VirtioPciCommonCfg; field: untyped): untyped =
+  ## Volatile read of one CommonCfg register.
+  volatileLoad(addr cfg[].field)
+
+template cfgSet*(cfg: ptr VirtioPciCommonCfg; field: untyped; val: typed) =
+  ## Volatile write of one CommonCfg register, in program order.
+  volatileStore(addr cfg[].field, typeof(cfg[].field)(val))
 
 const
   StatusAck     = 1'u8
@@ -140,8 +152,8 @@ proc hi32(v: uint64): uint32 {.inline.} = uint32(v shr 32)
 
 proc writeGuestFeatures(cfg: ptr VirtioPciCommonCfg; features: uint64) =
   ## Publish both 32-bit feature words (select 0 = low, select 1 = high).
-  cfg.guestFeatureSelect = 0; cfg.guestFeature = lo32(features)
-  cfg.guestFeatureSelect = 1; cfg.guestFeature = hi32(features)
+  cfgSet(cfg, guestFeatureSelect, 0); cfgSet(cfg, guestFeature, lo32(features))
+  cfgSet(cfg, guestFeatureSelect, 1); cfgSet(cfg, guestFeature, hi32(features))
 
 proc commonNegotiate*(cfg: ptr VirtioPciCommonCfg; features: uint64): bool =
   ## Status handshake: ACK → DRIVER → (accept features) → FEATURES_OK.
@@ -149,12 +161,12 @@ proc commonNegotiate*(cfg: ptr VirtioPciCommonCfg; features: uint64): bool =
   ## its virtqueues in 1.0 mode once the driver acks it (spec §3.1.1).
   ## Returns false if the device clears FEATURES_OK (features rejected).
   assert cfg != nil, "negotiate: cfg must be non-nil"
-  cfg.deviceStatus = 0
-  cfg.deviceStatus = cfg.deviceStatus or StatusAck
-  cfg.deviceStatus = cfg.deviceStatus or StatusDriver
+  cfgSet(cfg, deviceStatus, 0)
+  cfgSet(cfg, deviceStatus, cfgGet(cfg, deviceStatus) or StatusAck)
+  cfgSet(cfg, deviceStatus, cfgGet(cfg, deviceStatus) or StatusDriver)
   writeGuestFeatures(cfg, features or VirtioFVersion1)
-  cfg.deviceStatus = cfg.deviceStatus or StatusFeatOk
-  (cfg.deviceStatus and StatusFeatOk) != 0
+  cfgSet(cfg, deviceStatus, cfgGet(cfg, deviceStatus) or StatusFeatOk)
+  (cfgGet(cfg, deviceStatus) and StatusFeatOk) != 0
 
 proc commonSetDriverOk*(cfg: ptr VirtioPciCommonCfg) =
   ## Final handshake step: set DRIVER_OK so the device begins servicing the
@@ -162,23 +174,31 @@ proc commonSetDriverOk*(cfg: ptr VirtioPciCommonCfg) =
   ## device accepts buffers (avail.idx advances) but never processes them
   ## (used.idx never moves) — every request times out.
   assert cfg != nil, "setDriverOk: cfg must be non-nil"
-  cfg.deviceStatus = cfg.deviceStatus or StatusDriverOk
+  cfgSet(cfg, deviceStatus, cfgGet(cfg, deviceStatus) or StatusDriverOk)
 
 proc commonQueueSetup*(cfg: ptr VirtioPciCommonCfg; idx: uint16;
-                       descPhys, availPhys, usedPhys: uint64): bool =
-  ## Select queue `idx`, write the split-ring phys addresses, enable it.
+                       descPhys, availPhys, usedPhys: uint64;
+                       ringSize = 0'u16): bool =
+  ## Select queue `idx`, set its size (ringSize; 0 = keep the device default),
+  ## write the split-ring phys addresses, enable it. False if the device's
+  ## max queue size is below ringSize.
   assert cfg != nil, "queueSetup: cfg must be non-nil"
-  cfg.queueSelect  = idx
-  cfg.queueDescLo  = lo32(descPhys);  cfg.queueDescHi  = hi32(descPhys)
-  cfg.queueAvailLo = lo32(availPhys); cfg.queueAvailHi = hi32(availPhys)
-  cfg.queueUsedLo  = lo32(usedPhys);  cfg.queueUsedHi  = hi32(usedPhys)
-  cfg.queueEnable  = 1
+  cfgSet(cfg, queueSelect,  idx)
+  # The ring index wraps at queue_size on both sides: state the driver's size
+  # (the device default may differ) and refuse a device whose max is smaller.
+  if ringSize != 0:
+    if cfgGet(cfg, queueSize) < ringSize: return false
+    cfgSet(cfg, queueSize, ringSize)
+  cfgSet(cfg, queueDescLo,  lo32(descPhys));  cfgSet(cfg, queueDescHi,  hi32(descPhys))
+  cfgSet(cfg, queueAvailLo, lo32(availPhys)); cfgSet(cfg, queueAvailHi, hi32(availPhys))
+  cfgSet(cfg, queueUsedLo,  lo32(usedPhys));  cfgSet(cfg, queueUsedHi,  hi32(usedPhys))
+  cfgSet(cfg, queueEnable,  1)   # last: the device latches the rings on enable
   when defined(virtioDebug):
-    klogHex(llInfo, "vblk: numQueues=", uint64(cfg.numQueues))
-    klogHex(llInfo, "vblk: queueSize=", uint64(cfg.queueSize))
-    klogHex(llInfo, "vblk: queueEnable=", uint64(cfg.queueEnable))
+    klogHex(llInfo, "vblk: numQueues=", uint64(cfgGet(cfg, numQueues)))
+    klogHex(llInfo, "vblk: queueSize=", uint64(cfgGet(cfg, queueSize)))
+    klogHex(llInfo, "vblk: queueEnable=", uint64(cfgGet(cfg, queueEnable)))
     klogHex(llInfo, "vblk: descPhysWritten=", descPhys)
-    klogHex(llInfo, "vblk: status=", uint64(cfg.deviceStatus))
+    klogHex(llInfo, "vblk: status=", uint64(cfgGet(cfg, deviceStatus)))
   true
 
 # ── Notify + device-config access ─────────────────────────────────────────────
@@ -189,7 +209,27 @@ proc notifyAddr*(notifyBase: uint64; queueNotifyOff: uint16;
   ## notify_base + queue_notify_off * notify_off_multiplier.
   notifyBase + uint64(queueNotifyOff) * uint64(notifyOffMultiplier)
 
+proc notifyWrite*(at: uint64; queueIdx: uint16) =
+  ## Ring the doorbell. The barrier publishes prior ring stores (plain memory)
+  ## before the volatile kick, like Linux virtio_wmb + iowrite16.
+  {.emit: "asm volatile(\"\" ::: \"memory\");".}
+  volatileStore(cast[ptr uint16](at), queueIdx)
+
+proc commonKick*(cfg: ptr VirtioPciCommonCfg; notifyBase: uint64;
+                 notifyOffMultiplier: uint32; queueIdx: uint16) =
+  ## Kick queue `queueIdx`. queue_notify_off is per-queue (it reads back for
+  ## the SELECTED queue), so select first; the device derives the queue from
+  ## the doorbell address, so a stale selection would kick the wrong queue.
+  cfgSet(cfg, queueSelect, queueIdx)
+  let at = notifyAddr(notifyBase, cfgGet(cfg, queueNotifyOff), notifyOffMultiplier)
+  notifyWrite(at, queueIdx)
+
+proc isrRead*(isrBase: uint64): uint8 =
+  ## Read (and thereby acknowledge) the ISR status byte. Volatile: a plain
+  ## discarded load is dead code to the compiler and would be deleted.
+  volatileLoad(cast[ptr uint8](isrBase))
+
 proc deviceConfigRead32*(deviceBase: uint64; off: uint32): uint32 =
   ## Read a 32-bit field from the device-specific config region.
   assert deviceBase != 0, "deviceConfigRead32: device cfg not mapped"
-  cast[ptr uint32](deviceBase + uint64(off))[]
+  volatileLoad(cast[ptr uint32](deviceBase + uint64(off)))

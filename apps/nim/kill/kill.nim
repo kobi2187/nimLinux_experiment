@@ -1,9 +1,11 @@
 # NimixOS kill app — terminate a task by PID.
 import nimix_common
+import nimix_entry
 
 proc nimixProcKillPid(pid: uint32): int {.importc, cdecl.}
 
 proc appMain*() {.exportc.} =
+  nimixAppInit()   # module init first: --noMain skips it (nimix_entry)
   var argbuf: array[64, char]
   let n = nimixGetArgs(addr argbuf[0], argbuf.len)
   var pid: uint32 = 0

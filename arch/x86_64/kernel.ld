@@ -35,6 +35,13 @@ SECTIONS
 
     /* ── Zero-initialised data ─────────────────────────────────────── */
     .bss ALIGN(4K) : {
+        /* Nim's standalone heap MUST be page-aligned: its allocator finds chunk
+         * headers with p & ~PageMask. Declared as array[..., float64] it was
+         * only 8-aligned (page offset 0x2c0), corrupting kernel strings/seqs.
+         * Needs -fdata-sections (own input section). test_heap_alignment.sh
+         * checks the linked result. */
+        . = ALIGN(4K);
+        *(.bss.theHeap__*)
         *(COMMON)
         *(.bss)
         *(.bss.*)

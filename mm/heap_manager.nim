@@ -110,7 +110,6 @@ proc grow(self: HeapManager, minSize: uint64): Result[void, HeapError] =
   ## Grow the heap by at least minSize bytes
   let growBy = max(HeapGrowSize, alignUp(minSize, FrameSize))
   let pages = growBy div FrameSize
-  kprintln("    [HEAP] grow: growBy=" & $growBy & " pages=" & $pages)
 
   # Check if we'd exceed max
   if self.heapEnd + growBy > self.heapMax:
@@ -217,12 +216,10 @@ proc alloc*(self: HeapManager, size: uint64): Result[pointer, HeapError] =
   # Calculate actual size needed (header + data, aligned)
   let actualSize = alignUp(size + HeaderSize, MinBlockSize)
 
-  kprintln("    [HEAP] alloc: actualSize=" & $actualSize)
 
   # Try free list first
   let (prev, curr) = self.findFreeBlock(actualSize)
   if curr != nil:
-    kprintln("    [HEAP] alloc: found free block")
     self.removeFromFreeList(prev, curr)
 
     doAssert curr.size >= actualSize, "found block too small for allocation"
@@ -251,7 +248,6 @@ proc alloc*(self: HeapManager, size: uint64): Result[pointer, HeapError] =
 
     return ok(cast[pointer](cast[uint64](allocBlock) + HeaderSize))
 
-  kprintln("    [HEAP] alloc: no free block, growing heap...")
 
   let currentTop = self.heapFrontier
   doAssert currentTop >= self.heapStart, "frontier below heap start"
@@ -414,7 +410,6 @@ proc earlyAlloc(size: uint64): pointer =
   p
 
 proc malloc*(size: csize_t): pointer {.exportc: "malloc", cdecl.} =
-  kprintln("  [HEAP] malloc: size=" & $uint64(size))
   let totalSize = uint64(size) + uint64(sizeof(MallocHeader))
   var rawPtr: pointer = nil
   var magic: uint64
@@ -436,7 +431,6 @@ proc malloc*(size: csize_t): pointer {.exportc: "malloc", cdecl.} =
   header.size = uint64(size)
   
   let userPtr = cast[pointer](cast[uint64](rawPtr) + uint64(sizeof(MallocHeader)))
-  kprintln("  [HEAP] malloc: returned userPtr=" & $cast[uint64](userPtr))
   userPtr
 
 proc free*(p: pointer) {.exportc: "free", cdecl.} =
@@ -444,7 +438,6 @@ proc free*(p: pointer) {.exportc: "free", cdecl.} =
   let headerAddr = cast[uint64](p) - uint64(sizeof(MallocHeader))
   let header = cast[ptr MallocHeader](headerAddr)
   
-  kprintln("  [HEAP] free: p=" & $cast[uint64](p) & " magic=" & $header.magic)
   if header.magic == MagicLate:
     if globalHeapManager != nil:
       discard globalHeapManager.free(cast[pointer](headerAddr))
@@ -468,7 +461,6 @@ proc realloc*(p: pointer, size: csize_t): pointer {.exportc: "realloc", cdecl.} 
     
   # Copy data
   let copySize = min(oldSize, uint64(size))
-  kprintln("  [HEAP] realloc: p=" & $cast[uint64](p) & " oldSize=" & $oldSize & " newSize=" & $size & " newPtr=" & $cast[uint64](newPtr) & " copySize=" & $copySize)
   copyMem(newPtr, p, int(copySize))
   
   # Free old block
