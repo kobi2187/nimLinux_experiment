@@ -102,3 +102,29 @@ colour buffer. Our `PLATFORM_NIMIX` blits it to virtio-gpu. Rejected:
 writing our own rasterizer for raylib (rlsw exists and is maintained
 upstream); keeping GLSL (no GPU); Pango in-kernel or in-server (synchronous
 measurement must be app-local).
+
+## Addendum 2026-11-03 — text engine options (human: RUI is ours to change)
+
+Surveyed from source (read only):
+
+| option | what it really is | fit |
+|--------|-------------------|-----|
+| **treeform/typography** | pure Nim, MIT, but **retired**: its README says it was integrated into Pixie and is "no longer being actively worked on" | use its successor, Pixie |
+| **treeform/pixie** (6.1.0, MIT, active Sep 2026) | **pure Nim** fonts + typesetting + rasterization: TTF/OTF parsing from bytes (`parseTtf(string)`), kerning (kern + GPOS), `typeset(spans, bounds, align, wrap)` → `Arrangement{lines, spans, fonts, runes, positions, selectionRects}`, `layoutBounds`, `fillText`. Deps all pure Nim (vmath, chroma, bumpy, zippy, flatty, crunchy, nimsimd). SIMD only `when allowSimd and defined(amd64)`, so wasm32 takes the scalar path. `{.raises: [].}` on typeset | **the v1 engine.** Arrangement covers RUI's text API: measure → `layoutBounds`, softBreaks → `lines`, cursorPosition → `positions`, indexFromPosition → hit-test on `selectionRects`, rich text → `spans`. Gaps: no GSUB (no ligatures), no BiDi, one glyph per rune |
+| **elcritch/harfbuzzy** (0.7.0, MIT, active Oct 2026) | **not pure Nim**: idiomatic wrappers over the HarfBuzz C/C++ API, which `nimbase/harfbuzz-nim` supplies by **linking the system HarfBuzz via pkg-config**, plus FriBidi (C) for paragraph bidi | **the complex-script path, later.** Its `shapeParagraph` / `visualRuns` API is the right shape, but it needs HarfBuzz (portable C++, no exceptions/RTTI; it builds for wasm, cf. harfbuzzjs) and FriBidi ported to NimixOS first. Parked until the first RTL/complex-script user |
+| Pango/Cairo (RUI today) | C: glib, fontconfig, FreeType, HarfBuzz, Cairo | keep on desktop; not ported to NimixOS |
+
+**Recommendation:**
+- **RUI gains a text-backend seam** (its `pango_text` API is already the
+  right interface), with two backends: Pango (desktop, today) and Pixie
+  (pure Nim; desktop *and* NimixOS). This is an upstream change to rui2,
+  which the human owns, and it also frees desktop RUI from requiring
+  system Pango.
+- The **same Pixie code on both sides of the protocol:** the app typesets
+  (measure, wrap, caret, hit-test) locally from a sealed shared font; the
+  server rasterizes the glyphs the app positioned (`TEXT_RUN`). Identical
+  metrics by construction. stb_truetype is dropped from the plan: Pixie
+  avoids C (and libm) in WASM apps.
+- **Check in V7:** Pixie's font path in wasm32 needs only
+  `sqrt/floor/ceil/round` (native wasm ops); any trig used by its path
+  code must resolve in the NimixOS WASM runtime.

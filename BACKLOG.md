@@ -142,11 +142,11 @@ draw_protocol.md (PROPOSED, awaiting agreement); survey docs/surveys/rui2.md.
 | V4 | FUZZY | large memory for servers/apps (> 4 MB): a large-region class or an arena-backed heap | render server gets ≥ 32 MB; app regions unchanged | buffers |
 | V5 | CLEAR | raylib 6.0 + rlsw built for NimixOS: `PLATFORM_NIMIX` (virtio-gpu fb blit of damage, fine clock, event-ring input) | ELF demo draws shapes+text; screendump == host render (pixel test) | V2 V3 V4 |
 | V6 | SPAWN | **render server** (app_server's second face): sessions, command-ring execution, targets, composite, present | draw_protocol conformance tests (host) + QEMU pixel test | V5, buffers rings ABI, protocol agreed |
-| V7 | CLEAR | app side: `raylib`/`rlgl` shim encoding commands (naylib names/types), actor-backed `background`/`mailbox`, `pango_text` shim on stb_truetype + sealed fonts | RUI2 builds for WASM (`--mm:orc`) unchanged; host test decodes its command stream | protocol agreed |
+| V7 | CLEAR | app side: `raylib`/`rlgl` shim encoding commands (naylib names/types), actor-backed `background`/`mailbox`, RUI text on Pixie over sealed fonts | RUI2 builds for WASM (`--mm:orc`) unchanged; host test decodes its command stream | protocol agreed |
 | V8 | CLEAR | WASM runtime: ORC, larger linear memory, buffer/ring host calls | counter example runs in wasm3 | buffers B8 |
 | V9 | CLEAR | **benchmark**: same RUI screen in-process (RUI + raylib/rlsw, ELF) vs server path (WASM → commands → server) | report: frame time, key-to-pixel, commands/frame, kernel calls/frame; CI gates the counts | V6 V7 V8 |
 | V10 | CLEAR | audio: thread-free miniaudio backend → virtio-snd via session ring (audio server) | 440 Hz test tone through the ring (existing wav check) | buffers rings |
-| V11 | CLEAR | upstream to rui2: SDF/backdrop backend hook; `{.cursor.}` parent or ORC note; optional rui_scripting / rui_shaped | PRs to kobi2187/rui2 | V7 |
+| V11 | CLEAR | upstream to rui2: **text-backend seam (Pango, Pixie)**; SDF/backdrop backend hook; `{.cursor.}` parent or ORC note; optional rui_scripting / rui_shaped | PRs to kobi2187/rui2; RUI desktop runs on the Pixie backend | V7 |
 
 ## Compiler target (long-term)
 

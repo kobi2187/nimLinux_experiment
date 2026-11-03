@@ -59,7 +59,7 @@ put a copy and a hop in every frame.
 | clock | a fine monotonic clock: TSC calibrated against the PIT (or the APIC timer) for `GetTime`, frame pacing and latency measurement; the PIT stays the scheduler tick | standard practice |
 | memory | the server needs well over 4 MB (rlsw targets, textures): a **large-region class**, or buffers from the arena as its heap | buffers Stage A arena / region allocator |
 | audio | not in the render server. raylib's miniaudio thread is replaced by a **thread-free backend feeding virtio-snd through a session ring**, in the audio server | the side chat; buffers rings |
-| fonts / text | server rasterizes glyphs from **sealed font buffers** that apps share for measurement (draw_protocol §5) | buffers `tmShare` |
+| fonts / text | **Pixie** (pure Nim) on both sides: apps typeset, the server rasterizes the positioned glyphs from the same **sealed font buffers** (draw_protocol §5); HarfBuzz via harfbuzzy later for complex scripts | treeform/pixie, elcritch/harfbuzzy |
 
 ## 4. What the app side needs (WASM + RUI)
 

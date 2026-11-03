@@ -1170,3 +1170,26 @@ experiment, with exceptions as measured ADRs, plus end-to-end budgets.
   gate CI on any accelerator. Times (key-to-pixel ≤ 33 ms p95, frame
   ≤ 16.7 ms) are judged under KVM and only tracked under TCG.
 - Vertical-slice tasks V1–V11 are in BACKLOG.
+
+## Text engine: Pixie (pure Nim) on both sides; HarfBuzz later (2026-11-03)
+
+Human: RUI is theirs to modify; prefer a pure-Nim equivalent where binding
+Pango/Cairo is impractical. Surveyed (docs/surveys/rui2.md addendum):
+- **treeform/typography** is retired, merged into **Pixie**.
+- **Pixie** (pure Nim, MIT, active) parses TTF/OTF from bytes, kerns
+  (kern + GPOS), typesets spans with wrapping, and returns positions and
+  selection rects. That covers RUI's measure / wrap / caret / hit-test
+  API. Its SIMD is amd64-only, so wasm32 takes the scalar path.
+- **elcritch/harfbuzzy** is wrappers over the system HarfBuzz (C++) +
+  FriBidi, **not** pure Nim.
+
+Decision (proposal-level, inside draw_protocol §5; the human leans this way):
+- Pixie typesets in the app and rasterizes in the server, over the same
+  sealed font bytes, so measured equals drawn by construction.
+- RUI gets a text-backend seam (Pango | Pixie) upstream.
+- stb_truetype is dropped from the plan: it would put C and libm into
+  every WASM app.
+- **Parked:** ligatures, complex shaping, BiDi. Resolving signal: the
+  first RTL/complex-script user. The path then is harfbuzzy behind the
+  same seam once HarfBuzz and FriBidi are ported; `TEXT_RUN` already
+  carries shaped glyphs, so the protocol doesn't change.

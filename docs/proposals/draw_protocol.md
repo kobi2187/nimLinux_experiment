@@ -73,27 +73,34 @@ A bad record ends the frame with an error event; the app is never trusted
 and other sessions are never touched. Resource ids are per session, so an
 app can only name its own targets.
 
-## 5. Text: measured in the app, drawn by the server
+## 5. Text: typeset in the app, rasterized by the server, with the same code
 
 RUI measures synchronously, many times per layout pass (`measure`,
 `softBreaks`, `cursorPosition`, `indexFromPosition`). A round trip per
-measure would break the frame budget, so **measurement is app-local**.
+measure would break the frame budget, so **typesetting is app-local**.
 
-**Pick: the same font file and the same algorithm on both sides.**
+**Pick: Pixie (pure Nim, MIT) on both sides of the protocol, over the same
+font bytes** (survey addendum, docs/surveys/rui2.md):
 1. The server loads fonts and shares each as a **sealed buffer**
-   (`tmShare`), so every app reads the same bytes with zero copies.
-2. App and server both use **stb_truetype** (already vendored) for metrics
-   and kerning, so a measured width equals the drawn width by construction.
-3. A `pango_text` API shim implements measure, softBreaks, cursorPosition,
-   indexFromPosition and charAttrs for LTR text with kerning.
-4. The server rasterizes glyphs into a per-font atlas (raylib's font path)
-   and draws `TEXT`, or `TEXT_RUN` when the app has already positioned
-   glyphs.
-- **Bootstrap:** the Spleen 8×16 bitmap font (gfx/) as font id 0. It is
-  monospace and needs no float.
-- **Not in v1:** complex shaping and BiDi (`hasRtl` → false). Parked with a
-  resolving signal: the first RTL or complex-script user decides between
-  HarfBuzz in both or shaping in the server with a glyph-run cache.
+   (`tmShare`), so every app parses the same bytes.
+2. **App:** RUI's text backend calls Pixie's `typeset` and keeps the
+   `Arrangement` (lines, positions, selectionRects). That covers measure,
+   wrap, caret and hit-test, with no C and no libm.
+3. **Draw:** `TEXT_RUN(fontId, size, color, glyphs[{rune, x, y}])` sends
+   the positions the app computed. The server rasterizes those glyphs with
+   Pixie from the same font into a per-(font, size) glyph cache, so what
+   was measured is what is drawn. `TEXT(utf8)` stays for simple callers;
+   the server typesets it with the same Pixie code.
+4. **RUI change (upstream, owned by the human):** a text-backend seam
+   behind `pango_text`'s API, with Pango for desktop today and Pixie for
+   desktop and NimixOS.
+- **Bootstrap:** the Spleen 8×16 bitmap font (gfx/) as font id 0.
+- **Not in v1:** ligatures (no GSUB), complex shaping and BiDi
+  (`hasRtl` → false). **Parked**, resolving signal: the first RTL or
+  complex-script user. The path then is elcritch/harfbuzzy (HarfBuzz +
+  FriBidi wrappers) behind the same seam, once HarfBuzz and FriBidi are
+  ported to NimixOS. The protocol doesn't change: `TEXT_RUN` already
+  carries shaped glyphs.
 
 ## 6. Budget check (designed, to be measured)
 
@@ -129,7 +136,8 @@ plus the server's present.
    I'd pick yes.
 3. **Semantic SDF and backdrop commands instead of shaders**, plus one
    upstream hook in rui2. I'd pick yes.
-4. **Text: app-local measurement over shared sealed fonts + stb_truetype
-   on both sides**; Spleen as bootstrap; no BiDi in v1. I'd pick yes.
+4. **Text: Pixie on both sides over shared sealed fonts**, with a text
+   backend seam in RUI (Pango | Pixie); Spleen as bootstrap; HarfBuzz via
+   harfbuzzy later for complex scripts. I'd pick yes.
 5. **The server decodes images** (PNG/QOI via raylib); apps move or seal
    encoded bytes. I'd pick yes.
