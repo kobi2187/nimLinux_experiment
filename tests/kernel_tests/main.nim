@@ -14,11 +14,14 @@ import ../../kernel/cap/capability
 import ../../kernel/process_table
 import ../../ipc/server_chan
 import ../../drivers/pit
+import ../../drivers/tsc
+import ../../arch/x86_64/cpu_primitives
 # DEFERRED: VFS + metadata_db imports cause seq[string] corruption in kernel context (--os:any)
 # Disabled for V10. Will be re-enabled in Milestone 2 after refactoring.
 # import ../../fs/vfs
 # import ../../fs/metadata_db
 import ../../core/serial
+import ../../core/log
 
 # ── region allocator ──────────────────────────────────────────────────────────
 
@@ -112,6 +115,52 @@ proc testPitTickAdvances() =
   pitTick()
   check("pit_tick_advances", pitTicks() >= t0 + 2)
 
+# ── TSC clock ─────────────────────────────────────────────────────────────────
+
+proc testTscCalibrated() =
+  check("tsc_ready", tscReady())
+  let hz = tscClock().hz
+  check("tsc_hz_plausible", hz >= 100_000_000'u64 and hz <= 20_000_000_000'u64)
+
+proc testTscMonotonic() =
+  var last = tscNanos()
+  var backwards = 0
+  for _ in 0 ..< 2000:
+    let n = tscNanos()
+    if n < last: inc backwards
+    last = n
+  checkEq("tsc_monotonic", backwards, 0)
+
+proc testTscMatchesPit() =
+  ## The fine clock and the scheduler tick are independent counters (TSC vs the
+  ## PIT's channel 0): one second of PIT ticks must measure one second of TSC
+  ## time, within 1 %. Interrupts are off in this suite, so enable them for the
+  ## sleep, exactly as the testMode flow does while it waits for user tests.
+  const TickNs = 11931'u64 * 1_000_000_000'u64 div 1_193_182'u64   # PIT ch0 period at divisor 11931
+  let me = int(procTable.current)
+  # Start on a tick edge: the wake-up lands on one, so a start mid-tick would
+  # measure between 99 and 100 tick periods (up to 1 % short).
+  sti()
+  let edge = pitTicks()
+  while pitTicks() == edge: hlt()
+  cli()
+  let t0 = pitTicks()
+  let n0 = tscNanos()
+  procSleepUntil(me, t0 + 100)          # marks us blocked; the PIT handler wakes us
+  sti()
+  while procTable.tasks[me].state == ptsBlocked: hlt()
+  cli()
+  let ticks = pitTicks() - t0
+  let ns = tscNanos() - n0
+  let expected = ticks * TickNs
+  klogInt(llInfo, "[TSC-TEST] pit ticks: ", int64(ticks))
+  klogInt(llInfo, "[TSC-TEST] tsc ms: ", int64(ns div 1_000_000'u64))
+  klogInt(llInfo, "[TSC-TEST] pit-expected ms: ", int64(expected div 1_000_000'u64))
+  let diff = if ns > expected: ns - expected else: expected - ns
+  check("tsc_sleep_ticks", ticks >= 100'u64)
+  check("tsc_vs_pit_1pct", diff * 100'u64 <= expected)
+  checkEq("tsc_sleep_ms_at_least", int(ns div 1_000_000'u64 >= 990'u64), 1)
+
 # ── VFS and B+ Tree Metadata ──────────────────────────────────────────────────
 # DEFERRED: Disabled for V10 due to seq[string] corruption in kernel context.
 # Will be re-enabled after refactoring metadata_db to use fixed-size arrays.
@@ -153,6 +202,10 @@ proc kernelTestMain*() =
   testServerChanEmptyRecv()
 
   testPitTickAdvances()
+
+  testTscCalibrated()
+  testTscMonotonic()
+  testTscMatchesPit()
   # DEFERRED: VFS + metadata tests disabled for V10
   # testVFSRouting()
   # testMetadataBPlusTree()

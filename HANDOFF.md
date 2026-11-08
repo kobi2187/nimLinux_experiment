@@ -3,6 +3,22 @@
 Last updated: 2026-10-27 (session 9e, branch `ccr-56330414-wo65nx`, cloud container)
 
 
+
+## Session 9h — GPU parked, V3 done, V2 blocked on a permission
+
+PR #3 merged. GPU acceleration PARKED (VISION Q7, BACKLOG V13; human: "can do
+a lot without it"). **V3 done:** TSC clock calibrated against PIT channel 2
+(pure math `core/tsc_clock.nim`, host-tested against an exact 128-bit
+reference; driver `drivers/tsc.nim`); QEMU: 100 PIT ticks = 999-1000 ms on
+the TSC. A first run failed because my test started mid-tick (a sleep to a
+tick count spans 99-100 periods), fixed by aligning to a tick edge, and
+calibration jitter (host scheduling in the poll loop) is handled by a median
+of 5 × 30 ms windows. **V2 is blocked:** I cloned picolibc 1.8.12 into the
+scratchpad and meson-configured it, but the build was denied by the permission
+classifier (code from an external repo). Ask the human to allow it, or switch
+to musl. **Open decision (V3b):** how apps read the clock (read-only time page
+vs `nanoTime` syscall; my pick: the page, with the syscall as fallback).
+
 ## Session 9g — vertical slice: P0 done, V7a done (RUI on the bridge, direct)
 
 Render-server model + raylib bridge AGREED; P0 showed the command path costs

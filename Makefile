@@ -302,6 +302,7 @@ HOST_TESTS = \
   tests/test_pic.nim \
   tests/test_pci.nim \
   tests/test_pit.nim \
+  tests/test_tsc_clock.nim \
   tests/test_event_server.nim \
   tests/test_driver_registry.nim \
   tests/test_module_loader.nim \

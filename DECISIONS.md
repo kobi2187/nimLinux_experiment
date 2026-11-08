@@ -1417,3 +1417,43 @@ Q7, BACKLOG V13). Signal: V9 shows the server missing its frame budget
 after damage-limited compositing. rlsw stays the floor and the pixel-exact
 test reference (GPU output is not bit-identical across hosts; this
 container has no host GPU, so virgl would run on llvmpipe).
+
+## V3: fine clock = TSC calibrated against PIT channel 2 (2026-11-08)
+
+**Survey.** Prior art: Linux's `pit_calibrate_tsc` / `quick_pit_calibrate`
+(PIT ch 2 one-shot polled through port 0x61 bit 5), the clocksource
+mult/shift form, vDSO/pvclock (apps read a kernel-published page and use
+their own rdtsc), CPUID leaf 0x15 (no help under TCG), HPET/ACPI PM timer
+(more hardware, nothing the PIT gate doesn't already give for this target).
+**Adopt the technique, build the code** (it is ~100 lines; owning it is
+cheaper than a dependency).
+
+- **Pure math apart from the driver:** `core/tsc_clock.nim` (mult/shift,
+  rounded multiplier, two-half 64×32 product, exact for any delta while the
+  result fits 64 bits) is host-tested against an exact `__int128`
+  reference: ~1 ppb at ≤ 10 GHz, 1 MHz..100 GHz accepted, monotonic,
+  clamped before base. `drivers/tsc.nim` is only ports + rdtsc + the global.
+- **Calibration:** median of five 30 ms PIT-ch2 windows. Observed under
+  QEMU TCG: 2300 MHz, windows spread 0.03–0.1 % (host scheduling jitter in
+  the poll loop), so the median, and a longer window than the first try
+  (3 × 20 ms spread 0.16 %). Interrupts are off; channel 2 doesn't touch the
+  100 Hz tick on channel 0.
+- **Evidence (the independent cross-check):** `make test-structured` sleeps
+  100 PIT channel-0 ticks and compares with the TSC: 999–1000 ms vs 999 ms
+  expected over five boots (gate: 1 %). An earlier version of this test
+  failed (988 ms) and the cause was the test, not the clock: a sleep "until
+  the tick count reaches N" ends on a tick edge, so starting mid-tick
+  measures 99–100 periods. The test now starts on an edge.
+- **Assumption (QEMU only, per VISION):** invariant TSC. TCG derives TSC and
+  PIT from the same virtual clock. A hardware port would check CPUID
+  0x80000007 and fall back to the PIT.
+- **Not decided: exposure to apps (V3b, cross-cutting ABI).** The BACKLOG
+  said "`nanoTime` syscall". VISION's budget is ~1 kernel call per frame and
+  raylib's `GetTime()` runs every frame, so a syscall per read is the wrong
+  shape. Options: (A) syscall; (B) a read-only time page (base, mul, shift,
+  hz, valid), mapped into every task, read with the app's own rdtsc and the
+  same `clockNanos`: zero kernel calls, consistent with "kernel-written,
+  user read-only, never mutable-shared" (written once at boot); (C) B with A
+  as the fallback when `valid` is false. **My pick: C.** Open: where the page
+  lives (a fixed read-only user mapping in each app window vs a sealed
+  buffer lent at spawn). Waiting for the human.

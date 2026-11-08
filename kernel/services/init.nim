@@ -24,6 +24,7 @@ import ../../drivers/virtio/virtio_snd
 import ../../drivers/virtio/virtio_input
 import ../../drivers/pic
 import ../../drivers/pit
+import ../../drivers/tsc
 import ../../drivers/ps2_keyboard
 import ../../drivers/ps2_mouse
 import ../../drivers/vga_text
@@ -66,6 +67,7 @@ proc initPIC*() =
 proc initTimers*() =
   ## Setup PIT for 100 Hz tick.
   pitInit(100)
+  tscInit()          # fine clock: PIT channel 2 is free of the tick, and IRQs are still off
   pitRegisterHandler()
   picUnmask(0)
   klog(llInfo, "[SERVICES] ✓ PIT: 100 Hz, IRQ0 wired")
