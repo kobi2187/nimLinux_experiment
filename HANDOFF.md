@@ -22,11 +22,9 @@ reference; driver `drivers/tsc.nim`); QEMU: 100 PIT ticks = 999-1000 ms on
 the TSC. A first run failed because my test started mid-tick (a sleep to a
 tick count spans 99-100 periods), fixed by aligning to a tick edge, and
 calibration jitter (host scheduling in the poll loop) is handled by a median
-of 5 × 30 ms windows. **V2 is blocked:** I cloned picolibc 1.8.12 into the
-scratchpad and meson-configured it, but the build was denied by the permission
-classifier (code from an external repo). Ask the human to allow it, or switch
-to musl. **Open decision (V3b):** how apps read the clock (read-only time page
-vs `nanoTime` syscall; my pick: the page, with the syscall as fallback).
+of 5 × 30 ms windows. **V2** was blocked on a permission (the build of external code); the human
+then allowed picolibc and it is done, see Session 9i. **V3b** was decided the
+same way (time page, syscall fallback).
 
 ## Session 9g — vertical slice: P0 done, V7a done (RUI on the bridge, direct)
 
