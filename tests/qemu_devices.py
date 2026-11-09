@@ -273,6 +273,7 @@ USER_FAULTS = [
 BUFFER_CASES = [
     # (buftest mode, expected app message, must the kernel kill it?)
     ("ok",   "buftest: ok", False),
+    ("big",  "buftest: big ok", False),
     ("pass", "buftest: passed through a channel intact", False),
     ("move", "buftest: writing after giving the buffer away", True),
     ("seal", "buftest: writing to a sealed buffer", True),

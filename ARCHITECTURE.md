@@ -309,3 +309,4 @@ monolithic model may still link a server in.
 | 2026-11-03 | Remote bridge routes at the C-symbol level (`nxr_*`); one record per raylib call; raw rlgl framebuffers and shaders refused locally | DECISIONS.md §V7b |
 | 2026-11-08 | Fine clock (V3): TSC calibrated against PIT ch 2; pure math separate from the driver | DECISIONS.md §V3 |
 | 2026-11-09 | libc/libm for server ELFs = picolibc (no OS layer yet); raylib+rlsw need exactly 31 OS symbols | DECISIONS.md §V2 |
+| 2026-11-09 | Large memory for servers = an owned arena buffer used as the heap (no large-region class); sizing parked until measured | DECISIONS.md §V4 |

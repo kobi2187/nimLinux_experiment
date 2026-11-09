@@ -1511,3 +1511,32 @@ time page** (DECISIONS §V3, option C): the kernel writes (base, mul, shift,
 hz, valid) once at boot; apps read it and apply the same `clockNanos` to their
 own `rdtsc`, with no kernel call; the `nimixNanoTime` syscall remains the
 fallback when `valid` is false.
+
+## V4: large memory is a buffer, not a new region class (2026-11-09)
+
+Question (BACKLOG V4, FUZZY): servers need far more than a 4 MB app slot (the
+render server's heap alone is 32 MB or more). Options: (a) a large-region
+class (a few big fixed slots); (b) the heap is a **buffer from the arena**,
+the same owned, budgeted, page-enforced memory the bulk-data model already
+provides.
+
+Picked (b), and tested it before designing anything: `buftest big` (ring 3,
+`make test-devices`) creates one 32 MB buffer, maps it, writes a distinct byte
+into every 4 KB page, verifies all 8,192 of them, is **refused** a second
+buffer (the 32 MB per-task budget is real), and gets the budget back when the
+first is closed. The arena allocates whole-block runs, so the buffer is
+contiguous: exactly what `sbrk`-style heap bounds (`__heap_start/__heap_end`
+for picolibc's malloc, V2b) need.
+
+Why this is the better design, and not only the cheaper one:
+- one mechanism for "memory a task owns": ownership, budgets, enforcement and
+  exit cleanup are already there and already tested (buffers B1–B5);
+- big memory is accounted against the task, so the dispatcher's QoS policy can
+  see and limit it; a region class would be a second, unaccounted pool;
+- the same code path works under SASOS enforcement (type system) later.
+
+Not decided, deliberately (V4b): the arena size (128 MB in a 256 MB VM, which
+also holds the kernel's own allocations) and per-class budgets (every task
+has 32 MB today). Inventing numbers now would be guessing; the render
+server's real heap and high-water mark in V5/V9 will set them, and they will
+probably want a larger default VM.
