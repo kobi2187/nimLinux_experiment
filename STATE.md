@@ -51,7 +51,7 @@ block-on-mailbox/wake-on-deliver + dispatcher transport — network last.
 - [x] V7b: RUI's counter, unchanged, through the **remote** bridge (draw calls → commands → loopback server): pixels byte-identical to direct after 3 clicks; steady frames ≤ 86 records / 1 KB (`make test-v7`).
 - [x] V3: fine clock — TSC calibrated against PIT channel 2 (`core/tsc_clock.nim`, `drivers/tsc.nim`); 100 PIT ticks = 999-1000 ms on the TSC; structured suite 47/47 (+6), 3 models 16/16. App exposure (V3b) needs a decision.
 - [x] V2: libc/libm = picolibc 1.8.12 (`vendor/picolibc`, `make test-v2`): raylib + rlsw link against it needing exactly 31 OS-layer symbols; libm ≤ 1 ULP over 7,600 samples. Next V2b (libnimix, the OS layer under it).
-- [x] V3b decided (human): read-only time page + syscall fallback.
+- [x] V3b: the clock reaches ring 3 through a read-only time page (`core/tsc_clock.nim` TimePage, `mm/memory_windows.nim` publishTimePage, `apps/nim/nimix_time.nim`): `clocktest` measures 3 s of ticks as 2998 ms with no syscall; a write to the page faults and kills only the writer (`make test-devices` 19/19). Needs a VM with ≥ 226 MB RAM.
 - [x] V4: large memory = buffers (a server's heap is one owned arena buffer): `buftest big` creates, touches and verifies 32 MB from ring 3; budget enforced and returned (`make test-devices` 17/17). Sizing (arena, per-class budgets) deferred to measurements (V4b).
 - [→] Vertical slice raylib + RUI2 (BACKLOG V1–V13): next V7c (actor-backed background/mailbox), V4, then V5 (needs V2).
 - [x] Region capability holes fixed (any-task minting, use-after-free on owner exit, leaked caps) — tests/test_zerocopy.nim.

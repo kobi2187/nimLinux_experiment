@@ -80,3 +80,53 @@ proc clockNanos*(c: TscClock; tsc: uint64): uint64 {.inline.} =
   # ((hi << 32) + lo) >> shift with shift <= 32; hi << 32 is a multiple of
   # 2^shift, so splitting the shift loses nothing.
   (hi shl (32'u8 - c.shift)) + (lo shr c.shift)
+
+# ── The time page: the clock, published to apps (V3b) ─────────────────────────
+#
+# The kernel writes this once at boot, before any task runs, into its own 2 MB
+# window at TimePageAddr (right after the buffer arena) and maps it USER
+# READ-ONLY for every task. An app reads it and applies `clockNanos` to its own
+# rdtsc: no syscall, no kernel entry, no lock (the page never changes after
+# boot; if recalibration is ever added, add a sequence counter first).
+# A user write to it faults and kills only that task.
+#
+# This is the same "sealed" idea as the buffers model (immutable data may be
+# shared; mutable data may not), done as a fixed page because every task needs
+# it and the address must not depend on a handle.
+
+const
+  TimePageAddr*    = 0xE000000'u64          ## 224 MB = ArenaBase + ArenaSize
+  TimePageMagic*   = 0x4D495458494D494E'u64 ## "NIMIXTIM", little-endian
+  TimePageVersion* = 1'u32
+
+type
+  TimePage* {.packed.} = object
+    magic*: uint64
+    version*: uint32
+    valid*: uint32      ## 1: the TSC fields below are usable
+    base*: uint64
+    hz*: uint64
+    mul*: uint32
+    shift*: uint32
+
+static: doAssert sizeof(TimePage) == 40, "TimePage is ABI: 40 bytes"
+
+proc toTimePage*(c: TscClock): TimePage =
+  TimePage(magic: TimePageMagic, version: TimePageVersion,
+           valid: (if c.valid: 1'u32 else: 0'u32),
+           base: c.base, hz: c.hz, mul: c.mul, shift: uint32(c.shift))
+
+proc pageClock*(p: TimePage): TscClock =
+  ## The clock a page describes; `valid` is false for anything we don't
+  ## recognise (wrong magic or version, not calibrated, shift out of range).
+  result.base = p.base
+  result.hz = p.hz
+  result.mul = p.mul
+  result.shift = uint8(p.shift and 0xFF)
+  result.valid = p.magic == TimePageMagic and p.version == TimePageVersion and
+                 p.valid == 1 and p.shift >= 1 and p.shift <= 32 and p.mul != 0
+
+proc pageNanos*(p: TimePage; tsc: uint64): tuple[ok: bool, ns: uint64] {.inline.} =
+  ## What an app computes: ok=false means "use the coarse fallback".
+  let c = pageClock(p)
+  (c.valid, clockNanos(c, tsc))

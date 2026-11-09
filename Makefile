@@ -104,7 +104,7 @@ NIM_APP = $(NIM) c --skipParentCfg --skipUserCfg \
           --path:$(CURDIR)/apps/nim \
           --nimblePath:$(HOME)/.nimble/pkgs2
 
-NIM_TOOLS = ps kill stats ls top fault buftest
+NIM_TOOLS = ps kill stats ls top fault buftest clocktest
 
 nim-apps: build/apps/ping_server.elf \
           $(addprefix build/apps/,$(addsuffix .elf,$(NIM_TOOLS))) \

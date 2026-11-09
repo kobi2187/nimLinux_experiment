@@ -125,6 +125,50 @@ proc testMedianOf() =
   assert medianOf(big) == medianOf(big[0 ..< 15]), "capped at 15 samples"
   echo "PASS: median"
 
+proc testTimePage() =
+  # The layout is ABI (apps read it at TimePageAddr): pin every offset.
+  assert sizeof(TimePage) == 40
+  assert offsetOf(TimePage, magic) == 0 and offsetOf(TimePage, version) == 8
+  assert offsetOf(TimePage, valid) == 12 and offsetOf(TimePage, base) == 16
+  assert offsetOf(TimePage, hz) == 24 and offsetOf(TimePage, mul) == 32
+  assert offsetOf(TimePage, shift) == 36
+  var m: array[8, char]
+  var magic = TimePageMagic
+  copyMem(addr m[0], addr magic, 8)
+  assert $m[0] & $m[1] & $m[2] & $m[3] & $m[4] & $m[5] & $m[6] & $m[7] == "NIMIXTIM"
+  assert TimePageAddr == 224'u64 * 1024 * 1024, "right after the 96 MB + 128 MB arena"
+
+  # What the kernel publishes is what an app computes, for every frequency.
+  for hz in Freqs:
+    let k = newTscClock(0x1_0000_0000'u64, hz)
+    let page = toTimePage(k)
+    for tsc in [0'u64, 0x1_0000_0000'u64, 0x1_0000_0001'u64, 0x1_0000_0000'u64 + hz,
+                0x1_0000_0000'u64 + 3600 * hz, 0xFFFF_FFFF_FFFF'u64]:
+      let r = pageNanos(page, tsc)
+      assert r.ok, "valid page reads ok"
+      assert r.ns == clockNanos(k, tsc), "app reader == kernel reader"
+
+  # Anything unrecognised is refused, so apps take the coarse fallback.
+  let good = toTimePage(newTscClock(0, 2_000_000_000'u64))
+  assert pageNanos(good, 1000).ok
+  var bad = good
+  bad.magic = 0
+  assert not pageNanos(bad, 1000).ok, "wrong magic (page not published)"
+  bad = good; bad.version = 2
+  assert not pageNanos(bad, 1000).ok, "unknown version"
+  bad = good; bad.valid = 0
+  assert not pageNanos(bad, 1000).ok, "not calibrated"
+  bad = good; bad.shift = 0
+  assert not pageNanos(bad, 1000).ok, "shift 0"
+  bad = good; bad.shift = 33
+  assert not pageNanos(bad, 1000).ok, "shift 33"
+  bad = good; bad.mul = 0
+  assert not pageNanos(bad, 1000).ok, "mul 0"
+  assert not pageNanos(toTimePage(newTscClock(0, 0)), 1000).ok, "invalid clock publishes invalid"
+  var zero: TimePage
+  assert not pageNanos(zero, 1000).ok, "an all-zero (unmapped-looking) page is invalid"
+  echo "PASS: time page layout, app reader == kernel reader, bad pages refused"
+
 when isMainModule:
   testMultiplierFits()
   testRejectsImplausible()
@@ -134,4 +178,5 @@ when isMainModule:
   testCalibrationWindow()
   testMeasurementGuards()
   testMedianOf()
+  testTimePage()
   echo "All TSC clock tests passed."

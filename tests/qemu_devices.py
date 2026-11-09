@@ -23,6 +23,7 @@ a kernel-mode fault (devtest crash-*) halts, one boot per fault.
 """
 import argparse
 import os
+import re
 import struct
 import subprocess
 import sys
@@ -308,6 +309,38 @@ def test_buffers(tmp, iso, bios) -> list:
     return results
 
 
+def test_clock(tmp, iso, bios) -> list:
+    """V3b: the fine clock reaches ring 3 through a read-only page, no syscall.
+    3 s of PIT ticks must measure 3 s (+-1 %) on the app's own rdtsc, and
+    writing the page must fault and kill only the writer."""
+    results = []
+    g = boot(tmp, iso=iso, bios=bios, devices=("blk",))
+    try:
+        try:
+            out = g.run("clocktest", timeout=60, until="app exit code")
+            assert "clocktest: ok" in out and "FAIL" not in out, out[-400:]
+            m = re.search(r"3000 ms of ticks measured (\d+) ms", out)
+            assert m and 2970 <= int(m.group(1)) <= 3030, f"measured: {out[-300:]}"
+            per = re.search(r"a clock read costs (\d+) ns, no syscall", out)
+            assert per, out[-300:]
+            results.append(("clock-read", True,
+                            f"3000 ticks-ms measured {m.group(1)} ms; a read costs {per.group(1)} ns"))
+        except Exception as e:                 # noqa: BLE001
+            results.append(("clock-read", False, str(e)))
+        try:
+            out = g.run("clocktest write", timeout=40, until="system continues")
+            assert "writing the read-only time page" in out, out[-300:]
+            assert "still alive" not in out, out[-300:]
+            assert "CPU EXCEPTION 14 (Page Fault) in USER mode" in out, out[-300:]
+            results.append(("clock-write", True, "write to the time page faulted; only clocktest was killed"))
+        except Exception as e:                 # noqa: BLE001
+            results.append(("clock-write", False, str(e)))
+        assert "NimixOS" in g.run("version"), "shell dead after the time page fault"
+    finally:
+        g.close()
+    return results
+
+
 def test_user_faults(tmp, iso, bios, kernel) -> list:
     """Ring-3 faults kill only the faulting task: one boot survives them all."""
     results = []
@@ -351,6 +384,7 @@ def main():
         if a.only in (None, "crashes"):
             results += test_user_faults(tmp, a.iso, a.bios, a.kernel)
             results += test_buffers(tmp, a.iso, a.bios)
+            results += test_clock(tmp, a.iso, a.bios)
             results += test_crashes(tmp, a.iso, a.bios, a.kernel)
     for name, ok, msg in results:
         print(f"{'PASS' if ok else 'FAIL'}: {name:12} {msg}")
