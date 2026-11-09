@@ -1646,3 +1646,39 @@ state*, not only memory. A capability OS that isolates pages but lets a timer
 tick rewrite a program's registers has not isolated the program. The same
 reasoning applies to anything the kernel does on a task's behalf: it may use
 only what it saves.
+
+## A failing host test could not fail the build (2026-11-09)
+
+**Found by accident.** While adding two syscalls I touched files that
+`tests/test_syscall_table.nim` depends on, which forced Nim to recompile it, and
+it failed: `no weak stub in nimix_abi_stub.c for nimixWrite`. It had been failing
+since V2b moved the weak ABI stubs to `nimix_abi_weak.c`, i.e. for a whole
+milestone. `make test` exited 0 and printed "All tests passed"; the PR's CI,
+which compiles from a clean checkout, showed the stack trace in its log and
+stayed green.
+
+**Two separate faults:**
+1. **The test binary exits 0 after an unhandled `AssertionDefect`** (it prints
+   `Error: unhandled exception ...` and `main` returns 0; verified with gdb and
+   strace: `exit_group(0)` from `__libc_start_call_main`). A minimal program with
+   the same flags and imports exits 1 as it should, so something about this
+   test's run state turns the failure into success. **The cause is not found**;
+   I did not keep digging because the guarantee does not need it.
+2. **A stale binary hid the failure locally.** The test reads C files with
+   `staticRead`, which Nim's incremental build does not track, so changing those
+   files did not recompile it and the old passing binary ran again.
+
+**Fix (the guarantee, not the cause):** `tools/check_run.sh` runs every host
+test and fails on a non-zero exit **or** on Nim's `Error: unhandled exception`
+marker, whatever the exit code says. All three host-test loops (plain, valgrind,
+ASan), `test-arc` and the CPS run go through it. With it in place the whole host
+suite was run: `test_syscall_table` was the only hidden failure.
+`test_syscall_table` now reads both stub files and again checks something.
+
+**Rejected:** just fixing the one test (leaves every other test one refactor
+away from the same silent failure); retrying until it fails (it is
+deterministic once it recompiles).
+
+**Open, cheap to close later:** why that binary returns 0 (the output-based
+guard works, but an exit code that lies is a trap for the next person), and
+whether `staticRead`-based tests should force a rebuild.

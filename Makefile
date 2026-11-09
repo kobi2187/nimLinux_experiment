@@ -379,19 +379,23 @@ HOST_TESTS_NOHW = \
 
 # $(call host_tests,<extra nim flags>,<runner>) — every host test once; with a
 # runner (e.g. valgrind) build only, then run the binary under it.
+# Every test runs through tools/check_run.sh: a test that dies on an unhandled
+# exception must fail the build even when its exit code says 0 (see that script).
+CHECK = sh $(CURDIR)/tools/check_run.sh
 define host_tests
 	@set -e; for t in $(HOST_TESTS); do \
-	  $(NIM) c $(if $(2),,-r) $(TEST_FLAGS) $(1) $$t; $(if $(2),$(2) ./$${t%.nim};) done
+	  $(NIM) c $(TEST_FLAGS) $(1) $$t; $(CHECK) $(2) ./$${t%.nim}; done
 	@set -e; for t in $(HOST_TESTS_TESTING); do \
-	  $(NIM) c $(if $(2),,-r) $(TEST_FLAGS) -d:testing $(1) $$t; $(if $(2),$(2) ./$${t%.nim};) done
+	  $(NIM) c $(TEST_FLAGS) -d:testing $(1) $$t; $(CHECK) $(2) ./$${t%.nim}; done
 	@set -e; for t in $(HOST_TESTS_NOHW); do \
-	  $(NIM) c $(if $(2),,-r) $(TEST_FLAGS) -d:noKernelHardware $(1) $$t; $(if $(2),$(2) ./$${t%.nim};) done
+	  $(NIM) c $(TEST_FLAGS) -d:noKernelHardware $(1) $$t; $(CHECK) $(2) ./$${t%.nim}; done
 endef
 
 test:
 	@echo "=== NimixOS Test Suite ==="
 	$(call host_tests,,)
-	$(NIM) c -r --skipParentCfg --mm:arc --panics:on --path:$(CURDIR) -d:noSignalHandler tests/test_cps_eval.nim
+	$(NIM) c --skipParentCfg --mm:arc --panics:on --path:$(CURDIR) -d:noSignalHandler tests/test_cps_eval.nim
+	$(CHECK) ./tests/test_cps_eval
 	@echo "=== All tests passed ==="
 
 # ── Native debugging of host-testable code ───────────────────────────────────
@@ -416,9 +420,9 @@ TEST_FLAGS_ARC = --skipParentCfg --mm:arc --panics:on --path:$(CURDIR) --path:$(
 
 test-arc:
 	@echo "=== NimixOS ARC Test Suite (dispatcher/CPS) ==="
-	$(NIM) c -r $(TEST_FLAGS_ARC) tests/test_dispatch_logic.nim
-	$(NIM) c -r $(TEST_FLAGS_ARC) tests/test_actor.nim
-	$(NIM) c -r $(TEST_FLAGS_ARC) --threads:on tests/test_mpsc_ring.nim
+	$(NIM) c $(TEST_FLAGS_ARC) tests/test_dispatch_logic.nim; $(CHECK) ./tests/test_dispatch_logic
+	$(NIM) c $(TEST_FLAGS_ARC) tests/test_actor.nim; $(CHECK) ./tests/test_actor
+	$(NIM) c $(TEST_FLAGS_ARC) --threads:on tests/test_mpsc_ring.nim; $(CHECK) ./tests/test_mpsc_ring
 	@echo "=== ARC tests passed ==="
 
 # Actor/CPS performance benchmark (release build; validates dispatcher cost model)

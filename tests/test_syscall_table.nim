@@ -144,13 +144,14 @@ proc testTableMatchesVtable() =
 proc testSymbolsMatchCStubs() =
   ## Every patchable symbol must exist as a weak stub, or apps calling it get
   ## an unpatched (no-op) stub — or fail to link.
-  const stubSrc = staticRead("../kernel/abi/nimix_abi_stub.c")
+  const stubSrc = staticRead("../kernel/abi/nimix_abi_stub.c") &
+                  staticRead("../kernel/abi/nimix_abi_weak.c")
   var seen: seq[string]
   for sc in NimixSyscall:
     let name = $NimixSyscallSymbol[sc]
     assert name notin seen, "duplicate ABI symbol " & name
     seen.add name
-    assert (" " & name & "(") in stubSrc, "no weak stub in nimix_abi_stub.c for " & name
+    assert (" " & name & "(") in stubSrc, "no weak stub in nimix_abi_weak.c for " & name
   echo "PASS: all " & $NimixSyscallCount & " ABI symbols have weak C stubs"
 
 proc testTrampolineBytes() =
