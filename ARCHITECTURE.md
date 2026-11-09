@@ -314,3 +314,4 @@ monolithic model may still link a server in.
 | 2026-11-09 | Large memory for servers = an owned arena buffer used as the heap (no large-region class); sizing parked until measured | DECISIONS.md §V4 |
 | 2026-11-09 | Memory windows gain the time page window (2 MB at 224 MB, user read-only for every task); a VM under 226 MB RAM no longer boots | DECISIONS.md §V3b |
 | 2026-11-09 | C programs run on NimixOS (libnimix + picolibc); ring-3 entry stack now SysV-aligned; `nimixFsRead` returns -2 for "buffer too small"; ABI stubs split from Nim's mini-libc | DECISIONS.md §V2b |
+| 2026-11-09 | Kernel built `-mgeneral-regs-only` (no x87/SSE in kernel code); new tasks start with the SysV default FPU state | DECISIONS.md §The kernel must not touch FPU/SSE state |

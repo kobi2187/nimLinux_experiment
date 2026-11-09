@@ -178,6 +178,15 @@ proc claimSlot(i: int): ptr Task =
   result = addr procTable.tasks[i]
   zeroMem(result, sizeof(Task))
   cast[ptr uint64](addr result.kstack[0])[] = KStackCanary
+  # A new task starts with the System V default FPU state, not a leftover of the
+  # task that ran before (fpuValid=false used to skip the restore, so it
+  # INHERITED the previous task's xmm registers) and not all zeroes (x87 control
+  # word 0 / MXCSR 0 would unmask every FP exception): FCW 0x037F, MXCSR 0x1F80.
+  let fx = cast[ptr UncheckedArray[uint8]](addr result.fpuState[0])
+  fx[0] = 0x7F; fx[1] = 0x03                       # FCW  = 0x037F
+  fx[24] = 0x80; fx[25] = 0x1F                     # MXCSR = 0x1F80
+  fx[28] = 0xFF; fx[29] = 0xFF                     # MXCSR_MASK
+  result.fpuValid = true                           # so the first switch-in restores it
 
 proc kstackTop*(i: int): uint64 {.inline.} =
   ## 16-byte aligned top of task i's kernel stack (TSS.rsp0 / initial frames).

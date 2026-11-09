@@ -362,6 +362,23 @@ def test_libc(tmp, iso, bios) -> list:
     return results
 
 
+def test_fpu(tmp, iso, bios) -> list:
+    """A program's x87/SSE state survives timer interrupts and doesn't leak
+    between tasks (the kernel must not clobber xmm before saving it)."""
+    results = []
+    g = boot(tmp, iso=iso, bios=bios, devices=("blk",))
+    try:
+        try:
+            out = g.run("fputest", timeout=40, until="app exit code")
+            assert "fputest: ok" in out and "FAIL" not in out and "changed" not in out, out[-500:]
+            results.append(("fpu", True, "xmm0-15 + x87 intact across ~8 timer ticks; clean start"))
+        except Exception as e:                 # noqa: BLE001
+            results.append(("fpu", False, str(e)))
+    finally:
+        g.close()
+    return results
+
+
 def test_user_faults(tmp, iso, bios, kernel) -> list:
     """Ring-3 faults kill only the faulting task: one boot survives them all."""
     results = []
@@ -407,6 +424,7 @@ def main():
             results += test_buffers(tmp, a.iso, a.bios)
             results += test_clock(tmp, a.iso, a.bios)
             results += test_libc(tmp, a.iso, a.bios)
+            results += test_fpu(tmp, a.iso, a.bios)
             results += test_crashes(tmp, a.iso, a.bios, a.kernel)
     for name, ok, msg in results:
         print(f"{'PASS' if ok else 'FAIL'}: {name:12} {msg}")

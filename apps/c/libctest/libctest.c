@@ -73,7 +73,10 @@ static void test_memory(void) {
 }
 
 static void test_math(void) {
-    check(fabsf(sinf(1.0f) - 0.84147098f) < 1e-6f, "sinf");
+    float s1 = sinf(1.0f);
+    union { float f; unsigned u; } bits = { s1 };
+    if (fabsf(s1 - 0.84147098f) >= 1e-6f) printf("libctest: sinf(1.0f) = 0x%08x (want 0x3f576aa4)\n", bits.u);
+    check(fabsf(s1 - 0.84147098f) < 1e-6f, "sinf");
     check(powf(2.0f, 10.0f) == 1024.0f, "powf exact");
     check(sqrtf(2.0f) > 1.41421f && sqrtf(2.0f) < 1.41422f, "sqrtf");
     check(fabs(atan2(1.0, 1.0) * 4.0 - 3.14159265358979) < 1e-12, "atan2 double");
@@ -156,8 +159,23 @@ static void test_stack_alignment(void) {
     check(((unsigned long)&slot & 15) == 0, "16-byte stack slots are 16-byte aligned");
 }
 
+/* A process starts with the System V default floating-point state: x87 control
+ * word 0x037F (all exceptions masked, 64-bit precision) and MXCSR 0x1F80 (all
+ * masked, round to nearest, no flush-to-zero). The kernel used to give new tasks
+ * all zeroes (exceptions unmasked, 24-bit x87 precision). */
+static void test_fpu_state(void) {
+    unsigned short fcw;
+    unsigned int mxcsr;
+    __asm__ volatile("fnstcw %0" : "=m"(fcw));
+    __asm__ volatile("stmxcsr %0" : "=m"(mxcsr));
+    printf("libctest: x87 control word 0x%04x, MXCSR 0x%04x\n", fcw, mxcsr);
+    check(fcw == 0x037F, "x87 control word is the SysV default (0x037F)");
+    check(mxcsr == 0x1F80, "MXCSR is the SysV default (0x1F80)");
+}
+
 int main(int argc, char **argv) {
     test_stack_alignment();
+    test_fpu_state();
     printf("libctest: argc=%d", argc);
     for (int i = 1; i < argc; i++) printf(" [%s]", argv[i]);
     printf("\n");

@@ -1599,3 +1599,50 @@ without optimisation: at -O0 even empty stubs are ≥ 16 bytes, which the loader
 16-byte trampoline needs); the Nim stub object still includes it unchanged.
 Building the disk image (`disk-add-apps`) now builds C apps, so it needs
 meson + ninja (`apt install meson ninja-build`).
+
+## The kernel must not touch FPU/SSE state; new tasks start clean (2026-11-09)
+
+**Symptom:** CI failed `libctest: FAIL sinf` on the runner, once, while the same
+binary passed locally every time (1 check of 42, wrong value of a pure
+function). Not loosened: a wrong float from a deterministic function is a
+corrupted register until proven otherwise.
+
+**Cause (two kernel bugs, found by making the failure deterministic):**
+1. **The kernel clobbered the program's xmm registers on every timer tick.**
+   The kernel was built without `-mgeneral-regs-only`, so its C code used SSE
+   (`objdump` of the kernel: ~1,380 SSE/x87 instructions). Interrupt entry
+   saves only the general registers, and `fxsave` happens later, only when the
+   handler decides to switch tasks. A tick landing in a user float computation
+   left the kernel's values in `xmm0` when the program resumed. Rare (needs a
+   tick inside a window where a value is live in an xmm register), so it hid:
+   Nim apps seldom hold floats across many instructions; C code with libm does.
+2. **A new task inherited the previous task's FPU/SSE state.** `claimSlot` zeroed
+   the task and `fpuValid=false` made the first switch-in skip `fxrstor`: a leak
+   of one task's registers into the next, and nondeterministic start state.
+
+**Test first** (`fputest`, `make test-devices`): load all 16 xmm registers and
+the x87 stack, spin ~8 timer ticks in pure assembly, compare. On the unchanged
+kernel it failed deterministically ("xmm0 changed"; "new task does not start
+with cleared SSE registers"), which turned a one-in-forty flake into a
+reproducible failure.
+
+**Fix:**
+- `-mgeneral-regs-only` in `nim.cfg` (kernel only): kernel code can never touch
+  x87/SSE state, as in Linux (which builds with `-mno-sse -mno-mmx
+  -msoft-float`). That makes "save FPU state only on task switch" correct.
+  Verified on the binary: 0 SSE/x87 instructions in all three kernel models
+  (was ~1,380). The kernel uses no floating point, so nothing else changed.
+- `claimSlot` gives every task the System V default FPU image (FCW 0x037F,
+  MXCSR 0x1F80, MXCSR_MASK 0xFFFF) and `fpuValid = true`, so the first switch-in
+  restores a clean state.
+
+**Rejected:** saving FPU state on every interrupt entry (fxsave ≈ 512 bytes of
+stores per tick, per IRQ, to defend against code we control); loosening the
+`sinf` tolerance (would have hidden it); retrying the CI job (would have hidden
+it).
+
+**What it says about the design:** the user/kernel boundary includes *register
+state*, not only memory. A capability OS that isolates pages but lets a timer
+tick rewrite a program's registers has not isolated the program. The same
+reasoning applies to anything the kernel does on a task's behalf: it may use
+only what it saves.
