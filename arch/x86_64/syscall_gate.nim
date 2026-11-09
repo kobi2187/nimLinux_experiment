@@ -68,8 +68,10 @@ type NimixSyscall* = enum
   scBufReturn      = 34
   scBufMsgSend     = 35
   scBufMsgRecv     = 36
+  scDisplayInfo    = 37
+  scDisplayPresent = 38
 
-const NimixSyscallCount* = 37   ## total number of syscalls
+const NimixSyscallCount* = 39   ## total number of syscalls
 
 const NimixSyscallSymbol*: array[NimixSyscall, cstring] = [
   ## App-side ABI symbol for each syscall — the ONE list the ELF loader patches
@@ -93,7 +95,8 @@ const NimixSyscallSymbol*: array[NimixSyscall, cstring] = [
   scBufCreate: "nimixBufCreate", scBufMap: "nimixBufMap",
   scBufClose: "nimixBufClose", scBufSeal: "nimixBufSeal",
   scBufReturn: "nimixBufReturn", scBufMsgSend: "nimixBufMsgSend",
-  scBufMsgRecv: "nimixBufMsgRecv"]
+  scBufMsgRecv: "nimixBufMsgRecv",
+  scDisplayInfo: "nimixDisplayInfo", scDisplayPresent: "nimixDisplayPresent"]
 
 # ── Dispatch table ────────────────────────────────────────────────────────────
 # Raw function pointers indexed by NimixSyscall ordinal.
@@ -141,6 +144,8 @@ proc syscallTableInit*() =
   syscallTable[34] = cast[uint64](v.bufReturn)
   syscallTable[35] = cast[uint64](v.bufMsgSend)
   syscallTable[36] = cast[uint64](v.bufMsgRecv)
+  syscallTable[37] = cast[uint64](v.displayInfo)
+  syscallTable[38] = cast[uint64](v.displayPresent)
 
 proc syscallDispatch*(nr, a0, a1, a2, a3: uint64): uint64 {.exportc: "syscallDispatch", cdecl.} =
   ## Called from syscall_entry asm stub. Dispatches by nr through syscallTable.
