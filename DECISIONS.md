@@ -1457,3 +1457,57 @@ cheaper than a dependency).
   as the fallback when `valid` is false. **My pick: C.** Open: where the page
   lives (a fixed read-only user mapping in each app window vs a sealed
   buffer lent at spawn). Waiting for the human.
+
+## V2: picolibc is the libc/libm for server and app ELFs (2026-11-09)
+
+Human: "Allow picolibc, can be trusted. I assume musl is heavier? If so pick
+picolibc." (Yes: musl is a complete Linux-syscall libc; its pieces would be
+extracted and its syscall layer replaced, picolibc is built for exactly this.)
+
+**Survey** (what raylib 6.2 + rlsw need): compiled against glibc's headers
+the objects leave 110 symbols undefined: ~18 fortify/stack-protector (the
+distro compiler's defaults; gone with `-U_FORTIFY_SOURCE
+-fno-stack-protector`), ~26 math, ~30 file/OS, the rest plain libc. Options:
+- **picolibc** (BSD-3, newlib-derived, tinystdio, libm from fdlibm and ARM
+  optimized-routines; designed for freestanding targets that supply a few
+  hooks) — **adopted**.
+- musl — rejected: heavier, built around Linux syscalls.
+- our own libc — rejected: `printf`/`scanf`/`strtod` and a libm are the
+  parts that are expensive to get right, and a mature one exists.
+
+**Result** (`make test-v2`, CI too):
+- picolibc builds from the pinned submodule in ~10 s with `tools/picolibc_build.sh`
+  (freestanding x86-64, PIC, no red zone, no stack protector, no TLS,
+  global errno, no math errno, no threads).
+- Compiled against **picolibc's own headers** (`-nostdinc`; glibc's headers
+  have a different `FILE`, `errno` and locale), raylib + rlsw link needing
+  **exactly 31** symbols from the OS, pinned in `tests/v2/expected_os_symbols.txt`
+  so a raylib bump that starts needing something new fails the test:
+  `_exit`, `open/close/read/write/lseek`, `stdin/stdout/stderr`, the
+  directory and file calls (`stat access opendir readdir closedir getcwd chdir
+  mkdir rename unlink readlink`), `clock_gettime gettimeofday nanosleep`, the
+  heap bounds `__heap_start/__heap_end`, and refusing stubs for
+  `fork execve waitpid fcntl tcgetattr tcsetattr`. Everything else (string,
+  malloc, qsort, printf/scanf/strtod, the whole libm) is inside picolibc.
+- picolibc's libm is within **1 ULP** (0 for sqrt/fmod) against correctly
+  rounded references over 7,600 samples, run natively. raylib draws with
+  these functions, so an inaccurate one would show as subtle pixel
+  differences between machines and render paths.
+- A first run of the libm test failed on `sincosf` for every sample, and the
+  cause was the test: without `_GNU_SOURCE` the function isn't declared, C
+  then passed the `float` as a `double`. The test now compiles with
+  `-D_GNU_SOURCE -Werror=implicit-function-declaration`.
+
+**Next, V2b ("libnimix"):** the OS layer implementing those 31 symbols over
+the Nimix ABI: fs through fs_server, time from the time page (V3b), sleep
+through `nimixSleep`, heap bounds from V4. It is the seam where "POSIX-shaped
+C" meets "capability OS", so it is also the natural place to teach how the
+two differ.
+
+## V3b: how apps read the clock (2026-11-09)
+
+Human: "whatever is more lightweight and efficient." That is the **read-only
+time page** (DECISIONS §V3, option C): the kernel writes (base, mul, shift,
+hz, valid) once at boot; apps read it and apply the same `clockNanos` to their
+own `rdtsc`, with no kernel call; the `nimixNanoTime` syscall remains the
+fallback when `valid` is false.

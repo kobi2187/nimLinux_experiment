@@ -1,0 +1,35 @@
+# Symbols raylib 6.2 + rlsw (memory platform, no audio) still need after
+# picolibc: the OS layer (V2b, "libnimix") provides them. This list is a
+# golden file: the test fails if anything NEW is needed from a libc (a raylib
+# bump started using something unexpected), and the list shrinks as V2b lands.
+__heap_end
+__heap_start
+_exit
+access
+chdir
+clock_gettime
+close
+closedir
+execve
+fcntl
+fork
+getcwd
+gettimeofday
+lseek
+mkdir
+nanosleep
+open
+opendir
+read
+readdir
+readlink
+rename
+stat
+stderr
+stdin
+stdout
+tcgetattr
+tcsetattr
+unlink
+waitpid
+write

@@ -4,6 +4,15 @@ Last updated: 2026-10-27 (session 9e, branch `ccr-56330414-wo65nx`, cloud contai
 
 
 
+## Session 9i — V2 done (picolibc), V3b decided
+
+Human: picolibc yes (musl is heavier); apps read the clock via the lightest,
+most efficient route = time page with a syscall fallback. V2: `make test-v2`
+(raylib + rlsw link against picolibc needing exactly 31 OS symbols; libm
+≤ 1 ULP). **Next:** V2b libnimix, V3b time page, V4 large memory; all feed V5
+(raylib on NimixOS). Human's framing: the OS can be useful and innovative and
+a teaching OS for OS design, so each piece gets a stated design and a test.
+
 ## Session 9h — GPU parked, V3 done, V2 blocked on a permission
 
 PR #3 merged. GPU acceleration PARKED (VISION Q7, BACKLOG V13; human: "can do

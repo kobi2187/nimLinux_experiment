@@ -16,6 +16,7 @@
 | Interrupts | `kern/interrupts.nim` | BUILT | IDT init, ISR registration |
 | PIC | `drivers/pic.nim` | BUILT | pic init, EOI |
 | PIT | `drivers/pit.nim` | BUILT | 100 Hz tick, pitUptimeTicks() |
+| picolibc | `vendor/picolibc` (pinned 1.8.12), `tools/picolibc_build.sh` | BUILT (host-verified) | libc + libm for server/app ELFs; the OS layer under it (V2b `libnimix`) is PLANNED |
 | TSC clock | `core/tsc_clock.nim` (pure), `drivers/tsc.nim` | BUILT | fine monotonic clock: `tscNanos()`; calibrated against PIT ch 2 at boot; exposure to apps = V3b (PLANNED) |
 | PS/2 keyboard | `drivers/ps2_keyboard.nim` | BUILT | IRQ1 handler → scancode |
 | VGA text | `drivers/vga_text.nim` | BUILT | 80×25 text mode |
@@ -307,3 +308,4 @@ monolithic model may still link a server in.
 | 2026-11-03 | RUI runs on the bridge (direct): bridge base = naylib adapted by a generator script to raylib 6.2 + rlsw; RUI text-engine seam (Pango | Pixie) as patches/rui2 | DECISIONS.md §V7a |
 | 2026-11-03 | Remote bridge routes at the C-symbol level (`nxr_*`); one record per raylib call; raw rlgl framebuffers and shaders refused locally | DECISIONS.md §V7b |
 | 2026-11-08 | Fine clock (V3): TSC calibrated against PIT ch 2; pure math separate from the driver | DECISIONS.md §V3 |
+| 2026-11-09 | libc/libm for server ELFs = picolibc (no OS layer yet); raylib+rlsw need exactly 31 OS symbols | DECISIONS.md §V2 |
