@@ -1402,3 +1402,247 @@ one, repeatably (`make test-v7`). Steady frames: at most **86 records /
 - **Observed for V6/RUI:** a label change costs ~63 records, because RUI
   recomposites up the tree to the root. Within budget; damage-limited
   compositing (P0 finding) also shrinks this.
+
+## GPU acceleration parked (2026-11-03)
+
+Asked whether to use QEMU's accelerated GL. Survey: QEMU 8.2 in this
+environment has `virtio-gpu-gl` (virgl, virglrenderer 1.8.8); Venus (Vulkan),
+gfxstream and DRM native context need QEMU ≥ 9.2, and DRM native context
+also a host GPU. Every option's guest side normally means Mesa or a Linux
+DRM driver. The fitting design, if needed: a small rlgl backend that speaks
+virgl's command stream for raylib's GL subset, inside the render server
+only (the bridge and the server-provides model keep apps, RUI and the
+protocol unchanged). **Parked** (human: "can do a lot without it"; VISION
+Q7, BACKLOG V13). Signal: V9 shows the server missing its frame budget
+after damage-limited compositing. rlsw stays the floor and the pixel-exact
+test reference (GPU output is not bit-identical across hosts; this
+container has no host GPU, so virgl would run on llvmpipe).
+
+## V3: fine clock = TSC calibrated against PIT channel 2 (2026-11-08)
+
+**Survey.** Prior art: Linux's `pit_calibrate_tsc` / `quick_pit_calibrate`
+(PIT ch 2 one-shot polled through port 0x61 bit 5), the clocksource
+mult/shift form, vDSO/pvclock (apps read a kernel-published page and use
+their own rdtsc), CPUID leaf 0x15 (no help under TCG), HPET/ACPI PM timer
+(more hardware, nothing the PIT gate doesn't already give for this target).
+**Adopt the technique, build the code** (it is ~100 lines; owning it is
+cheaper than a dependency).
+
+- **Pure math apart from the driver:** `core/tsc_clock.nim` (mult/shift,
+  rounded multiplier, two-half 64×32 product, exact for any delta while the
+  result fits 64 bits) is host-tested against an exact `__int128`
+  reference: ~1 ppb at ≤ 10 GHz, 1 MHz..100 GHz accepted, monotonic,
+  clamped before base. `drivers/tsc.nim` is only ports + rdtsc + the global.
+- **Calibration:** median of five 30 ms PIT-ch2 windows. Observed under
+  QEMU TCG: 2300 MHz, windows spread 0.03–0.1 % (host scheduling jitter in
+  the poll loop), so the median, and a longer window than the first try
+  (3 × 20 ms spread 0.16 %). Interrupts are off; channel 2 doesn't touch the
+  100 Hz tick on channel 0.
+- **Evidence (the independent cross-check):** `make test-structured` sleeps
+  100 PIT channel-0 ticks and compares with the TSC: 999–1000 ms vs 999 ms
+  expected over five boots (gate: 1 %). An earlier version of this test
+  failed (988 ms) and the cause was the test, not the clock: a sleep "until
+  the tick count reaches N" ends on a tick edge, so starting mid-tick
+  measures 99–100 periods. The test now starts on an edge.
+- **Assumption (QEMU only, per VISION):** invariant TSC. TCG derives TSC and
+  PIT from the same virtual clock. A hardware port would check CPUID
+  0x80000007 and fall back to the PIT.
+- **Not decided: exposure to apps (V3b, cross-cutting ABI).** The BACKLOG
+  said "`nanoTime` syscall". VISION's budget is ~1 kernel call per frame and
+  raylib's `GetTime()` runs every frame, so a syscall per read is the wrong
+  shape. Options: (A) syscall; (B) a read-only time page (base, mul, shift,
+  hz, valid), mapped into every task, read with the app's own rdtsc and the
+  same `clockNanos`: zero kernel calls, consistent with "kernel-written,
+  user read-only, never mutable-shared" (written once at boot); (C) B with A
+  as the fallback when `valid` is false. **My pick: C.** Open: where the page
+  lives (a fixed read-only user mapping in each app window vs a sealed
+  buffer lent at spawn). Waiting for the human.
+
+## V2: picolibc is the libc/libm for server and app ELFs (2026-11-09)
+
+Human: "Allow picolibc, can be trusted. I assume musl is heavier? If so pick
+picolibc." (Yes: musl is a complete Linux-syscall libc; its pieces would be
+extracted and its syscall layer replaced, picolibc is built for exactly this.)
+
+**Survey** (what raylib 6.2 + rlsw need): compiled against glibc's headers
+the objects leave 110 symbols undefined: ~18 fortify/stack-protector (the
+distro compiler's defaults; gone with `-U_FORTIFY_SOURCE
+-fno-stack-protector`), ~26 math, ~30 file/OS, the rest plain libc. Options:
+- **picolibc** (BSD-3, newlib-derived, tinystdio, libm from fdlibm and ARM
+  optimized-routines; designed for freestanding targets that supply a few
+  hooks) — **adopted**.
+- musl — rejected: heavier, built around Linux syscalls.
+- our own libc — rejected: `printf`/`scanf`/`strtod` and a libm are the
+  parts that are expensive to get right, and a mature one exists.
+
+**Result** (`make test-v2`, CI too):
+- picolibc builds from the pinned submodule in ~10 s with `tools/picolibc_build.sh`
+  (freestanding x86-64, PIC, no red zone, no stack protector, no TLS,
+  global errno, no math errno, no threads).
+- Compiled against **picolibc's own headers** (`-nostdinc`; glibc's headers
+  have a different `FILE`, `errno` and locale), raylib + rlsw link needing
+  **exactly 31** symbols from the OS, pinned in `tests/v2/expected_os_symbols.txt`
+  so a raylib bump that starts needing something new fails the test:
+  `_exit`, `open/close/read/write/lseek`, `stdin/stdout/stderr`, the
+  directory and file calls (`stat access opendir readdir closedir getcwd chdir
+  mkdir rename unlink readlink`), `clock_gettime gettimeofday nanosleep`, the
+  heap bounds `__heap_start/__heap_end`, and refusing stubs for
+  `fork execve waitpid fcntl tcgetattr tcsetattr`. Everything else (string,
+  malloc, qsort, printf/scanf/strtod, the whole libm) is inside picolibc.
+- picolibc's libm is within **1 ULP** (0 for sqrt/fmod) against correctly
+  rounded references over 7,600 samples, run natively. raylib draws with
+  these functions, so an inaccurate one would show as subtle pixel
+  differences between machines and render paths.
+- A first run of the libm test failed on `sincosf` for every sample, and the
+  cause was the test: without `_GNU_SOURCE` the function isn't declared, C
+  then passed the `float` as a `double`. The test now compiles with
+  `-D_GNU_SOURCE -Werror=implicit-function-declaration`.
+
+**Next, V2b ("libnimix"):** the OS layer implementing those 31 symbols over
+the Nimix ABI: fs through fs_server, time from the time page (V3b), sleep
+through `nimixSleep`, heap bounds from V4. It is the seam where "POSIX-shaped
+C" meets "capability OS", so it is also the natural place to teach how the
+two differ.
+
+## V3b: the clock reaches apps through a read-only time page (2026-11-09)
+
+Human: "whatever is more lightweight and efficient." Built as option C of
+§V3 minus the syscall (see below).
+
+- **The page:** `TimePage` (`core/tsc_clock.nim`), 40 bytes, magic `"NIMIXTIM"`,
+  version, valid, base, hz, mul, shift. Layout pinned offset by offset in
+  `tests/test_tsc_clock.nim`. It lives at 224 MB (`TimePageAddr`, checked at
+  compile time to be `ArenaBase + ArenaSize`) in **its own 2 MB window**:
+  rights are per huge page, so sharing a window with anything else would open
+  that to ring 3. The kernel writes it once at boot (before any task runs,
+  supervisor-only), then `publishTimePage` maps it **user read-only** for
+  every task. Because nothing writes it afterwards, readers need no lock; if
+  recalibration is ever added, add a sequence counter first (noted in the
+  source).
+- **Apps:** `apps/nim/nimix_time.nim` `nanoTime()` = the app's own `rdtsc` +
+  the same `clockNanos` the kernel uses (tested equal for every frequency).
+  Zero kernel entries per read, which is what raylib's per-frame `GetTime()`
+  needs against VISION's ~1 kernel call per frame.
+- **Evidence (QEMU, `make test-devices`):** a ring-3 `clocktest` measures
+  3 s of PIT ticks as 2998 ms (+-1 % gate); writing the page raises #PF in user
+  mode and kills only that task; the shell survives.
+- **Fallback without a new syscall:** if the page isn't valid (PIT dead at
+  boot), `nanoTime()` returns `nimixUptimeSecs()` seconds. This replaces the
+  "`nimixNanoTime` syscall as fallback" of §V3: the path never runs on the
+  QEMU target, and a new syscall number costs six tables (enum, symbols,
+  dispatch, vtable, header, stub) for code that would never execute.
+- **The window is mandatory:** apps read the page without asking, so a VM too
+  small for it (under 226 MB) now fails at boot (`initMemoryWindows`), as the
+  other windows do, instead of faulting in every app. The default VM is 256 MB.
+- **Not measured:** the `clocktest` read cost printed under QEMU TCG
+  (~1.8 µs) is TCG's emulated `rdtsc`, not the design's cost; on KVM or real
+  hardware `rdtsc` is tens of cycles, but that is an expectation, not a
+  measurement. V9's benchmark should measure it on KVM.
+- **Why this is the sealed idea in a fixed place:** the buffers model allows
+  sharing immutable data and forbids sharing mutable data. The time page is
+  immutable after boot; a fixed address (instead of a lent buffer handle)
+  because every task needs it and a handle would add a call per task.
+
+## V2b: libnimix — C programs run on NimixOS (2026-11-09)
+
+Goal: the 31 OS-layer symbols of §V2, implemented over the Nimix ABI, so raylib
+and any C code run here. **Done:** `libctest` (a plain C program: printf with
+floats, sscanf, strtod, qsort, 8 MB of malloc/realloc, libm, nanosleep, a real
+date, files written and read back on the FAT disk, directory listing,
+refusals, arguments) passes 42 checks under QEMU; raylib + rlsw + picolibc +
+libnimix link with nothing unresolved (the golden "31 symbols" file became
+"zero").
+
+Design choices (each with what was rejected):
+- **C, compiled against picolibc's headers**, not Nim: the consumers are C and
+  must agree with picolibc's `FILE`, `DIR`, `struct stat`; re-declaring those in
+  Nim would be a second copy to drift. Rejected: Nim `exportc` shims.
+- **Heap = one owned arena buffer** created on the first `sbrk` (V4 in use). 16 MB
+  default (`-DNIMIX_HEAP_BYTES` to change), inside the 32 MB task budget.
+  Rejected: a static `.bss` heap (the app slot is 4 MB).
+- **Clock without a syscall:** `clock_gettime` reads the time page (V3b) with the
+  program's `rdtsc`; the C reader is bit-identical to the Nim one (63 shared
+  golden vectors, regenerated from `core/tsc_clock.nim`).
+- **`nanosleep` never returns early but can be one tick (10 ms) late:** sleeps
+  all but the last two ticks, then yields until the moment. Precise waking
+  needs a one-shot timer (LAPIC/TSC-deadline): parked (V2c). Measured: 250 ms
+  requested, 260–265 ms observed.
+- **Files: a whole-file model over the VFS ABI** (read all on open, write back
+  on close). The ABI is path-based and whole-file because that is what the
+  in-kernel VFS exposes: ambient authority, flagged in the source and README as
+  an interim seam. It is also what a lent-buffer `fs_server` will look like to a
+  program, so program-facing code survives the swap (V2c).
+- **Refusals are design:** `fork/execve/waitpid` (programs are started by the
+  dispatcher with capabilities), `tcgetattr/tcsetattr` (no controlling
+  terminal), `fcntl` (no inherited descriptors), `mkdir/rename/unlink/readlink`
+  (no ABI calls yet) return -1 with an errno and a stated reason.
+
+Two real bugs this work exposed, both fixed:
+1. **The ring-3 entry stack was 8 bytes misaligned.** The SysV ABI enters a
+   function with `rsp ≡ 8 (mod 16)`; `procSpawnRing3` set `rsp` to the
+   16-aligned top, so aligned SSE stack stores (`movaps` in `printf`) raised
+   #GP (found by symbolizing the fault: `vfprintf`, `movaps %xmm0,-0x80(%rbp)`).
+   Nim apps never use aligned SSE stack stores, so it stayed hidden since
+   ring 3 was first brought up. Now `entryRsp = (top & ~15) - 8` with a zero
+   return address (a stray return from `appMain` faults at 0). `libctest` has
+   a regression check.
+2. **`nimixFsRead` could not say "buffer too small".** The FAT driver returned
+   `fTooBig` and the VFS wrapper flattened it to -1, the same as "not found", so
+   a C `fopen` of a 260 KB file looked like ENOENT. Contract now: **-2** means
+   the file exists but is larger than `len` (retry with more room), -1 any
+   other failure; documented in `nimix_abi.h`.
+
+Also: `kernel/abi/nimix_abi_stub.c` held two things, the weak syscall stubs and a
+mini-libc for Nim's standalone runtime (`malloc`, `memcpy`, `fprintf`...), which
+collides with picolibc. The ABI half moved to `nimix_abi_weak.c` (built
+without optimisation: at -O0 even empty stubs are ≥ 16 bytes, which the loader's
+16-byte trampoline needs); the Nim stub object still includes it unchanged.
+Building the disk image (`disk-add-apps`) now builds C apps, so it needs
+meson + ninja (`apt install meson ninja-build`).
+
+## The kernel must not touch FPU/SSE state; new tasks start clean (2026-11-09)
+
+**Symptom:** CI failed `libctest: FAIL sinf` on the runner, once, while the same
+binary passed locally every time (1 check of 42, wrong value of a pure
+function). Not loosened: a wrong float from a deterministic function is a
+corrupted register until proven otherwise.
+
+**Cause (two kernel bugs, found by making the failure deterministic):**
+1. **The kernel clobbered the program's xmm registers on every timer tick.**
+   The kernel was built without `-mgeneral-regs-only`, so its C code used SSE
+   (`objdump` of the kernel: ~1,380 SSE/x87 instructions). Interrupt entry
+   saves only the general registers, and `fxsave` happens later, only when the
+   handler decides to switch tasks. A tick landing in a user float computation
+   left the kernel's values in `xmm0` when the program resumed. Rare (needs a
+   tick inside a window where a value is live in an xmm register), so it hid:
+   Nim apps seldom hold floats across many instructions; C code with libm does.
+2. **A new task inherited the previous task's FPU/SSE state.** `claimSlot` zeroed
+   the task and `fpuValid=false` made the first switch-in skip `fxrstor`: a leak
+   of one task's registers into the next, and nondeterministic start state.
+
+**Test first** (`fputest`, `make test-devices`): load all 16 xmm registers and
+the x87 stack, spin ~8 timer ticks in pure assembly, compare. On the unchanged
+kernel it failed deterministically ("xmm0 changed"; "new task does not start
+with cleared SSE registers"), which turned a one-in-forty flake into a
+reproducible failure.
+
+**Fix:**
+- `-mgeneral-regs-only` in `nim.cfg` (kernel only): kernel code can never touch
+  x87/SSE state, as in Linux (which builds with `-mno-sse -mno-mmx
+  -msoft-float`). That makes "save FPU state only on task switch" correct.
+  Verified on the binary: 0 SSE/x87 instructions in all three kernel models
+  (was ~1,380). The kernel uses no floating point, so nothing else changed.
+- `claimSlot` gives every task the System V default FPU image (FCW 0x037F,
+  MXCSR 0x1F80, MXCSR_MASK 0xFFFF) and `fpuValid = true`, so the first switch-in
+  restores a clean state.
+
+**Rejected:** saving FPU state on every interrupt entry (fxsave ≈ 512 bytes of
+stores per tick, per IRQ, to defend against code we control); loosening the
+`sinf` tolerance (would have hidden it); retrying the CI job (would have hidden
+it).
+
+**What it says about the design:** the user/kernel boundary includes *register
+state*, not only memory. A capability OS that isolates pages but lets a timer
+tick rewrite a program's registers has not isolated the program. The same
+reasoning applies to anything the kernel does on a task's behalf: it may use
+only what it saves.

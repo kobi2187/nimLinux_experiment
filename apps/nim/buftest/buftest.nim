@@ -1,5 +1,8 @@
 # NimixOS buftest — exercises ipc/buffers enforcement from ring 3.
 #   buftest ok     create, map, write, read back, seal, read again, close
+#   buftest big    a server-sized heap: the whole default budget (32 MB) as ONE buffer,
+#                  every page written and verified; the budget is real (a second
+#                  allocation is refused) and comes back on close
 #   buftest pass   move a buffer to our own channel and receive it back
 #   buftest move   move a buffer away, then write through the old pointer  (#PF)
 #   buftest seal   seal a buffer, then write to it                          (#PF)
@@ -11,7 +14,10 @@ import nimix_buffers
 
 proc nimixChanCreate(name: cstring): uint64 {.importc, cdecl.}
 
-const Size = 64 * 1024
+const
+  Size = 64 * 1024
+  BigSize = 32 * 1024 * 1024     # DefaultBudget in kernel/buffers/kbuffers.nim
+  Page = 4096
 
 proc fail(msg: string) =
   write("buftest: FAIL " & msg & "\n"); nimixExit(1)
@@ -33,6 +39,30 @@ proc modeOk() =
   if p[100] != 100'u8: fail("sealed read")
   if nimixBufClose(h) != 0: fail("close")
   write("buftest: ok\n")
+
+proc modeBig() =
+  ## V4: memory is buffers. A server's heap is one contiguous owned buffer from
+  ## the arena: owned, budgeted and page-enforced like any bulk data.
+  let h = nimixBufCreate(BigSize)
+  if h <= 0: fail("create 32 MB")
+  let p = cast[ptr UncheckedArray[uint8]](nimixBufMap(uint32(h)))
+  if p == nil: fail("map 32 MB")
+  var i = 0
+  while i < BigSize:                      # a distinct byte per page, so a mis-mapped
+    p[i] = uint8((i div Page) and 0xFF)   # page shows up as a wrong value
+    i += Page
+  p[BigSize - 1] = 0xA5'u8
+  i = 0
+  while i < BigSize:
+    if p[i] != uint8((i div Page) and 0xFF): fail("readback page " & $(i div Page))
+    i += Page
+  if p[BigSize - 1] != 0xA5'u8: fail("last byte")
+  if nimixBufCreate(Size) > 0: fail("budget not enforced: a second buffer was granted")
+  if nimixBufClose(uint32(h)) != 0: fail("close")
+  let again = nimixBufCreate(Size)        # the budget came back with the buffer
+  if again <= 0: fail("budget not returned on close")
+  discard nimixBufClose(uint32(again))
+  write("buftest: big ok\n")
 
 proc modePass() =
   let tok = nimixChanCreate("buftest")
@@ -68,9 +98,10 @@ proc appMain*() {.exportc.} =
     if a[i] == '\0': break
     arg.add a[i]
   if arg == "ok": modeOk()
+  elif arg == "big": modeBig()
   elif arg == "pass": modePass()
   elif arg == "move": modeFault(ModeMove)
   elif arg == "lend": modeFault(ModeLend)
   elif arg == "seal": modeFault(99'u32)
-  else: write("usage: buftest ok|pass|move|lend|seal\n")
+  else: write("usage: buftest ok|big|pass|move|lend|seal\n")
   nimixExit(0)

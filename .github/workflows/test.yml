@@ -22,7 +22,7 @@ jobs:
       # Only the submodules the build uses (vendor/arsenal is a bare gitlink
       # with no .gitmodules entry and is not imported).
       - name: Fetch vendored submodules
-        run: git submodule update --init vendor/wasm3 vendor/printf
+        run: git submodule update --init vendor/wasm3 vendor/printf vendor/raylib vendor/picolibc
 
       - name: Install system dependencies
         run: |
@@ -30,8 +30,8 @@ jobs:
           sudo apt-get install -y -qq \
             qemu-system-x86 ovmf \
             grub-pc-bin grub-efi-amd64-bin grub-common xorriso mtools dosfstools \
-            gcc clang lld wasi-libc valgrind
-          pip install --quiet wasmtime
+            gcc clang lld wasi-libc valgrind ninja-build
+          pip install --quiet wasmtime meson
 
       - name: Install Nim 2.2.4
         run: |
@@ -46,6 +46,11 @@ jobs:
 
       - name: Host unit tests
         run: make test
+
+      # picolibc builds for NimixOS userspace; raylib + rlsw link against it
+      # needing only the known OS-layer symbols; its libm is within ULP limits.
+      - name: libc/libm for server ELFs (picolibc)
+        run: make test-v2
 
       - name: ARC / CPS tests (dispatcher, actor, MPSC ring)
         run: make test-arc

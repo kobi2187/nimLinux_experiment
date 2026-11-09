@@ -16,6 +16,10 @@
 | Interrupts | `kern/interrupts.nim` | BUILT | IDT init, ISR registration |
 | PIC | `drivers/pic.nim` | BUILT | pic init, EOI |
 | PIT | `drivers/pit.nim` | BUILT | 100 Hz tick, pitUptimeTicks() |
+| libnimix | `libnimix/` (README), `apps/c/` | BUILT | the OS layer under picolibc: C programs run on NimixOS; files are the interim whole-file ABI (V2c: fs_server) |
+| picolibc | `vendor/picolibc` (pinned 1.8.12), `tools/picolibc_build.sh` | BUILT (host-verified) | libc + libm for server/app ELFs; the OS layer under it (V2b `libnimix`) is PLANNED |
+| ABI stubs | `kernel/abi/nimix_abi_weak.c` (patchable syscall stubs), `nimix_abi_stub.c` (+ Nim's mini-libc) | BUILT | split so C programs link only the ABI half |
+| TSC clock | `core/tsc_clock.nim` (pure), `drivers/tsc.nim` | BUILT | fine monotonic clock: `tscNanos()`; calibrated against PIT ch 2 at boot; published to apps by a read-only time page at 224 MB (V3b, BUILT) |
 | PS/2 keyboard | `drivers/ps2_keyboard.nim` | BUILT | IRQ1 handler → scancode |
 | VGA text | `drivers/vga_text.nim` | BUILT | 80×25 text mode |
 | PCI bus scan | `drivers/pci/pci_device.nim` | BUILT | enumerate devices, vendor/device IDs |
@@ -230,7 +234,7 @@ monolithic model may still link a server in.
 | capabilities, server_chan/mailbox transport, event wake | kernel | **yes** (mechanism) | kernel | — |
 | buffers state + enforcement, ringSubmit | kernel | **yes** | kernel | — |
 | klog + serial crash output | kernel | **yes** (last-resort output) | kernel | — |
-| PIT tick, PIC/IRQ routing, fine clock (V3) | kernel | **yes** | kernel | — |
+| PIT tick, PIC/IRQ routing, fine clock (V3) | kernel | **yes** | kernel (calibration is boot-time kernel work; *reading* it moves to apps via a time page, V3b) | — |
 | ELF segment mapping | kernel | yes (mapping); parsing/relocation no | kernel maps; an exec/loader server parses | spawn-from-userspace syscall |
 | **wasm3 runtime** (runtime/wasm_*) | kernel (shell context) | no | **per-app userspace ELF WASM host** with native helpers | slice V8 |
 | **shell** (+devtest, dmesg UI) | kernel task | no | `shell.elf` (system tool) | spawn syscall; console server |
@@ -305,3 +309,9 @@ monolithic model may still link a server in.
 | 2026-11-03 | Residency map: every kernel-resident component classified inherent vs historical, with proper home + blocker; R0 device-capability mechanisms identified | DECISIONS.md §Kernel residency |
 | 2026-11-03 | RUI runs on the bridge (direct): bridge base = naylib adapted by a generator script to raylib 6.2 + rlsw; RUI text-engine seam (Pango | Pixie) as patches/rui2 | DECISIONS.md §V7a |
 | 2026-11-03 | Remote bridge routes at the C-symbol level (`nxr_*`); one record per raylib call; raw rlgl framebuffers and shaders refused locally | DECISIONS.md §V7b |
+| 2026-11-08 | Fine clock (V3): TSC calibrated against PIT ch 2; pure math separate from the driver | DECISIONS.md §V3 |
+| 2026-11-09 | libc/libm for server ELFs = picolibc (no OS layer yet); raylib+rlsw need exactly 31 OS symbols | DECISIONS.md §V2 |
+| 2026-11-09 | Large memory for servers = an owned arena buffer used as the heap (no large-region class); sizing parked until measured | DECISIONS.md §V4 |
+| 2026-11-09 | Memory windows gain the time page window (2 MB at 224 MB, user read-only for every task); a VM under 226 MB RAM no longer boots | DECISIONS.md §V3b |
+| 2026-11-09 | C programs run on NimixOS (libnimix + picolibc); ring-3 entry stack now SysV-aligned; `nimixFsRead` returns -2 for "buffer too small"; ABI stubs split from Nim's mini-libc | DECISIONS.md §V2b |
+| 2026-11-09 | Kernel built `-mgeneral-regs-only` (no x87/SSE in kernel code); new tasks start with the SysV default FPU state | DECISIONS.md §The kernel must not touch FPU/SSE state |

@@ -89,8 +89,12 @@ proc vfsFatFsMount(): bool {.nimcall.} =
   fsMount()
 
 proc vfsFatFsReadInto(path: cstring; buf: ptr byte; len: int): int {.nimcall.} =
+  ## ABI contract (nimixFsRead): bytes read; -2 = the file exists but is larger
+  ## than `len` (so a caller can retry with more room); -1 = any other failure.
   let (res, nbytes) = fsReadInto(path, buf, len)
-  if res == fOk: nbytes else: -1
+  if res == fOk: nbytes
+  elif res == fTooBig: -2
+  else: -1
 
 proc vfsFatFsWriteFile(path: cstring; data: pointer; len: int): int {.nimcall.} =
   let res = fsWriteFile(path, data, len)

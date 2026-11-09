@@ -178,6 +178,15 @@ proc claimSlot(i: int): ptr Task =
   result = addr procTable.tasks[i]
   zeroMem(result, sizeof(Task))
   cast[ptr uint64](addr result.kstack[0])[] = KStackCanary
+  # A new task starts with the System V default FPU state, not a leftover of the
+  # task that ran before (fpuValid=false used to skip the restore, so it
+  # INHERITED the previous task's xmm registers) and not all zeroes (x87 control
+  # word 0 / MXCSR 0 would unmask every FP exception): FCW 0x037F, MXCSR 0x1F80.
+  let fx = cast[ptr UncheckedArray[uint8]](addr result.fpuState[0])
+  fx[0] = 0x7F; fx[1] = 0x03                       # FCW  = 0x037F
+  fx[24] = 0x80; fx[25] = 0x1F                     # MXCSR = 0x1F80
+  fx[28] = 0xFF; fx[29] = 0xFF                     # MXCSR_MASK
+  result.fpuValid = true                           # so the first switch-in restores it
 
 proc kstackTop*(i: int): uint64 {.inline.} =
   ## 16-byte aligned top of task i's kernel stack (TSS.rsp0 / initial frames).
@@ -316,7 +325,15 @@ proc procSpawnRing3*(name: cstring; appMain: uint64; userStackTop: uint64;
       f[18] = appMain              # RIP
       f[19] = uint64(UserCS)       # CS
       f[20] = 0x202'u64            # RFLAGS: IF=1, bit1 always set
-      f[21] = userStackTop         # RSP (user stack)
+      # SysV ABI: a function is entered with rsp = 8 (mod 16), as if `call`ed (the
+      # return address just pushed). appMain is entered by iretq, so make it look
+      # called: 16-byte-align the top, then leave room for a return address of 0
+      # (a stray return from appMain faults at address 0 and kills the task).
+      # Before this the stack was 8 bytes off: harmless for Nim apps, but any C
+      # program's aligned SSE stack stores (printf's movaps) raised #GP.
+      let entryRsp = (userStackTop and not 15'u64) - 8
+      cast[ptr uint64](entryRsp)[] = 0
+      f[21] = entryRsp             # RSP (user stack)
       f[22] = uint64(UserDS)       # SS
 
       procTable.tasks[i].rsp = rsp
