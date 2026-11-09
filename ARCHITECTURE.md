@@ -16,6 +16,7 @@
 | Interrupts | `kern/interrupts.nim` | BUILT | IDT init, ISR registration |
 | PIC | `drivers/pic.nim` | BUILT | pic init, EOI |
 | PIT | `drivers/pit.nim` | BUILT | 100 Hz tick, pitUptimeTicks() |
+| Display ABI | `kernel/display/` (`display.nim`, `display_checks.nim`), syscalls 37-38, `kernel/abi/nimix_abi.h` | BUILT | a program presents a rect of an owned buffer onto the scanout; implicit ownership; the kernel is still the only GPU toucher (device capabilities R0/R2 will move it) |
 | libnimix | `libnimix/` (README), `apps/c/` | BUILT | the OS layer under picolibc: C programs run on NimixOS; files are the interim whole-file ABI (V2c: fs_server) |
 | picolibc | `vendor/picolibc` (pinned 1.8.12), `tools/picolibc_build.sh` | BUILT (host-verified) | libc + libm for server/app ELFs; the OS layer under it (V2b `libnimix`) is PLANNED |
 | ABI stubs | `kernel/abi/nimix_abi_weak.c` (patchable syscall stubs), `nimix_abi_stub.c` (+ Nim's mini-libc) | BUILT | split so C programs link only the ABI half |
@@ -315,3 +316,4 @@ monolithic model may still link a server in.
 | 2026-11-09 | Memory windows gain the time page window (2 MB at 224 MB, user read-only for every task); a VM under 226 MB RAM no longer boots | DECISIONS.md §V3b |
 | 2026-11-09 | C programs run on NimixOS (libnimix + picolibc); ring-3 entry stack now SysV-aligned; `nimixFsRead` returns -2 for "buffer too small"; ABI stubs split from Nim's mini-libc | DECISIONS.md §V2b |
 | 2026-11-09 | Kernel built `-mgeneral-regs-only` (no x87/SSE in kernel code); new tasks start with the SysV default FPU state | DECISIONS.md §The kernel must not touch FPU/SSE state |
+| 2026-11-09 | Display ABI v1 (two syscalls: info, present); console suspends while a program owns the display; user request structs are range-checked against the caller's region (the other syscalls still trust user pointers: a standing seam) | DECISIONS.md §V5a |

@@ -81,6 +81,8 @@ proc fillStubVtable() =
   v.bufReturn      = proc(h: uint32): int {.nimcall.} = 0
   v.bufMsgSend     = proc(name: cstring; data: pointer; dataLen: int; hs: pointer): int {.nimcall.} = 0
   v.bufMsgRecv     = proc(tok: uint64; buf: pointer; bufLen: int; hs: pointer): int {.nimcall.} = 0
+  v.displayInfo    = proc(outp: pointer): int {.nimcall.} = 0
+  v.displayPresent = proc(req: pointer): int {.nimcall.} = 0
   abimod.nimixAbi = v
 
 proc testEnumOrdinals() =
@@ -116,7 +118,9 @@ proc testEnumOrdinals() =
   assert ord(scCapRecv)        == 29
   assert ord(scBufCreate)      == 30
   assert ord(scBufMsgRecv)     == 36
-  assert NimixSyscallCount == 37
+  assert ord(scDisplayInfo)    == 37
+  assert ord(scDisplayPresent) == 38
+  assert NimixSyscallCount == 39
   echo "PASS: syscall enum ordinals"
 
 proc testTableFilled() =

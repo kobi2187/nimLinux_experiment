@@ -1682,3 +1682,50 @@ deterministic once it recompiles).
 **Open, cheap to close later:** why that binary returns 0 (the output-based
 guard works, but an exit code that lies is a trap for the next person), and
 whether `staticRead`-based tests should force a rebuild.
+
+## V5a: display ABI v1 (2026-11-09)
+
+Proposal `docs/proposals/display_abi.md`; my pick was built (human: "go
+according to your picks"; the ABI is two calls, so redirecting is cheap).
+**Option A:** the program renders into a buffer it owns and calls
+`nimixDisplayPresent`; the kernel validates, copies the rectangle to the
+scanout and flushes it. Rejected for now: mapping the scanout into the program
+(needs device capabilities R0/R2 and lets a program write memory the GPU reads),
+and a write-style stream. The calls survive the later move: `Present` takes a
+buffer handle today and a lent surface or compositor target tomorrow.
+
+Built: `nimixDisplayInfo` (width, height, format B8G8R8X8, stride) and
+`nimixDisplayPresent` (handle, stride, source rect, destination). Ownership is
+implicit: the first successful present owns the screen, the kernel console stops
+painting (its grid keeps filling), a second task gets -2, and exit/kill/fault
+releases it and repaints the console (`displayRelease` in task cleanup).
+
+**Every access is checked, and the checks are host-tested** (`display_checks`):
+rectangles against the buffer's size and stride and the display, all in 64-bit
+arithmetic so no 32-bit values can wrap into a valid-looking request; the
+buffer is read only through the buffers store (`kbufReadable`: a buffer moved or
+lent away cannot be shown); the request struct is copied once (no checking a
+value that can change); and **its address must lie in the caller's own region or
+the buffer arena**. Today no other syscall validates user pointers (the
+shared address space makes that a confused-deputy risk); that wider gap is
+recorded as a seam, and these two calls do not add to it, since `Info` writes
+through a user pointer.
+
+**Test:** `gfxtest` (C, ring 3) first makes ten bad requests that must each be
+refused and must not take ownership (zero width, a row past the buffer, a
+narrow stride, off the display, a negative destination, a handle it does not
+hold, a short struct, NULL, a pointer into the kernel for the request and for
+the info output), then presents; the harness's QMP screendump of the virtio-gpu
+region equals the pattern recomputed on the host for all 256,000 pixels.
+
+**A race, found by that test (nondeterministic at first: our frame showed in
+some runs and the console in others):** the console's flush runs in the shell
+task and can be preempted half-way through painting. A program that took the
+display then drew its frame, and the shell resumed and painted console pixels on
+top of it. `gSuspended` was only checked at the start of a flush. Fix: a
+handshake. A flush sets `gInFlush` BEFORE it checks `gSuspended` (so there is no
+window in which the new owner sees "no flush running"), and taking ownership
+waits, yielding, for `gInFlush` to clear, bounded to 50 ticks so a flusher that
+died mid-paint cannot hang the display. 6 of 6 runs after the fix. This is the
+same family as the console race the original pixel test found: two writers to
+one framebuffer need an ownership protocol, not just a flag.

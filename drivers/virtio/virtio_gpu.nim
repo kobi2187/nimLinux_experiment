@@ -277,6 +277,9 @@ proc virtioGpuPresentRect*(x, y, w, h: int) =
 proc virtioGpuPresent*() =
   virtioGpuPresentRect(0, 0, int(gGpu.width), int(gGpu.height))
 
+proc virtioGpuWidth*(): uint32 = (if gGpu.ready: gGpu.width else: 0'u32)
+proc virtioGpuHeight*(): uint32 = (if gGpu.ready: gGpu.height else: 0'u32)
+
 proc virtioGpuFbPtr*(): ptr UncheckedArray[uint32] =
   if not gGpu.ready: return nil
   cast[ptr UncheckedArray[uint32]](gGpu.fbBase)

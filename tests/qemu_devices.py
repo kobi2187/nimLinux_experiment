@@ -379,6 +379,63 @@ def test_fpu(tmp, iso, bios) -> list:
     return results
 
 
+def gfx_pattern(w=640, h=400):
+    """tests: the exact pixels apps/c/gfxtest presents (B8G8R8X8 -> RGB bytes)."""
+    out = bytearray()
+    for y in range(h):
+        for x in range(w):
+            if x in (0, w - 1) or y in (0, h - 1):
+                out += b"\xff\xff\xff"
+            else:
+                out += bytes((x * 255 // (w - 1), y * 255 // (h - 1), (x ^ y) & 255))
+    return bytes(out)
+
+
+def region(ppm, x0, y0, w, h):
+    sw, sh, px = read_ppm(ppm)
+    return b"".join(px[((y0 + y) * sw + x0) * 3:((y0 + y) * sw + x0 + w) * 3] for y in range(h))
+
+
+def test_display(tmp, iso, bios) -> list:
+    """Display ABI v1: a ring-3 program presents an owned buffer. The screendump of
+    the region must equal the pattern recomputed on the host, bad requests are
+    refused, and the console returns when the program exits."""
+    results = []
+    ppm1, ppm2 = os.path.join(tmp, "gfx1.ppm"), os.path.join(tmp, "gfx2.ppm")
+    g = boot(tmp, iso=iso, bios=bios, devices=("blk", "gpu"))
+    try:
+        try:
+            mark = len(g.out)
+            g.type("gfxtest hold")
+            assert g.wait("gfxtest: presented", 40, mark), "never presented: " + g.text(mark)[-500:]
+            out = g.text(mark)
+            assert "FAIL" not in out, out[-600:]
+            time.sleep(0.5)
+            g.qmp.screendump(ppm1, device="gpu0")
+            want = gfx_pattern()
+            got = region(ppm1, 100, 50, 640, 400)
+            bad = sum(1 for i in range(0, len(want), 3) if want[i:i + 3] != got[i:i + 3])
+            assert bad == 0, f"{bad} of {len(want) // 3} pixels differ from the host pattern"
+            results.append(("display-present", True, "640x400 region == host pattern; 10 bad requests refused"))
+        except Exception as e:                 # noqa: BLE001
+            results.append(("display-present", False, str(e)))
+        try:
+            assert g.wait("app exit code: 0", 30, mark), "gfxtest did not exit cleanly: " + g.text(mark)[-300:]
+            g.wait(PROMPT, 10, mark)
+            time.sleep(1.0)                    # the console repaints in a batched flush
+            g.qmp.screendump(ppm2, device="gpu0")
+            got2 = region(ppm2, 100, 50, 640, 400)
+            same = sum(1 for i in range(0, len(want), 3) if want[i:i + 3] == got2[i:i + 3])
+            assert same < len(want) // 3 // 20, f"{same} pixels still show the program's frame"
+            results.append(("display-release", True, "the console repainted the screen after the owner exited"))
+        except Exception as e:                 # noqa: BLE001
+            results.append(("display-release", False, str(e)))
+        assert "NimixOS" in g.run("version"), "shell dead after gfxtest"
+    finally:
+        g.close()
+    return results
+
+
 def test_user_faults(tmp, iso, bios, kernel) -> list:
     """Ring-3 faults kill only the faulting task: one boot survives them all."""
     results = []
@@ -425,6 +482,7 @@ def main():
             results += test_clock(tmp, a.iso, a.bios)
             results += test_libc(tmp, a.iso, a.bios)
             results += test_fpu(tmp, a.iso, a.bios)
+            results += test_display(tmp, a.iso, a.bios)
             results += test_crashes(tmp, a.iso, a.bios, a.kernel)
     for name, ok, msg in results:
         print(f"{'PASS' if ok else 'FAIL'}: {name:12} {msg}")

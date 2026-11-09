@@ -127,6 +127,10 @@ type
       ## Post to a named channel with handles (hs: BufMsgHandles: n, handle[], mode[]).
     bufMsgRecv*:  proc(tok: uint64; buf: pointer; bufLen: int; hs: pointer): int {.nimcall.}
       ## Receive on a channel by receive capability, taking its handles (hs out).
+    displayInfo*:    proc(outp: pointer): int {.nimcall.}
+      ## Display ABI v1 (docs/proposals/display_abi.md): width, height, format of the scanout.
+    displayPresent*: proc(req: pointer): int {.nimcall.}
+      ## Show a rectangle of an owned buffer on the display; the first present owns it.
 
 var nimixAbi*: NimixAbiVTable
   ## Global ABI vtable. Set once at boot by the chosen kernel model init.
