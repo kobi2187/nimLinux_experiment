@@ -1542,3 +1542,60 @@ Human: "whatever is more lightweight and efficient." Built as option C of
   sharing immutable data and forbids sharing mutable data. The time page is
   immutable after boot; a fixed address (instead of a lent buffer handle)
   because every task needs it and a handle would add a call per task.
+
+## V2b: libnimix — C programs run on NimixOS (2026-11-09)
+
+Goal: the 31 OS-layer symbols of §V2, implemented over the Nimix ABI, so raylib
+and any C code run here. **Done:** `libctest` (a plain C program: printf with
+floats, sscanf, strtod, qsort, 8 MB of malloc/realloc, libm, nanosleep, a real
+date, files written and read back on the FAT disk, directory listing,
+refusals, arguments) passes 42 checks under QEMU; raylib + rlsw + picolibc +
+libnimix link with nothing unresolved (the golden "31 symbols" file became
+"zero").
+
+Design choices (each with what was rejected):
+- **C, compiled against picolibc's headers**, not Nim: the consumers are C and
+  must agree with picolibc's `FILE`, `DIR`, `struct stat`; re-declaring those in
+  Nim would be a second copy to drift. Rejected: Nim `exportc` shims.
+- **Heap = one owned arena buffer** created on the first `sbrk` (V4 in use). 16 MB
+  default (`-DNIMIX_HEAP_BYTES` to change), inside the 32 MB task budget.
+  Rejected: a static `.bss` heap (the app slot is 4 MB).
+- **Clock without a syscall:** `clock_gettime` reads the time page (V3b) with the
+  program's `rdtsc`; the C reader is bit-identical to the Nim one (63 shared
+  golden vectors, regenerated from `core/tsc_clock.nim`).
+- **`nanosleep` never returns early but can be one tick (10 ms) late:** sleeps
+  all but the last two ticks, then yields until the moment. Precise waking
+  needs a one-shot timer (LAPIC/TSC-deadline): parked (V2c). Measured: 250 ms
+  requested, 260–265 ms observed.
+- **Files: a whole-file model over the VFS ABI** (read all on open, write back
+  on close). The ABI is path-based and whole-file because that is what the
+  in-kernel VFS exposes: ambient authority, flagged in the source and README as
+  an interim seam. It is also what a lent-buffer `fs_server` will look like to a
+  program, so program-facing code survives the swap (V2c).
+- **Refusals are design:** `fork/execve/waitpid` (programs are started by the
+  dispatcher with capabilities), `tcgetattr/tcsetattr` (no controlling
+  terminal), `fcntl` (no inherited descriptors), `mkdir/rename/unlink/readlink`
+  (no ABI calls yet) return -1 with an errno and a stated reason.
+
+Two real bugs this work exposed, both fixed:
+1. **The ring-3 entry stack was 8 bytes misaligned.** The SysV ABI enters a
+   function with `rsp ≡ 8 (mod 16)`; `procSpawnRing3` set `rsp` to the
+   16-aligned top, so aligned SSE stack stores (`movaps` in `printf`) raised
+   #GP (found by symbolizing the fault: `vfprintf`, `movaps %xmm0,-0x80(%rbp)`).
+   Nim apps never use aligned SSE stack stores, so it stayed hidden since
+   ring 3 was first brought up. Now `entryRsp = (top & ~15) - 8` with a zero
+   return address (a stray return from `appMain` faults at 0). `libctest` has
+   a regression check.
+2. **`nimixFsRead` could not say "buffer too small".** The FAT driver returned
+   `fTooBig` and the VFS wrapper flattened it to -1, the same as "not found", so
+   a C `fopen` of a 260 KB file looked like ENOENT. Contract now: **-2** means
+   the file exists but is larger than `len` (retry with more room), -1 any
+   other failure; documented in `nimix_abi.h`.
+
+Also: `kernel/abi/nimix_abi_stub.c` held two things, the weak syscall stubs and a
+mini-libc for Nim's standalone runtime (`malloc`, `memcpy`, `fprintf`...), which
+collides with picolibc. The ABI half moved to `nimix_abi_weak.c` (built
+without optimisation: at -O0 even empty stubs are ≥ 16 bytes, which the loader's
+16-byte trampoline needs); the Nim stub object still includes it unchanged.
+Building the disk image (`disk-add-apps`) now builds C apps, so it needs
+meson + ninja (`apt install meson ninja-build`).

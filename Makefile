@@ -45,7 +45,7 @@ KERNEL_OUT = build/main
 ISO_OUT    = nimixos.iso
 ISO_ALL_OUT = nimixos-all-kernels.iso
 
-.PHONY: all build apps nim-apps wasm-apps test-wasm iso iso-all qemu qemu-all qemu-gui qemu-debug gdb-attach symbolize run clean test test-valgrind test-asan test-qemu test-qemu-models test-devices test-arc test-p0 test-v7 test-v2 picolibc
+.PHONY: all build apps nim-apps wasm-apps test-wasm iso iso-all qemu qemu-all qemu-gui qemu-debug gdb-attach symbolize run clean test test-valgrind test-asan test-qemu test-qemu-models test-devices test-arc test-p0 test-v7 test-v2 picolibc c-apps
 
 # Default target: full cycle
 all: build iso qemu
@@ -89,7 +89,12 @@ build/apps/%.wasm: apps/wasm/$$*/$$*.nim apps/wasm/nimix_wasm.nim apps/wasm/nimi
 # Always compiled as PIE so the SASOS loader can place them anywhere.
 # Weak stub .o — provides nimixWrite/nimixExit/etc as weak symbols so the linker
 # resolves them. The kernel loader overwrites them with jmp <real_addr> at runtime.
-build/nimix_abi_stub.o: kernel/abi/nimix_abi_stub.c kernel/abi/nimix_page_arena.h
+build/nimix_abi_stub.o: kernel/abi/nimix_abi_stub.c kernel/abi/nimix_abi_weak.c kernel/abi/nimix_page_arena.h
+	@mkdir -p build
+	gcc -c -fPIC -ffreestanding -fno-stack-protector -o $@ $<
+
+# The same weak ABI stubs without Nim's mini-libc: for C programs (picolibc).
+build/nimix_abi_weak.o: kernel/abi/nimix_abi_weak.c
 	@mkdir -p build
 	gcc -c -fPIC -ffreestanding -fno-stack-protector -o $@ $<
 
@@ -111,6 +116,40 @@ nim-apps: build/apps/ping_server.elf \
           build/apps/dispatch_server.elf \
           build/apps/fs_server.elf build/apps/user_tests.elf
 	@sh tests/check_heap_alignment.sh $^
+
+# ── C apps: libnimix + picolibc (V2b) ───────────────────────────────────────
+# Any C program can run on NimixOS: picolibc is the libc/libm, libnimix/ the OS
+# layer under it (appMain, stdio, heap, time, files). Same code generation as the
+# Nim apps (PIC, no red zone, frame pointers); the loader patches the weak ABI
+# stubs in build/nimix_abi_stub.o and finds `appMain` by name, so the image must
+# keep its symbol table (no strip).
+PICOLIBC_INSTALL = build/picolibc/install
+C_APPS = libctest
+CC_INC := $(shell gcc -print-file-name=include)
+LIBGCC := $(shell gcc -print-libgcc-file-name)
+C_FLAGS = -O2 -Wall -Wextra -fPIC -ffreestanding -fno-stack-protector -mno-red-zone \
+          -fno-omit-frame-pointer -D_GNU_SOURCE -U_FORTIFY_SOURCE -nostdinc \
+          -isystem $(PICOLIBC_INSTALL)/include -isystem $(CC_INC) \
+          -I$(CURDIR)/kernel/abi -I$(CURDIR)/libnimix
+LIBNIMIX_OBJS = $(patsubst libnimix/%.c,build/libnimix/%.o,$(wildcard libnimix/*.c))
+
+$(PICOLIBC_INSTALL)/lib/libc.a:
+	sh tools/picolibc_build.sh
+
+build/libnimix/%.o: libnimix/%.c $(wildcard libnimix/*.h) kernel/abi/nimix_abi.h $(PICOLIBC_INSTALL)/lib/libc.a
+	@mkdir -p $(dir $@)
+	gcc $(C_FLAGS) -c -o $@ $<
+
+build/libnimix/libnimix.a: $(LIBNIMIX_OBJS)
+	ar rcs $@ $^
+
+$(addprefix build/apps/,$(addsuffix .elf,$(C_APPS))): build/apps/%.elf: apps/c/$$*/$$*.c build/libnimix/libnimix.a build/nimix_abi_weak.o
+	@mkdir -p build/apps
+	gcc $(C_FLAGS) -c -o build/apps/$*.o $<
+	gcc -nostdlib -pie -fPIC -Wl,-u,appMain -o $@ build/apps/$*.o build/libnimix/libnimix.a \
+	    $(PICOLIBC_INSTALL)/lib/libc.a $(LIBGCC) build/nimix_abi_weak.o
+
+c-apps: $(addprefix build/apps/,$(addsuffix .elf,$(C_APPS)))
 
 NIM_APP_TEST = $(NIM_APP) -d:nimixUserspace
 
@@ -268,9 +307,9 @@ $(DISK):
 
 # Add/update WASM and ELF files on the disk image (uses mtools — no sudo)
 # Regular apps (.wasm) + system tools and servers (.elf) + sample data.
-disk-add-apps: apps/ping/ping.wasm apps/pingpong/pingpong.wasm nim-apps wasm-apps
+disk-add-apps: apps/ping/ping.wasm apps/pingpong/pingpong.wasm nim-apps c-apps wasm-apps
 	MTOOLS_SKIP_CHECK=1 mcopy -oi $(DISK) apps/ping/ping.wasm apps/pingpong/pingpong.wasm $(WASM_APPS) ::
-	MTOOLS_SKIP_CHECK=1 mcopy -oi $(DISK) $(addprefix build/apps/,$(addsuffix .elf,$(NIM_TOOLS))) build/apps/dispatch_server.elf build/apps/fs_server.elf build/apps/ping_server.elf build/apps/user_tests.elf ::
+	MTOOLS_SKIP_CHECK=1 mcopy -oi $(DISK) $(addprefix build/apps/,$(addsuffix .elf,$(NIM_TOOLS))) build/apps/dispatch_server.elf build/apps/fs_server.elf build/apps/ping_server.elf build/apps/user_tests.elf $(addprefix build/apps/,$(addsuffix .elf,$(C_APPS))) ::
 	MTOOLS_SKIP_CHECK=1 mcopy -oi $(DISK) apps/data/notes.txt ::
 
 # Add a single file: make disk-add FILE=myapp.wasm

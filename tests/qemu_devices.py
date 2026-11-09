@@ -341,6 +341,27 @@ def test_clock(tmp, iso, bios) -> list:
     return results
 
 
+def test_libc(tmp, iso, bios) -> list:
+    """V2b: a plain C program (picolibc + libnimix) runs on NimixOS: printf,
+    strtod, qsort, malloc, libm, nanosleep, files, directories, arguments."""
+    results = []
+    g = boot(tmp, iso=iso, bios=bios, devices=("blk",))
+    try:
+        try:
+            out = g.run("libctest a b", timeout=60, until="app exit code")
+            assert "libctest: ok" in out and "FAIL" not in out, out[-600:]
+            m = re.search(r"libctest: (\d+) checks, 0 failed", out)
+            assert m, out[-300:]
+            slept = re.search(r"slept 250 ms, measured (\d+) ms", out)
+            results.append(("libc", True, f"{m.group(1)} checks; 250 ms sleep measured {slept.group(1)} ms"))
+        except Exception as e:                 # noqa: BLE001
+            results.append(("libc", False, str(e)))
+        assert "NimixOS" in g.run("version"), "shell dead after libctest"
+    finally:
+        g.close()
+    return results
+
+
 def test_user_faults(tmp, iso, bios, kernel) -> list:
     """Ring-3 faults kill only the faulting task: one boot survives them all."""
     results = []
@@ -385,6 +406,7 @@ def main():
             results += test_user_faults(tmp, a.iso, a.bios, a.kernel)
             results += test_buffers(tmp, a.iso, a.bios)
             results += test_clock(tmp, a.iso, a.bios)
+            results += test_libc(tmp, a.iso, a.bios)
             results += test_crashes(tmp, a.iso, a.bios, a.kernel)
     for name, ok, msg in results:
         print(f"{'PASS' if ok else 'FAIL'}: {name:12} {msg}")

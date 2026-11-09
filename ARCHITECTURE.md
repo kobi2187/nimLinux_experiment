@@ -16,7 +16,9 @@
 | Interrupts | `kern/interrupts.nim` | BUILT | IDT init, ISR registration |
 | PIC | `drivers/pic.nim` | BUILT | pic init, EOI |
 | PIT | `drivers/pit.nim` | BUILT | 100 Hz tick, pitUptimeTicks() |
+| libnimix | `libnimix/` (README), `apps/c/` | BUILT | the OS layer under picolibc: C programs run on NimixOS; files are the interim whole-file ABI (V2c: fs_server) |
 | picolibc | `vendor/picolibc` (pinned 1.8.12), `tools/picolibc_build.sh` | BUILT (host-verified) | libc + libm for server/app ELFs; the OS layer under it (V2b `libnimix`) is PLANNED |
+| ABI stubs | `kernel/abi/nimix_abi_weak.c` (patchable syscall stubs), `nimix_abi_stub.c` (+ Nim's mini-libc) | BUILT | split so C programs link only the ABI half |
 | TSC clock | `core/tsc_clock.nim` (pure), `drivers/tsc.nim` | BUILT | fine monotonic clock: `tscNanos()`; calibrated against PIT ch 2 at boot; published to apps by a read-only time page at 224 MB (V3b, BUILT) |
 | PS/2 keyboard | `drivers/ps2_keyboard.nim` | BUILT | IRQ1 handler → scancode |
 | VGA text | `drivers/vga_text.nim` | BUILT | 80×25 text mode |
@@ -311,3 +313,4 @@ monolithic model may still link a server in.
 | 2026-11-09 | libc/libm for server ELFs = picolibc (no OS layer yet); raylib+rlsw need exactly 31 OS symbols | DECISIONS.md §V2 |
 | 2026-11-09 | Large memory for servers = an owned arena buffer used as the heap (no large-region class); sizing parked until measured | DECISIONS.md §V4 |
 | 2026-11-09 | Memory windows gain the time page window (2 MB at 224 MB, user read-only for every task); a VM under 226 MB RAM no longer boots | DECISIONS.md §V3b |
+| 2026-11-09 | C programs run on NimixOS (libnimix + picolibc); ring-3 entry stack now SysV-aligned; `nimixFsRead` returns -2 for "buffer too small"; ABI stubs split from Nim's mini-libc | DECISIONS.md §V2b |

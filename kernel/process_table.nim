@@ -316,7 +316,15 @@ proc procSpawnRing3*(name: cstring; appMain: uint64; userStackTop: uint64;
       f[18] = appMain              # RIP
       f[19] = uint64(UserCS)       # CS
       f[20] = 0x202'u64            # RFLAGS: IF=1, bit1 always set
-      f[21] = userStackTop         # RSP (user stack)
+      # SysV ABI: a function is entered with rsp = 8 (mod 16), as if `call`ed (the
+      # return address just pushed). appMain is entered by iretq, so make it look
+      # called: 16-byte-align the top, then leave room for a return address of 0
+      # (a stray return from appMain faults at address 0 and kills the task).
+      # Before this the stack was 8 bytes off: harmless for Nim apps, but any C
+      # program's aligned SSE stack stores (printf's movaps) raised #GP.
+      let entryRsp = (userStackTop and not 15'u64) - 8
+      cast[ptr uint64](entryRsp)[] = 0
+      f[21] = entryRsp             # RSP (user stack)
       f[22] = uint64(UserDS)       # SS
 
       procTable.tasks[i].rsp = rsp

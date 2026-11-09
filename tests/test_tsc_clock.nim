@@ -3,6 +3,7 @@
 ## The reference is an exact 128-bit multiply/divide done in C, so the clock is
 ## checked against the true answer, not against itself.
 
+import std/[strutils, parseutils]
 import ../core/tsc_clock
 
 proc exactMulDiv(a, b, c: uint64): uint64 =
@@ -169,6 +170,25 @@ proc testTimePage() =
   assert not pageNanos(zero, 1000).ok, "an all-zero (unmapped-looking) page is invalid"
   echo "PASS: time page layout, app reader == kernel reader, bad pages refused"
 
+proc testGoldenVectors() =
+  ## The same file the C reader (libnimix/nimix_timepage.h) is tested against:
+  ## regenerate with tests/libnimix/gen_clock_vectors.nim if the algorithm is
+  ## changed on purpose, and the C test then holds the other side to it.
+  const Vectors = staticRead("libnimix/clock_vectors.txt")
+  var n = 0
+  for line in Vectors.splitLines:
+    if line.len == 0 or line[0] == '#': continue
+    let f = line.splitWhitespace
+    assert f.len == 6, "vector line: " & line
+    let c = TscClock(base: parseUInt(f[1]), mul: uint32(parseUInt(f[2])),
+                     shift: uint8(parseUInt(f[3])), hz: parseUInt(f[0]), valid: true)
+    assert clockNanos(c, parseUInt(f[4])) == parseUInt(f[5]), "golden vector: " & line
+    assert newTscClock(c.base, c.hz).mul == c.mul and newTscClock(c.base, c.hz).shift == c.shift,
+      "mul/shift for " & f[0]
+    inc n
+  assert n >= 60, "vectors present"
+  echo "PASS: ", n, " golden vectors shared with the C reader"
+
 when isMainModule:
   testMultiplierFits()
   testRejectsImplausible()
@@ -179,4 +199,5 @@ when isMainModule:
   testMeasurementGuards()
   testMedianOf()
   testTimePage()
+  testGoldenVectors()
   echo "All TSC clock tests passed."
