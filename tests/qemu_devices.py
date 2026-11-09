@@ -436,6 +436,53 @@ def test_display(tmp, iso, bios) -> list:
     return results
 
 
+def test_raylib(tmp, iso, bios) -> list:
+    """V5b: raylib 6.2 (rlsw) running on NimixOS in a ring-3 C program. The guest
+    screendump must equal the host render of the same scene, and show REAL colours."""
+    results = []
+    ppm = os.path.join(tmp, "rl.ppm")
+    host = os.path.join(ROOT, "build/v5/rldemo_host.ppm")
+    g = boot(tmp, iso=iso, bios=bios, devices=("blk", "gpu"))
+    try:
+        mark = len(g.out)
+        g.type("rldemo hold")
+        try:
+            assert g.wait("rldemo: presented", 60, mark), "never presented: " + g.text(mark)[-600:]
+            assert "FAIL" not in g.text(mark), g.text(mark)[-600:]
+            time.sleep(0.7)
+            g.qmp.screendump(ppm, device="gpu0")
+            got = region(ppm, 0, 0, 640, 400)
+            want = read_ppm(host)[2]
+            bad = [i // 3 for i in range(0, len(want), 3) if want[i:i + 3] != got[i:i + 3]]
+            assert not bad, (f"{len(bad)} of {len(want) // 3} pixels differ from the host render; "
+                             f"first at (x={bad[0] % 640}, y={bad[0] // 640})")
+            results.append(("raylib-render", True, "raylib on NimixOS == the host render, all 256,000 pixels"))
+        except Exception as e:                 # noqa: BLE001
+            results.append(("raylib-render", False, str(e)))
+        try:
+            def px(x, y):
+                i = (y * 640 + x) * 3
+                return tuple(got[i:i + 3])
+            truth = {"SKYBLUE rectangle": ((50, 50), (102, 191, 255)),
+                     "GREEN circle": ((120, 260), (0, 228, 48)),
+                     "MAROON triangle": ((520, 120), (190, 33, 55)),
+                     "RAYWHITE background": ((600, 20), (245, 245, 245))}
+            for name, (pos, rgb) in truth.items():
+                assert px(*pos) == rgb, f"{name} at {pos} is {px(*pos)}, want {rgb} (red/blue swapped?)"
+            results.append(("raylib-colours", True, "real colours on screen (SKYBLUE, GREEN, MAROON, RAYWHITE)"))
+        except Exception as e:                 # noqa: BLE001
+            results.append(("raylib-colours", False, str(e)))
+        try:
+            assert g.wait("rldemo: ok", 30, mark), "rldemo did not finish: " + g.text(mark)[-300:]
+            assert g.wait("app exit code: 0", 20, mark), g.text(mark)[-300:]
+        except Exception as e:                 # noqa: BLE001
+            results.append(("raylib-exit", False, str(e)))
+        assert "NimixOS" in g.run("version"), "shell dead after rldemo"
+    finally:
+        g.close()
+    return results
+
+
 def test_user_faults(tmp, iso, bios, kernel) -> list:
     """Ring-3 faults kill only the faulting task: one boot survives them all."""
     results = []
@@ -483,6 +530,7 @@ def main():
             results += test_libc(tmp, a.iso, a.bios)
             results += test_fpu(tmp, a.iso, a.bios)
             results += test_display(tmp, a.iso, a.bios)
+            results += test_raylib(tmp, a.iso, a.bios)
             results += test_crashes(tmp, a.iso, a.bios, a.kernel)
     for name, ok, msg in results:
         print(f"{'PASS' if ok else 'FAIL'}: {name:12} {msg}")

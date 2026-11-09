@@ -1729,3 +1729,54 @@ waits, yielding, for `gInFlush` to clear, bounded to 50 ticks so a flusher that
 died mid-paint cannot hang the display. 6 of 6 runs after the fix. This is the
 same family as the console race the original pixel test found: two writers to
 one framebuffer need an ownership protocol, not just a flag.
+
+## V5b: raylib 6.2 runs on NimixOS (2026-11-09)
+
+A ring-3 C program (`apps/c/rldemo`) draws with plain raylib calls (shapes,
+gradient, rounded rectangle, ring, text) on rlsw and presents through the display
+ABI. **Done-check met:** the QMP screendump of the virtio-gpu equals the host
+render of the same scene, all 256,000 pixels, and four real colours are asserted
+independently of the comparison.
+
+- **PLATFORM_NIMIX by a generated overlay, not a vendored copy.** raylib picks
+  its platform with `#include "platforms/rcore_memory.c"`, and a quoted include
+  looks in the including file's directory first, so nothing outside can replace it.
+  `tools/raylib_nimix.py` builds `build/raylib-nimix/src` as symlinks to the
+  pinned tree plus one generated file: the memory platform with 9 substitutions,
+  **each of which must match exactly once**, so a raylib bump that moves the text
+  fails loudly (the same discipline as `naylib_adapt.py`). Rejected: copying the
+  file into the repo (a second copy of third-party code to keep in sync), and
+  `ld --wrap` (the call is inside one translation unit).
+- **What changed vs the memory platform:** the framebuffer is an *owned arena
+  buffer* (a task can only present memory it owns); `SwapScreenBuffer` presents
+  through `nimixDisplayPresent` (one kernel call per frame); `SetWindowPosition`
+  places the window; the termios/`getchar` input polling is gone.
+- **An upstream quirk found, and pinned:** in raylib 6.2 a
+  `PIXELFORMAT_UNCOMPRESSED_R8G8B8A8` readback from rlsw delivers the bytes
+  **B, G, R, A** (SKYBLUE, R=102 G=191 B=255, reads back as 255 191 102 255; the
+  same quirk as the `LoadImageFromScreen` note in §V7a). By luck that is exactly
+  the display's native B8G8R8X8, so the bytes go straight through with no
+  conversion. My first version swizzled R/B "correctly" and produced wrong
+  colours; the host reference writer had to learn the quirk too. The test
+  `raylib-colours` asserts real colours on screen (SKYBLUE, GREEN, MAROON,
+  RAYWHITE), independent of the pixel comparison, so if upstream fixes the
+  readback this **fails loudly** instead of silently swapping red and blue.
+- **Exact equality held** although the host used glibc's libm and NimixOS uses
+  picolibc's (≤ 1 ULP apart): this scene lands on no rounding boundary. A scene
+  that did would differ by a pixel, which would be a finding about the libm
+  difference, not noise to be thresholded away.
+- **Program images:** the first build was 1.1 MB and the shell answered
+  "Unknown command" because it reads programs into a fixed **512 KB** buffer
+  (`diskFileBuf`), a misleading message for "too big". Linking with
+  `--gc-sections` (code compiled with `-ffunction-sections`) and `--strip-debug`
+  (picolibc's objects carry DWARF) gives **248 KB** (libctest 260 to 66 KB) and
+  keeps the symbol table the loader needs for `appMain` and the ABI stubs. The
+  512 KB limit and its error message are a seam (V5d).
+- **A scene bug of my own:** the first demo had no triangle. raylib's
+  `DrawTriangle` wants counter-clockwise vertices and culls the other winding. I
+  only saw it because I looked at the host render before trusting the comparison.
+- **Not yet:** damage (a full frame is converted and copied per `EndDrawing`: raylib
+  tracks no damage, the V6 render server will know it from the command stream);
+  input (V5c: evdev events on the `input` topic into raylib's key state); the
+  display is not cleared on taking ownership (the console's old pixels show around
+  a window smaller than the screen).
