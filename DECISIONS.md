@@ -1780,3 +1780,51 @@ independently of the comparison.
   input (V5c: evdev events on the `input` topic into raylib's key state); the
   display is not cleared on taking ownership (the console's old pixels show around
   a window smaller than the screen).
+
+## V5c: keyboard input into raylib (2026-11-10)
+
+`rlkeys` (a raylib program): D/A and the arrow keys move a square, typed characters
+are collected, Q quits. The test injects real key events through QEMU's virtio
+keyboard and checks three things: the square moves on the screen (pixels), the
+program received exactly the key sequence D D D Right Left Left Q and the characters
+`ddd`, and the shell received none of it.
+
+- **Input follows display ownership.** The shell does not wait for a foreground
+  program, and the event bus delivers a copy of every key to every subscriber, so
+  typing into a raylib program would also have typed into the shell's command line
+  (executed on exit as "Unknown command"). While a program owns the display
+  (`consoleInputGrab`, set and cleared with the display ownership) the console still
+  drains its key queue, so it cannot fill, but acts on nothing, and resets its
+  modifier state at each hand-over so a held shift cannot stick. This is a first,
+  deliberately simple "focus": the display owner gets the keys. A real focus model
+  arrives with windows (V6).
+- **Two keymaps, one authority.** The platform needs evdev to raylib `KeyboardKey`
+  values and to characters, in C. `input/evdev_keymap.nim` stays the authority for
+  characters: `gen_key_vectors.nim` writes 1,024 vectors (128 codes x 8
+  shift/caps/ctrl combinations), and both the Nim test and the C test
+  (`tests/libnimix/test_keymap.c`) must reproduce them, so neither can drift. The
+  C test also includes `raylib.h` and checks all 81 mapped keys against raylib 6.2's
+  own enum, so a renumbering upstream fails there. Same technique as the clock.
+- **Two input bugs, found by watching the data and not by guessing:**
+  1. **Taps.** A tap delivers press and release together. If both land in one frame,
+     raylib's edge-based `IsKeyPressed` never sees the key (state ends "up"). Fix: a
+     release of a key that went down in the same poll is applied at the start of the
+     next poll, so a tap is down for exactly one frame. (Two taps in one frame are
+     still one edge: that is raylib's polling design; `GetKeyPressed` sees both.)
+  2. **An upstream bug in raylib's memory platform:** its "previous key state" copy
+     loop covers only the first 260 keys (an Android limit it inherited). For
+     everything above, such as the arrows, Home/End and F-keys, the previous state
+     stays 0 forever, so `IsKeyPressed` fires on every frame the key is down. It
+     showed as one arrow press moving the square two steps while D (key 68) was
+     exact. The log (key 262 -> step 4, step 5) pointed at the platform, not at
+     delivery. Fixed with one more exact-match substitution in
+     `tools/raylib_nimix.py` (cover `MAX_KEYBOARD_KEYS`).
+- **A flaky test, fixed by finding its cause.** The first test sent keys 0.25 s
+  apart and failed intermittently. The key sequence was always right but the
+  position was not: under TCG a frame is slow enough that two taps could land in one
+  frame, which is one edge by design. The test now waits for the program's own
+  acknowledgement (its log line) before sending the next key and asserts the exact
+  sequence. A fixed sleep would only have hidden it.
+- **Not yet:** mouse and touch (no pointing device in the launcher or on the event
+  bus: V5e); key-repeat rate and delay are the keyboard's; no input method for
+  non-US layouts (the Nim keymap is US-only too).

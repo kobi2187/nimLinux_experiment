@@ -6,6 +6,7 @@
 #      libnimix (V2b, the OS layer) and the ABI stubs: NOTHING left unresolved
 #   3. picolibc's libm is accurate (native run, compared in ULPs)
 #   4. libnimix's C clock reader equals the Nim one on golden vectors
+#   5. libnimix's keymap equals the Nim keymap (golden vectors) and raylib's KeyboardKey enum
 set -e
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 OUT=${V2_OUT:-$ROOT/build/v2}
@@ -48,3 +49,8 @@ python3 "$ROOT/tests/v2/check_libm.py" "$OUT/libm.out"
 # 4. libnimix's C clock reader reproduces core/tsc_clock.nim bit for bit (golden vectors)
 gcc -O2 -Wall -Wextra -I"$ROOT/libnimix" -o "$OUT/test_clock" "$ROOT/tests/libnimix/test_clock.c"
 "$OUT/test_clock" "$ROOT/tests/libnimix/clock_vectors.txt"
+
+# 5. libnimix's keymap (evdev -> raylib keys and characters) equals the Nim keymap on golden
+#    vectors and raylib 6.2's own KeyboardKey enum (the test includes raylib.h)
+gcc -O2 -Wall -Wextra -I"$ROOT/libnimix" -I"$RL" -o "$OUT/test_keymap" "$ROOT/tests/libnimix/test_keymap.c"
+"$OUT/test_keymap" "$ROOT/tests/libnimix/key_vectors.txt"

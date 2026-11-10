@@ -15,6 +15,16 @@ var
   gKeys: KeyState
   gInputTok: EventToken
   gSubscribed: bool
+  gGrabbed: bool           ## a program owns the display: its keys are its own (see below)
+
+proc consoleInputGrab*(on: bool) =
+  ## Input follows display ownership. While a program owns the display the console
+  ## still drains the key events (so its queue cannot fill) but acts on none of them:
+  ## the program subscribes to the same "input" topic for its own copy, and keys typed
+  ## into it must not also arrive in the shell's command line. Modifier state is reset
+  ## at each hand-over so a held shift cannot stick across it.
+  gGrabbed = on
+  gKeys = KeyState()
 
 proc keyEventChar(): int =
   ## Next character typed on the keyboard, or NoChar.
@@ -24,6 +34,7 @@ proc keyEventChar(): int =
   while true:
     let ev = eventPoll(gInputTok)
     if ev.isNone: return NoChar
+    if gGrabbed: continue                    # drained, not acted on
     let p = ev.get().payload.data            # virtio_input_event: type, code, value
     let typ  = uint16(p[0]) or (uint16(p[1]) shl 8)
     let code = uint16(p[2]) or (uint16(p[3]) shl 8)
