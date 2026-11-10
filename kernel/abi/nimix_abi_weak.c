@@ -57,3 +57,6 @@ __attribute__((weak)) int  nimixBufSeal(unsigned int h) { STUB_PAD; (void)h; ret
 __attribute__((weak)) int  nimixBufReturn(unsigned int h) { STUB_PAD; (void)h; return -1; }
 __attribute__((weak)) int  nimixBufMsgSend(const char* name, const void* data, int len, void* hs) { STUB_PAD; (void)name; (void)data; (void)len; (void)hs; return -1; }
 __attribute__((weak)) int  nimixBufMsgRecv(unsigned long long tok, void* buf, int len, void* hs) { STUB_PAD; (void)tok; (void)buf; (void)len; (void)hs; return -1; }
+/* display (docs/proposals/display_abi.md): -1 bad request, -2 busy, -3 no display */
+__attribute__((weak)) int  nimixDisplayInfo(void* out) { STUB_PAD; (void)out; return -3; }
+__attribute__((weak)) int  nimixDisplayPresent(const void* req) { STUB_PAD; (void)req; return -3; }

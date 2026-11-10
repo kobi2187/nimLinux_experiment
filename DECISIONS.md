@@ -1646,3 +1646,137 @@ state*, not only memory. A capability OS that isolates pages but lets a timer
 tick rewrite a program's registers has not isolated the program. The same
 reasoning applies to anything the kernel does on a task's behalf: it may use
 only what it saves.
+
+## A failing host test could not fail the build (2026-11-09)
+
+**Found by accident.** While adding two syscalls I touched files that
+`tests/test_syscall_table.nim` depends on, which forced Nim to recompile it, and
+it failed: `no weak stub in nimix_abi_stub.c for nimixWrite`. It had been failing
+since V2b moved the weak ABI stubs to `nimix_abi_weak.c`, i.e. for a whole
+milestone. `make test` exited 0 and printed "All tests passed"; the PR's CI,
+which compiles from a clean checkout, showed the stack trace in its log and
+stayed green.
+
+**Two separate faults:**
+1. **The test binary exits 0 after an unhandled `AssertionDefect`** (it prints
+   `Error: unhandled exception ...` and `main` returns 0; verified with gdb and
+   strace: `exit_group(0)` from `__libc_start_call_main`). A minimal program with
+   the same flags and imports exits 1 as it should, so something about this
+   test's run state turns the failure into success. **The cause is not found**;
+   I did not keep digging because the guarantee does not need it.
+2. **A stale binary hid the failure locally.** The test reads C files with
+   `staticRead`, which Nim's incremental build does not track, so changing those
+   files did not recompile it and the old passing binary ran again.
+
+**Fix (the guarantee, not the cause):** `tools/check_run.sh` runs every host
+test and fails on a non-zero exit **or** on Nim's `Error: unhandled exception`
+marker, whatever the exit code says. All three host-test loops (plain, valgrind,
+ASan), `test-arc` and the CPS run go through it. With it in place the whole host
+suite was run: `test_syscall_table` was the only hidden failure.
+`test_syscall_table` now reads both stub files and again checks something.
+
+**Rejected:** just fixing the one test (leaves every other test one refactor
+away from the same silent failure); retrying until it fails (it is
+deterministic once it recompiles).
+
+**Open, cheap to close later:** why that binary returns 0 (the output-based
+guard works, but an exit code that lies is a trap for the next person), and
+whether `staticRead`-based tests should force a rebuild.
+
+## V5a: display ABI v1 (2026-11-09)
+
+Proposal `docs/proposals/display_abi.md`; my pick was built (human: "go
+according to your picks"; the ABI is two calls, so redirecting is cheap).
+**Option A:** the program renders into a buffer it owns and calls
+`nimixDisplayPresent`; the kernel validates, copies the rectangle to the
+scanout and flushes it. Rejected for now: mapping the scanout into the program
+(needs device capabilities R0/R2 and lets a program write memory the GPU reads),
+and a write-style stream. The calls survive the later move: `Present` takes a
+buffer handle today and a lent surface or compositor target tomorrow.
+
+Built: `nimixDisplayInfo` (width, height, format B8G8R8X8, stride) and
+`nimixDisplayPresent` (handle, stride, source rect, destination). Ownership is
+implicit: the first successful present owns the screen, the kernel console stops
+painting (its grid keeps filling), a second task gets -2, and exit/kill/fault
+releases it and repaints the console (`displayRelease` in task cleanup).
+
+**Every access is checked, and the checks are host-tested** (`display_checks`):
+rectangles against the buffer's size and stride and the display, all in 64-bit
+arithmetic so no 32-bit values can wrap into a valid-looking request; the
+buffer is read only through the buffers store (`kbufReadable`: a buffer moved or
+lent away cannot be shown); the request struct is copied once (no checking a
+value that can change); and **its address must lie in the caller's own region or
+the buffer arena**. Today no other syscall validates user pointers (the
+shared address space makes that a confused-deputy risk); that wider gap is
+recorded as a seam, and these two calls do not add to it, since `Info` writes
+through a user pointer.
+
+**Test:** `gfxtest` (C, ring 3) first makes ten bad requests that must each be
+refused and must not take ownership (zero width, a row past the buffer, a
+narrow stride, off the display, a negative destination, a handle it does not
+hold, a short struct, NULL, a pointer into the kernel for the request and for
+the info output), then presents; the harness's QMP screendump of the virtio-gpu
+region equals the pattern recomputed on the host for all 256,000 pixels.
+
+**A race, found by that test (nondeterministic at first: our frame showed in
+some runs and the console in others):** the console's flush runs in the shell
+task and can be preempted half-way through painting. A program that took the
+display then drew its frame, and the shell resumed and painted console pixels on
+top of it. `gSuspended` was only checked at the start of a flush. Fix: a
+handshake. A flush sets `gInFlush` BEFORE it checks `gSuspended` (so there is no
+window in which the new owner sees "no flush running"), and taking ownership
+waits, yielding, for `gInFlush` to clear, bounded to 50 ticks so a flusher that
+died mid-paint cannot hang the display. 6 of 6 runs after the fix. This is the
+same family as the console race the original pixel test found: two writers to
+one framebuffer need an ownership protocol, not just a flag.
+
+## V5b: raylib 6.2 runs on NimixOS (2026-11-09)
+
+A ring-3 C program (`apps/c/rldemo`) draws with plain raylib calls (shapes,
+gradient, rounded rectangle, ring, text) on rlsw and presents through the display
+ABI. **Done-check met:** the QMP screendump of the virtio-gpu equals the host
+render of the same scene, all 256,000 pixels, and four real colours are asserted
+independently of the comparison.
+
+- **PLATFORM_NIMIX by a generated overlay, not a vendored copy.** raylib picks
+  its platform with `#include "platforms/rcore_memory.c"`, and a quoted include
+  looks in the including file's directory first, so nothing outside can replace it.
+  `tools/raylib_nimix.py` builds `build/raylib-nimix/src` as symlinks to the
+  pinned tree plus one generated file: the memory platform with 9 substitutions,
+  **each of which must match exactly once**, so a raylib bump that moves the text
+  fails loudly (the same discipline as `naylib_adapt.py`). Rejected: copying the
+  file into the repo (a second copy of third-party code to keep in sync), and
+  `ld --wrap` (the call is inside one translation unit).
+- **What changed vs the memory platform:** the framebuffer is an *owned arena
+  buffer* (a task can only present memory it owns); `SwapScreenBuffer` presents
+  through `nimixDisplayPresent` (one kernel call per frame); `SetWindowPosition`
+  places the window; the termios/`getchar` input polling is gone.
+- **An upstream quirk found, and pinned:** in raylib 6.2 a
+  `PIXELFORMAT_UNCOMPRESSED_R8G8B8A8` readback from rlsw delivers the bytes
+  **B, G, R, A** (SKYBLUE, R=102 G=191 B=255, reads back as 255 191 102 255; the
+  same quirk as the `LoadImageFromScreen` note in §V7a). By luck that is exactly
+  the display's native B8G8R8X8, so the bytes go straight through with no
+  conversion. My first version swizzled R/B "correctly" and produced wrong
+  colours; the host reference writer had to learn the quirk too. The test
+  `raylib-colours` asserts real colours on screen (SKYBLUE, GREEN, MAROON,
+  RAYWHITE), independent of the pixel comparison, so if upstream fixes the
+  readback this **fails loudly** instead of silently swapping red and blue.
+- **Exact equality held** although the host used glibc's libm and NimixOS uses
+  picolibc's (≤ 1 ULP apart): this scene lands on no rounding boundary. A scene
+  that did would differ by a pixel, which would be a finding about the libm
+  difference, not noise to be thresholded away.
+- **Program images:** the first build was 1.1 MB and the shell answered
+  "Unknown command" because it reads programs into a fixed **512 KB** buffer
+  (`diskFileBuf`), a misleading message for "too big". Linking with
+  `--gc-sections` (code compiled with `-ffunction-sections`) and `--strip-debug`
+  (picolibc's objects carry DWARF) gives **248 KB** (libctest 260 to 66 KB) and
+  keeps the symbol table the loader needs for `appMain` and the ABI stubs. The
+  512 KB limit and its error message are a seam (V5d).
+- **A scene bug of my own:** the first demo had no triangle. raylib's
+  `DrawTriangle` wants counter-clockwise vertices and culls the other winding. I
+  only saw it because I looked at the host render before trusting the comparison.
+- **Not yet:** damage (a full frame is converted and copied per `EndDrawing`: raylib
+  tracks no damage, the V6 render server will know it from the command stream);
+  input (V5c: evdev events on the `input` topic into raylib's key state); the
+  display is not cleared on taking ownership (the console's old pixels show around
+  a window smaller than the screen).

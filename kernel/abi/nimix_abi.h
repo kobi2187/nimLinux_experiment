@@ -56,3 +56,23 @@ void* nimixBufMap(unsigned int handle);
 int   nimixBufClose(unsigned int handle);
 int   nimixBufSeal(unsigned int handle);
 int   nimixBufReturn(unsigned int handle);
+
+/* ── Display ABI v1 (docs/proposals/display_abi.md) ────────────────────────────
+ * Show a rectangle of a buffer you own on the screen. The kernel reads your
+ * buffer only through the ownership store and checks every rectangle; you do any
+ * pixel conversion. The first successful present makes you the display owner (the
+ * kernel console stops painting); it returns when you exit.
+ * Returns 0; -1 bad request; -2 another task owns the display; -3 no display. */
+#define NIMIX_DISPLAY_FORMAT_B8G8R8X8 1       /* little-endian 32-bit pixels: B, G, R, unused */
+
+typedef struct { unsigned size, width, height, format, stride_bytes; } NimixDisplayInfo;
+typedef struct {
+    unsigned size;          /* sizeof(NimixPresent) */
+    unsigned handle;        /* an owned or sealed buffer you can read */
+    unsigned stride_bytes;  /* bytes per row of that buffer */
+    int sx, sy, w, h;       /* the rectangle in the buffer */
+    int dx, dy;             /* where it lands on the display */
+} NimixPresent;
+
+int nimixDisplayInfo(NimixDisplayInfo* out);
+int nimixDisplayPresent(const NimixPresent* req);

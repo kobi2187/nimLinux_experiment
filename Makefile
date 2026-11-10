@@ -124,11 +124,11 @@ nim-apps: build/apps/ping_server.elf \
 # stubs in build/nimix_abi_stub.o and finds `appMain` by name, so the image must
 # keep its symbol table (no strip).
 PICOLIBC_INSTALL = build/picolibc/install
-C_APPS = libctest fputest
+C_APPS = libctest fputest gfxtest rldemo
 CC_INC := $(shell gcc -print-file-name=include)
 LIBGCC := $(shell gcc -print-libgcc-file-name)
 C_FLAGS = -O2 -Wall -Wextra -fPIC -ffreestanding -fno-stack-protector -mno-red-zone \
-          -fno-omit-frame-pointer -D_GNU_SOURCE -U_FORTIFY_SOURCE -nostdinc \
+          -fno-omit-frame-pointer -ffunction-sections -fdata-sections -D_GNU_SOURCE -U_FORTIFY_SOURCE -nostdinc \
           -isystem $(PICOLIBC_INSTALL)/include -isystem $(CC_INC) \
           -I$(CURDIR)/kernel/abi -I$(CURDIR)/libnimix
 LIBNIMIX_OBJS = $(patsubst libnimix/%.c,build/libnimix/%.o,$(wildcard libnimix/*.c))
@@ -143,10 +143,33 @@ build/libnimix/%.o: libnimix/%.c $(wildcard libnimix/*.h) kernel/abi/nimix_abi.h
 build/libnimix/libnimix.a: $(LIBNIMIX_OBJS)
 	ar rcs $@ $^
 
-$(addprefix build/apps/,$(addsuffix .elf,$(C_APPS))): build/apps/%.elf: apps/c/$$*/$$*.c build/libnimix/libnimix.a build/nimix_abi_weak.o
+
+# ── raylib for NimixOS (V5b): PLATFORM_NIMIX = the memory platform + the display ABI ──
+# tools/raylib_nimix.py builds a symlink view of vendor/raylib/src with the platform
+# file generated from the pinned original (exact substitutions, see the script).
+RAYLIB_NIMIX = build/raylib-nimix
+RAYLIB_NIMIX_ABS = $(CURDIR)/build/raylib-nimix
+# no rmodels: the 3D model module (a 2D UI toolkit never calls it) is most of the dead weight
+RL_OBJS = $(addprefix $(RAYLIB_NIMIX)/,rcore.o rshapes.o rtextures.o rtext.o)
+
+$(RAYLIB_NIMIX)/src/platforms/rcore_memory.c: tools/raylib_nimix.py vendor/raylib/src/platforms/rcore_memory.c
+	python3 tools/raylib_nimix.py
+
+$(RAYLIB_NIMIX)/%.o: $(RAYLIB_NIMIX)/src/platforms/rcore_memory.c $(PICOLIBC_INSTALL)/lib/libc.a kernel/abi/nimix_abi.h
+	gcc $(C_FLAGS) -w -DPLATFORM_MEMORY -DGRAPHICS_API_OPENGL_SOFTWARE -DSUPPORT_MODULE_RAUDIO=0 -DSUPPORT_MODULE_RMODELS=0 \
+	    -I$(RAYLIB_NIMIX_ABS)/src -c -o $@ $(RAYLIB_NIMIX_ABS)/src/$*.c
+
+$(RAYLIB_NIMIX)/librl.a: $(RL_OBJS)
+	ar rcs $@ $^
+
+# per-app extras for the generic C-app rule below
+LIBS_rldemo = $(RAYLIB_NIMIX)/librl.a
+CFLAGS_rldemo = -I$(RAYLIB_NIMIX_ABS)/src
+
+$(addprefix build/apps/,$(addsuffix .elf,$(C_APPS))): build/apps/%.elf: apps/c/$$*/$$*.c build/libnimix/libnimix.a build/nimix_abi_weak.o $$(LIBS_$$*)
 	@mkdir -p build/apps
-	gcc $(C_FLAGS) -c -o build/apps/$*.o $<
-	gcc -nostdlib -pie -fPIC -Wl,-u,appMain -o $@ build/apps/$*.o build/libnimix/libnimix.a \
+	gcc $(C_FLAGS) $(CFLAGS_$*) -c -o build/apps/$*.o $<
+	gcc -nostdlib -pie -fPIC -Wl,--gc-sections -Wl,--strip-debug -Wl,-u,appMain -o $@ build/apps/$*.o $(LIBS_$*) build/libnimix/libnimix.a \
 	    $(PICOLIBC_INSTALL)/lib/libc.a $(LIBGCC) build/nimix_abi_weak.o
 
 c-apps: $(addprefix build/apps/,$(addsuffix .elf,$(C_APPS)))
@@ -342,6 +365,7 @@ HOST_TESTS = \
   tests/test_pci.nim \
   tests/test_pit.nim \
   tests/test_tsc_clock.nim \
+  tests/test_display_checks.nim \
   tests/test_event_server.nim \
   tests/test_driver_registry.nim \
   tests/test_module_loader.nim \
@@ -379,19 +403,23 @@ HOST_TESTS_NOHW = \
 
 # $(call host_tests,<extra nim flags>,<runner>) — every host test once; with a
 # runner (e.g. valgrind) build only, then run the binary under it.
+# Every test runs through tools/check_run.sh: a test that dies on an unhandled
+# exception must fail the build even when its exit code says 0 (see that script).
+CHECK = sh $(CURDIR)/tools/check_run.sh
 define host_tests
 	@set -e; for t in $(HOST_TESTS); do \
-	  $(NIM) c $(if $(2),,-r) $(TEST_FLAGS) $(1) $$t; $(if $(2),$(2) ./$${t%.nim};) done
+	  $(NIM) c $(TEST_FLAGS) $(1) $$t; $(CHECK) $(2) ./$${t%.nim}; done
 	@set -e; for t in $(HOST_TESTS_TESTING); do \
-	  $(NIM) c $(if $(2),,-r) $(TEST_FLAGS) -d:testing $(1) $$t; $(if $(2),$(2) ./$${t%.nim};) done
+	  $(NIM) c $(TEST_FLAGS) -d:testing $(1) $$t; $(CHECK) $(2) ./$${t%.nim}; done
 	@set -e; for t in $(HOST_TESTS_NOHW); do \
-	  $(NIM) c $(if $(2),,-r) $(TEST_FLAGS) -d:noKernelHardware $(1) $$t; $(if $(2),$(2) ./$${t%.nim};) done
+	  $(NIM) c $(TEST_FLAGS) -d:noKernelHardware $(1) $$t; $(CHECK) $(2) ./$${t%.nim}; done
 endef
 
 test:
 	@echo "=== NimixOS Test Suite ==="
 	$(call host_tests,,)
-	$(NIM) c -r --skipParentCfg --mm:arc --panics:on --path:$(CURDIR) -d:noSignalHandler tests/test_cps_eval.nim
+	$(NIM) c --skipParentCfg --mm:arc --panics:on --path:$(CURDIR) -d:noSignalHandler tests/test_cps_eval.nim
+	$(CHECK) ./tests/test_cps_eval
 	@echo "=== All tests passed ==="
 
 # ── Native debugging of host-testable code ───────────────────────────────────
@@ -416,9 +444,9 @@ TEST_FLAGS_ARC = --skipParentCfg --mm:arc --panics:on --path:$(CURDIR) --path:$(
 
 test-arc:
 	@echo "=== NimixOS ARC Test Suite (dispatcher/CPS) ==="
-	$(NIM) c -r $(TEST_FLAGS_ARC) tests/test_dispatch_logic.nim
-	$(NIM) c -r $(TEST_FLAGS_ARC) tests/test_actor.nim
-	$(NIM) c -r $(TEST_FLAGS_ARC) --threads:on tests/test_mpsc_ring.nim
+	$(NIM) c $(TEST_FLAGS_ARC) tests/test_dispatch_logic.nim; $(CHECK) ./tests/test_dispatch_logic
+	$(NIM) c $(TEST_FLAGS_ARC) tests/test_actor.nim; $(CHECK) ./tests/test_actor
+	$(NIM) c $(TEST_FLAGS_ARC) --threads:on tests/test_mpsc_ring.nim; $(CHECK) ./tests/test_mpsc_ring
 	@echo "=== ARC tests passed ==="
 
 # Actor/CPS performance benchmark (release build; validates dispatcher cost model)
@@ -440,8 +468,19 @@ test-qemu-models: nim-apps disk-add-apps $(addprefix nimixos-,$(addsuffix .iso,$
 
 # Every virtio device verified on the HOST (screendump pixels, wav tone, pcap
 # frame, injected keys) + crash reports symbolized. See tests/qemu_devices.py.
-test-devices: disk-add-apps $(ISO_OUT) build/term_replay
+test-devices: disk-add-apps $(ISO_OUT) build/term_replay build/v5/rldemo_host.ppm
 	python3 tests/qemu_devices.py --iso $(ISO_OUT) --bios $(OVMF)
+
+# The host reference for the raylib demo: the same scene drawn by raylib's own memory
+# platform on the host. The NimixOS screendump must equal it (tests/qemu_devices.py).
+build/v5/rldemo_host: tests/v5/rldemo_host.c apps/c/rldemo/rldemo_scene.h
+	@mkdir -p build/v5
+	gcc -O2 -w -DPLATFORM_MEMORY -DGRAPHICS_API_OPENGL_SOFTWARE -DSUPPORT_MODULE_RAUDIO=0 -D_GNU_SOURCE \
+	    -I$(CURDIR)/vendor/raylib/src -I$(CURDIR)/apps/c/rldemo -o $@ $< \
+	    $(addprefix $(CURDIR)/vendor/raylib/src/,rcore.c rshapes.c rtextures.c rtext.c rmodels.c) -lm
+
+build/v5/rldemo_host.ppm: build/v5/rldemo_host
+	./build/v5/rldemo_host $@ > /dev/null
 
 # Host renderer of a console byte stream (same term/gfx code as the kernel).
 build/term_replay: tools/term_replay.nim term/vt.nim term/term_render.nim gfx/canvas.nim gfx/bitmap_font.nim gfx/font_spleen8x16.nim gfx/utf8.nim

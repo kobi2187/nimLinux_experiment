@@ -379,6 +379,110 @@ def test_fpu(tmp, iso, bios) -> list:
     return results
 
 
+def gfx_pattern(w=640, h=400):
+    """tests: the exact pixels apps/c/gfxtest presents (B8G8R8X8 -> RGB bytes)."""
+    out = bytearray()
+    for y in range(h):
+        for x in range(w):
+            if x in (0, w - 1) or y in (0, h - 1):
+                out += b"\xff\xff\xff"
+            else:
+                out += bytes((x * 255 // (w - 1), y * 255 // (h - 1), (x ^ y) & 255))
+    return bytes(out)
+
+
+def region(ppm, x0, y0, w, h):
+    sw, sh, px = read_ppm(ppm)
+    return b"".join(px[((y0 + y) * sw + x0) * 3:((y0 + y) * sw + x0 + w) * 3] for y in range(h))
+
+
+def test_display(tmp, iso, bios) -> list:
+    """Display ABI v1: a ring-3 program presents an owned buffer. The screendump of
+    the region must equal the pattern recomputed on the host, bad requests are
+    refused, and the console returns when the program exits."""
+    results = []
+    ppm1, ppm2 = os.path.join(tmp, "gfx1.ppm"), os.path.join(tmp, "gfx2.ppm")
+    g = boot(tmp, iso=iso, bios=bios, devices=("blk", "gpu"))
+    try:
+        try:
+            mark = len(g.out)
+            g.type("gfxtest hold")
+            assert g.wait("gfxtest: presented", 40, mark), "never presented: " + g.text(mark)[-500:]
+            out = g.text(mark)
+            assert "FAIL" not in out, out[-600:]
+            time.sleep(0.5)
+            g.qmp.screendump(ppm1, device="gpu0")
+            want = gfx_pattern()
+            got = region(ppm1, 100, 50, 640, 400)
+            bad = sum(1 for i in range(0, len(want), 3) if want[i:i + 3] != got[i:i + 3])
+            assert bad == 0, f"{bad} of {len(want) // 3} pixels differ from the host pattern"
+            results.append(("display-present", True, "640x400 region == host pattern; 10 bad requests refused"))
+        except Exception as e:                 # noqa: BLE001
+            results.append(("display-present", False, str(e)))
+        try:
+            assert g.wait("app exit code: 0", 30, mark), "gfxtest did not exit cleanly: " + g.text(mark)[-300:]
+            g.wait(PROMPT, 10, mark)
+            time.sleep(1.0)                    # the console repaints in a batched flush
+            g.qmp.screendump(ppm2, device="gpu0")
+            got2 = region(ppm2, 100, 50, 640, 400)
+            same = sum(1 for i in range(0, len(want), 3) if want[i:i + 3] == got2[i:i + 3])
+            assert same < len(want) // 3 // 20, f"{same} pixels still show the program's frame"
+            results.append(("display-release", True, "the console repainted the screen after the owner exited"))
+        except Exception as e:                 # noqa: BLE001
+            results.append(("display-release", False, str(e)))
+        assert "NimixOS" in g.run("version"), "shell dead after gfxtest"
+    finally:
+        g.close()
+    return results
+
+
+def test_raylib(tmp, iso, bios) -> list:
+    """V5b: raylib 6.2 (rlsw) running on NimixOS in a ring-3 C program. The guest
+    screendump must equal the host render of the same scene, and show REAL colours."""
+    results = []
+    ppm = os.path.join(tmp, "rl.ppm")
+    host = os.path.join(ROOT, "build/v5/rldemo_host.ppm")
+    g = boot(tmp, iso=iso, bios=bios, devices=("blk", "gpu"))
+    try:
+        mark = len(g.out)
+        g.type("rldemo hold")
+        try:
+            assert g.wait("rldemo: presented", 60, mark), "never presented: " + g.text(mark)[-600:]
+            assert "FAIL" not in g.text(mark), g.text(mark)[-600:]
+            time.sleep(0.7)
+            g.qmp.screendump(ppm, device="gpu0")
+            got = region(ppm, 0, 0, 640, 400)
+            want = read_ppm(host)[2]
+            bad = [i // 3 for i in range(0, len(want), 3) if want[i:i + 3] != got[i:i + 3]]
+            assert not bad, (f"{len(bad)} of {len(want) // 3} pixels differ from the host render; "
+                             f"first at (x={bad[0] % 640}, y={bad[0] // 640})")
+            results.append(("raylib-render", True, "raylib on NimixOS == the host render, all 256,000 pixels"))
+        except Exception as e:                 # noqa: BLE001
+            results.append(("raylib-render", False, str(e)))
+        try:
+            def px(x, y):
+                i = (y * 640 + x) * 3
+                return tuple(got[i:i + 3])
+            truth = {"SKYBLUE rectangle": ((50, 50), (102, 191, 255)),
+                     "GREEN circle": ((120, 260), (0, 228, 48)),
+                     "MAROON triangle": ((520, 120), (190, 33, 55)),
+                     "RAYWHITE background": ((600, 20), (245, 245, 245))}
+            for name, (pos, rgb) in truth.items():
+                assert px(*pos) == rgb, f"{name} at {pos} is {px(*pos)}, want {rgb} (red/blue swapped?)"
+            results.append(("raylib-colours", True, "real colours on screen (SKYBLUE, GREEN, MAROON, RAYWHITE)"))
+        except Exception as e:                 # noqa: BLE001
+            results.append(("raylib-colours", False, str(e)))
+        try:
+            assert g.wait("rldemo: ok", 30, mark), "rldemo did not finish: " + g.text(mark)[-300:]
+            assert g.wait("app exit code: 0", 20, mark), g.text(mark)[-300:]
+        except Exception as e:                 # noqa: BLE001
+            results.append(("raylib-exit", False, str(e)))
+        assert "NimixOS" in g.run("version"), "shell dead after rldemo"
+    finally:
+        g.close()
+    return results
+
+
 def test_user_faults(tmp, iso, bios, kernel) -> list:
     """Ring-3 faults kill only the faulting task: one boot survives them all."""
     results = []
@@ -425,6 +529,8 @@ def main():
             results += test_clock(tmp, a.iso, a.bios)
             results += test_libc(tmp, a.iso, a.bios)
             results += test_fpu(tmp, a.iso, a.bios)
+            results += test_display(tmp, a.iso, a.bios)
+            results += test_raylib(tmp, a.iso, a.bios)
             results += test_crashes(tmp, a.iso, a.bios, a.kernel)
     for name, ok, msg in results:
         print(f"{'PASS' if ok else 'FAIL'}: {name:12} {msg}")

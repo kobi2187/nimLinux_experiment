@@ -98,6 +98,17 @@ proc abiBufMap*(h: uint32): pointer {.nimcall.} =
   applyRights(t)
   cast[pointer](a)
 
+proc kbufReadable*(h: uint32; base: var uint64; size: var int): bool =
+  ## For kernel services that read the caller's memory on its behalf (display
+  ## present): the buffer's address and size, only if the CALLER may read it right
+  ## now. A buffer it moved or lent away, or a stale or foreign handle, gives false.
+  let t = me()
+  var w: bool
+  if gStore.bufMapAddr(t, BufHandle(h), base, w) != beOk: return false
+  if gStore.bufSize(t, BufHandle(h), size) != beOk: return false
+  applyRights(t)
+  true
+
 proc finish(e: BufError): int =
   ## Every state change of the caller takes effect before it runs again.
   applyRights(int(procTable.current))

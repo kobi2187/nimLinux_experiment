@@ -12,6 +12,7 @@ import ../../kernel/cap/capability as cap
 import ../../mm/region_allocator
 import ../../mm/user_window
 import ../buffers/kbuffers
+import ../display/display
 
 proc releaseTaskResources*(pid: uint32; regionSlot: int) =
   for ch in ownedChannels():
@@ -21,6 +22,7 @@ proc releaseTaskResources*(pid: uint32; regionSlot: int) =
       cap.capRevoke(tok)
   eventReleaseOwner(pid)
   kbufReleasePid(pid)                       # buffers: lends return, handles close
+  displayRelease(pid)                       # the display goes back to the console
   cap.capRevokeAllOf(pid)
   # Drop the owner's reference; the slot (and its user window) is released
   # when the last capability on it goes too (regionOnRelease below).
