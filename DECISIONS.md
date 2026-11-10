@@ -1828,3 +1828,29 @@ program received exactly the key sequence D D D Right Left Left Q and the charac
 - **Not yet:** mouse and touch (no pointing device in the launcher or on the event
   bus: V5e); key-repeat rate and delay are the keyboard's; no input method for
   non-US layouts (the Nim keymap is US-only too).
+
+## The ASan/UBSan job must not use refc (2026-11-10)
+
+**Found by CI** on PR #6: `make test-asan` failed on the new `test_key_vectors` with
+`runtime error: member access within misaligned address 0x7 ... FreeCell` in Nim's
+`system/alloc.nim`. It reproduced locally.
+
+**Diagnosis (by elimination, not by guessing):** a 20-line program that only splits and
+parses the 1,026-line vector string crashes the same way. Turning off UBSan's alignment
+check turns it into a real `SEGV on unknown address 0x2` inside the allocator, so it is
+a genuine crash and not a sanitizer false positive. `-d:useMalloc` is not the cause
+(still crashes without it). **`--mm:refc` + AddressSanitizer crashes once the garbage
+collector runs a cycle**; `--mm:arc` with the same flags is clean. Earlier tests
+allocated too little for the GC ever to run, so the job passed and hid the problem.
+
+**Fix:** the sanitizer job builds with `--mm:arc` (one flag, with the reason in the
+Makefile). The whole ASan+UBSan run is clean with it, including every older test, and
+the sanitizers now see every allocation, which is what the job's own comment said it
+was for. Rejected: making the new test allocation-light so the GC never runs (it
+would leave the next test that allocates to fail the same way, and the job would
+still be checking less than it claims), and `-fno-sanitize=alignment` (it would turn a
+real crash into a different real crash, and the alignment check is what found the
+misaligned kernel stack earlier).
+
+**Left as it was:** the valgrind job still uses refc with `tests/valgrind.supp` (the
+documented refc stack-scan false positives); it passed in this CI run.

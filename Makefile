@@ -431,7 +431,11 @@ test:
 # asan: AddressSanitizer + UBSan (clang/gcc), aborts on the first error.
 VALGRIND ?= valgrind --error-exitcode=1 --leak-check=full --errors-for-leak-kinds=definite --quiet \
            --suppressions=$(CURDIR)/tests/valgrind.supp   # Nim refc stack scan only
-SAN_FLAGS = -d:useMalloc --debugger:native --passC:"-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined" --passL:"-fsanitize=address,undefined"
+# ASan/UBSan build with --mm:arc, NOT the refc the plain tests use: refc's conservative
+# stack scan crashes under the sanitizers (a SEGV in system/alloc.nim) as soon as a test
+# allocates enough for the GC to run, with or without -d:useMalloc. arc has no such scan,
+# and the sanitizers then see every allocation, which is the point of this job.
+SAN_FLAGS = --mm:arc -d:useMalloc --debugger:native --passC:"-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined" --passL:"-fsanitize=address,undefined"
 
 test-valgrind:
 	@echo "=== Host tests under valgrind memcheck ==="
