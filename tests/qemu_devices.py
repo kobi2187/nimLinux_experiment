@@ -483,6 +483,78 @@ def test_raylib(tmp, iso, bios) -> list:
     return results
 
 
+def test_raylib_keys(tmp, iso, bios) -> list:
+    """V5c: keyboard input into raylib. Real key events injected through QEMU (the
+    virtio keyboard) reach the program as raylib key codes and characters, move a
+    square on the screen, and do NOT reach the shell: input follows display ownership.
+    Each key waits for the program's own acknowledgement (its log line) before the
+    next is sent: a frame takes a while under TCG, and two taps in one frame are one
+    IsKeyPressed edge by raylib's design."""
+    results = []
+    shots = [os.path.join(tmp, f"keys{i}.ppm") for i in range(2)]
+    RED, BG = (230, 41, 55), (245, 245, 245)
+    KEY_D, KEY_RIGHT, KEY_LEFT, KEY_Q = 68, 262, 263, 81          # raylib 6.2 KeyboardKey values
+
+    def pixel(ppm, x, y):
+        sw, sh, px = read_ppm(ppm)
+        i = (y * sw + x) * 3
+        return tuple(px[i:i + 3])
+
+    g = boot(tmp, iso=iso, bios=bios, devices=("blk", "gpu", "input"))
+    try:
+        mark = len(g.out)
+        g.type("rlkeys")
+
+        def press(name, code):
+            seen = len(g.out)
+            g.qmp.send_key(name)
+            assert g.wait(f"rlkeys: key {code}", 15, seen), f"the program never saw {name}: " + g.text(seen)[-300:]
+            time.sleep(0.4)                    # let the frame that reacts to it be drawn
+
+        try:
+            assert g.wait("rlkeys: ready", 60, mark), "never started: " + g.text(mark)[-500:]
+            time.sleep(1.0)
+            g.qmp.screendump(shots[0], device="gpu0")
+            assert pixel(shots[0], 40, 170) == RED and pixel(shots[0], 100, 170) == BG, "start position wrong"
+            keys_mark = len(g.out)
+            for _ in range(3):
+                press("d", KEY_D)
+            g.qmp.screendump(shots[1], device="gpu0")
+            assert pixel(shots[1], 40 + 60, 170) == RED, f"3 x D: square not at step 3: {pixel(shots[1], 100, 170)}"
+            assert pixel(shots[1], 40, 170) == BG, "the square is also still at step 0"
+            results.append(("keys-move", True, "3 injected D presses moved the square 3 steps on screen"))
+        except Exception as e:                 # noqa: BLE001
+            results.append(("keys-move", False, str(e)))
+        try:
+            press("right", KEY_RIGHT)
+            press("left", KEY_LEFT)
+            press("left", KEY_LEFT)
+            g.qmp.send_key("q")
+            assert g.wait("rlkeys: ok", 20, mark), "did not quit on Q: " + g.text(mark)[-400:]
+            out = g.text(mark)
+            seq = [int(x) for x in re.findall(r"rlkeys: key (\d+)", out)]
+            assert seq == [KEY_D] * 3 + [KEY_RIGHT, KEY_LEFT, KEY_LEFT, KEY_Q], f"keys received: {seq}"
+            m = re.search(r'rlkeys: x=(-?\d+) text="([^"]*)"', out)
+            assert m and m.group(1) == "2", f"final position {m and m.group(1)}, want 2 (3 +1 -1 -1)"
+            assert m.group(2) == "ddd", f"characters received: {m.group(2)!r}, want 'ddd'"
+            results.append(("keys-received", True, "exact key sequence D D D Right Left Left Q; characters 'ddd'; x = 2"))
+        except Exception as e:                 # noqa: BLE001
+            results.append(("keys-received", False, str(e)))
+        try:
+            g.wait(PROMPT, 10, mark)
+            time.sleep(0.5)
+            out = g.run("version")
+            assert "NimixOS" in out, "shell dead: " + out[-200:]
+            typed = g.text(keys_mark)
+            assert "Unknown command" not in typed, "the shell received the program's keystrokes: " + typed[-300:]
+            results.append(("keys-not-leaked", True, "the shell did not receive the keys typed into the program"))
+        except Exception as e:                 # noqa: BLE001
+            results.append(("keys-not-leaked", False, str(e)))
+    finally:
+        g.close()
+    return results
+
+
 def test_user_faults(tmp, iso, bios, kernel) -> list:
     """Ring-3 faults kill only the faulting task: one boot survives them all."""
     results = []
@@ -531,6 +603,7 @@ def main():
             results += test_fpu(tmp, a.iso, a.bios)
             results += test_display(tmp, a.iso, a.bios)
             results += test_raylib(tmp, a.iso, a.bios)
+            results += test_raylib_keys(tmp, a.iso, a.bios)
             results += test_crashes(tmp, a.iso, a.bios, a.kernel)
     for name, ok, msg in results:
         print(f"{'PASS' if ok else 'FAIL'}: {name:12} {msg}")

@@ -124,7 +124,7 @@ nim-apps: build/apps/ping_server.elf \
 # stubs in build/nimix_abi_stub.o and finds `appMain` by name, so the image must
 # keep its symbol table (no strip).
 PICOLIBC_INSTALL = build/picolibc/install
-C_APPS = libctest fputest gfxtest rldemo
+C_APPS = libctest fputest gfxtest rldemo rlkeys
 CC_INC := $(shell gcc -print-file-name=include)
 LIBGCC := $(shell gcc -print-libgcc-file-name)
 C_FLAGS = -O2 -Wall -Wextra -fPIC -ffreestanding -fno-stack-protector -mno-red-zone \
@@ -165,6 +165,8 @@ $(RAYLIB_NIMIX)/librl.a: $(RL_OBJS)
 # per-app extras for the generic C-app rule below
 LIBS_rldemo = $(RAYLIB_NIMIX)/librl.a
 CFLAGS_rldemo = -I$(RAYLIB_NIMIX_ABS)/src
+LIBS_rlkeys = $(LIBS_rldemo)
+CFLAGS_rlkeys = $(CFLAGS_rldemo)
 
 $(addprefix build/apps/,$(addsuffix .elf,$(C_APPS))): build/apps/%.elf: apps/c/$$*/$$*.c build/libnimix/libnimix.a build/nimix_abi_weak.o $$(LIBS_$$*)
 	@mkdir -p build/apps
@@ -366,6 +368,7 @@ HOST_TESTS = \
   tests/test_pit.nim \
   tests/test_tsc_clock.nim \
   tests/test_display_checks.nim \
+  tests/test_key_vectors.nim \
   tests/test_event_server.nim \
   tests/test_driver_registry.nim \
   tests/test_module_loader.nim \
@@ -428,7 +431,11 @@ test:
 # asan: AddressSanitizer + UBSan (clang/gcc), aborts on the first error.
 VALGRIND ?= valgrind --error-exitcode=1 --leak-check=full --errors-for-leak-kinds=definite --quiet \
            --suppressions=$(CURDIR)/tests/valgrind.supp   # Nim refc stack scan only
-SAN_FLAGS = -d:useMalloc --debugger:native --passC:"-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined" --passL:"-fsanitize=address,undefined"
+# ASan/UBSan build with --mm:arc, NOT the refc the plain tests use: refc's conservative
+# stack scan crashes under the sanitizers (a SEGV in system/alloc.nim) as soon as a test
+# allocates enough for the GC to run, with or without -d:useMalloc. arc has no such scan,
+# and the sanitizers then see every allocation, which is the point of this job.
+SAN_FLAGS = --mm:arc -d:useMalloc --debugger:native --passC:"-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined" --passL:"-fsanitize=address,undefined"
 
 test-valgrind:
 	@echo "=== Host tests under valgrind memcheck ==="

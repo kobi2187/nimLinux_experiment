@@ -11,6 +11,7 @@
 import display_checks
 import ../buffers/kbuffers
 import ../console/fb_console
+import ../console/console_input
 import ../process_table
 import ../../drivers/virtio/virtio_gpu
 import ../../mm/region_allocator
@@ -82,6 +83,7 @@ proc abiDisplayPresent*(reqp: pointer): int {.nimcall.} =
   if gOwnerPid == 0:                               # first present: take the screen
     gOwnerPid = pid
     fbConsoleSuspend(true)
+    consoleInputGrab(true)                          # input follows the display
     klogInt(llInfo, "display: owned by pid ", int64(pid))
   let src = cast[ptr UncheckedArray[byte]](base)
   let rowBytes = int(q.w) * BytesPerPixel
@@ -96,5 +98,6 @@ proc displayRelease*(pid: uint32) =
   ## Task exit, kill or fault: hand the screen back to the console.
   if gOwnerPid != 0 and gOwnerPid == pid:
     gOwnerPid = 0
+    consoleInputGrab(false)
     fbConsoleSuspend(false)
     klogInt(llInfo, "display: released by pid ", int64(pid))

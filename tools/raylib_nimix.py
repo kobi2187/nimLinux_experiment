@@ -21,8 +21,9 @@ What changes, relative to the memory platform:
     display's B8G8R8X8, see the comment there) and calls nimixDisplayPresent: one
     kernel call per frame;
   - SetWindowPosition places the window on the display;
-  - the terminal-polling input (termios/fcntl) is dropped; input arrives from the
-    event bus (V5c).
+  - the terminal-polling input (termios/fcntl) is dropped; keys arrive from the event
+    bus: evdev events on the "input" topic, mapped to raylib's KeyboardKey and to
+    characters by libnimix/nimix_keymap.h (V5c).
 Usage: tools/raylib_nimix.py [repo_root]
 """
 import os
@@ -50,8 +51,10 @@ def adapt(text):
     #include <unistd.h>
     #include <fcntl.h>
 #endif
-''', '''// NimixOS: the display ABI (docs/proposals/display_abi.md) and owned buffers.
+''', '''// NimixOS: the display ABI (docs/proposals/display_abi.md), owned buffers, the event bus,
+// and evdev -> raylib key mapping (libnimix/nimix_keymap.h, host-tested).
 #include "nimix_abi.h"
+#include "nimix_keymap.h"
 ''', "include block")
 
     text = sub_once(text, '''typedef struct {
@@ -60,6 +63,9 @@ def adapt(text):
     unsigned int *pixels;   // Pointer to pixel data buffer (RGBA8888 format; B8G8R8X8 once swizzled)
     unsigned int bufHandle; // NimixOS: the owned buffer pixels live in (what nimixDisplayPresent reads)
     int posX, posY;         // NimixOS: where the window sits on the display
+    unsigned int inputTok;  // NimixOS: our subscription to the "input" event topic (0 = none)
+    NimixKeyState keys;     // NimixOS: modifier state for turning key events into characters
+    unsigned char releaseNext[MAX_KEYBOARD_KEYS];   // NimixOS: a tap's release, held back one frame
 ''', "PlatformData")
 
     text = sub_once(text, '''#if !defined(_WIN32)
@@ -90,6 +96,16 @@ static char getch(void) { return getchar(); }   // Get pressed character
     platform.posY = (y < 0)? 0 : y;
 ''', "SetWindowPosition body")
 
+    text = sub_once(text, '''    // Register previous keys states
+    // NOTE: Android supports up to 260 keys
+    for (int i = 0; i < 260; i++)
+''', '''    // Register previous keys states.
+    // NimixOS: ALL keys, not the first 260 (an Android limit the memory platform inherited):
+    // with the stock loop the previous state of the arrows, Home/End, F-keys... stays 0
+    // forever, so IsKeyPressed() fires on every frame such a key is down, not once.
+    for (int i = 0; i < MAX_KEYBOARD_KEYS; i++)
+''', "previous key states cover only 260 keys")
+
     text = sub_once(text, '''
     // Check for key pressed to exit
     if (kbhit())
@@ -98,7 +114,39 @@ static char getch(void) { return getchar(); }   // Get pressed character
         if (key == 27) CORE.Window.shouldClose = true; // KEY_ESCAPE
     }
 ''', '''
-    // NimixOS: keys arrive from the event bus (V5c); nothing is polled from a terminal.
+    // NimixOS: keys arrive on the "input" event topic as evdev triples (type, code, value),
+    // 8 bytes each. Drain everything pending: while this program owns the display the
+    // kernel console ignores key events, so they are ours alone.
+    // A tap delivers press and release together. If both land in one poll the key would
+    // end the frame "up" and IsKeyPressed() would never see it, so a release of a key
+    // that went down in this same poll is applied at the start of the NEXT poll.
+    for (int i = 0; i < MAX_KEYBOARD_KEYS; i++)
+        if (platform.releaseNext[i]) { CORE.Input.Keyboard.currentKeyState[i] = 0; platform.releaseNext[i] = 0; }
+
+    unsigned char ev[8];
+    while (platform.inputTok != 0 && nimixEventPoll(platform.inputTok, ev, sizeof(ev)) == (int)sizeof(ev))
+    {
+        unsigned int type = (unsigned int)ev[0] | ((unsigned int)ev[1] << 8);
+        unsigned int code = (unsigned int)ev[2] | ((unsigned int)ev[3] << 8);
+        int value = (int)((unsigned int)ev[4] | ((unsigned int)ev[5] << 8) | ((unsigned int)ev[6] << 16) | ((unsigned int)ev[7] << 24));
+        if (type != NIMIX_EV_KEY) continue;     // mouse and others: no device yet
+
+        int ch = nimix_key_feed(&platform.keys, code, value);   // also tracks shift/ctrl/caps
+        int key = nimix_evdev_to_raylib(code);
+        if (key > 0 && key < MAX_KEYBOARD_KEYS)
+        {
+            if (value == 0 && CORE.Input.Keyboard.previousKeyState[key] == 0 && CORE.Input.Keyboard.currentKeyState[key] == 1)
+                platform.releaseNext[key] = 1;                                 // a tap: show it down for one frame
+            else
+                CORE.Input.Keyboard.currentKeyState[key] = (value != 0)? 1 : 0;   // 0 release, 1 press, 2 repeat
+            if (value == 1 && CORE.Input.Keyboard.keyPressedQueueCount < MAX_KEY_PRESSED_QUEUE)
+                CORE.Input.Keyboard.keyPressedQueue[CORE.Input.Keyboard.keyPressedQueueCount++] = key;
+            if (value == 2) CORE.Input.Keyboard.keyRepeatInFrame[key] = 1;
+            if (value == 1 && key == CORE.Input.Keyboard.exitKey) CORE.Window.shouldClose = true;
+        }
+        if (ch > 0 && value != 0 && CORE.Input.Keyboard.charPressedQueueCount < MAX_CHAR_PRESSED_QUEUE)
+            CORE.Input.Keyboard.charPressedQueue[CORE.Input.Keyboard.charPressedQueueCount++] = ch;
+    }
 ''', "PollInputEvents terminal polling")
 
     text = sub_once(text, '''        // Load memory framebuffer with desired screen size
@@ -127,6 +175,7 @@ static char getch(void) { return getchar(); }   // Get pressed character
             return -1;
         }
         platform.bufHandle = (unsigned int)handle;
+        platform.inputTok = nimixEventSubscribe("input");
 ''', "framebuffer allocation")
 
     text = sub_once(text, '''    RL_FREE(platform.pixels);
