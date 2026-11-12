@@ -4,6 +4,14 @@ Last updated: 2026-10-27 (session 9e, branch `ccr-56330414-wo65nx`, cloud contai
 
 
 
+## Session 9l — syscall hardening (V14)
+
+Autonomous. The standing seam (syscalls trust user pointers) is closed: one table in
+`kernel/abi/user_args.nim`, checked at the gate, arena rights per block (read vs write), reflection
+test ties it to the ABI. `abifuzz` found two kernel-crash bugs (mapAnon assert; sipAlloc negative
+size wraps the bump pointer): fixed. `make test-devices` 35/35. **Next:** V6 render server
+(design pass; needs rings), V5d, V2c, V4b. All stacked on PR #7's branch.
+
 ## Session 9k — pointer input (V5e)
 
 Autonomous stretch. **Done** (stacked on PR #7's branch): every virtio-input device driven; tablet + mouse

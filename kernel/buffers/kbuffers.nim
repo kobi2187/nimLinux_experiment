@@ -22,6 +22,7 @@ import ../../kernel/process_table
 import ../../kernel/cap/capability as cap
 import ../../arch/x86_64/cpu_primitives
 import ../../core/log
+import ../abi/user_args
 
 const DefaultBudget = 16 * BlockSize      ## 32 MB of arena per task
 
@@ -33,6 +34,9 @@ type
     n*: uint32
     handle*: array[MaxMsgFlights, uint32]
     mode*: array[MaxMsgFlights, uint32]
+
+static: doAssert sizeof(BufMsgHandles) == BufMsgHandlesBytes,
+  "kernel/abi/user_args.nim checks BufMsgHandles pointers by this size"
 
 var
   gStore: BufStore
@@ -107,6 +111,21 @@ proc kbufReadable*(h: uint32; base: var uint64; size: var int): bool =
   if gStore.bufMapAddr(t, BufHandle(h), base, w) != beOk: return false
   if gStore.bufSize(t, BufHandle(h), size) != beOk: return false
   applyRights(t)
+  true
+
+proc kbufAccessible*(p, n: uint64; write: bool): bool =
+  ## May the RUNNING task read (write) arena bytes [p, p+n)? Per block, from the rights the
+  ## page tables currently carry for it. The kernel dereferences syscall arguments with supervisor
+  ## rights, which ignore those page rights, so the syscall gate asks here first.
+  if n == 0: return true
+  if not gReady or p < ArenaBase: return false
+  let first = int((p - ArenaBase) div uint64(BlockSize))
+  let last = int((p + n - 1 - ArenaBase) div uint64(BlockSize))
+  if last >= gArenaBlocks: return false
+  for i in first .. last:
+    if write:
+      if gApplied[i] != acReadWrite: return false
+    elif gApplied[i] == acNone: return false
   true
 
 proc finish(e: BufError): int =

@@ -1912,3 +1912,48 @@ panicked the kernel. It casts now. The `pointer` test sends a negative relative 
 
 **Left open (V5e):** touch and gestures; a focus model beyond "the display owner gets all input"
 (needs windows, V6); `SetMousePosition` / cursor lock (no cursor ownership yet).
+
+---
+
+## 2026-11-12 — V14: ring-3 syscall arguments are checked at the gate
+
+**Context.** The standing seam from V5a: only the display calls validated the pointers a ring-3
+program passes; every other syscall copied from or to whatever address it was given, with the
+kernel's own rights. Any program could read or write kernel memory, another task's region or
+another task's buffers through `nimixFsRead`, `nimixGetArgs`, `nimixWrite`... A hostile-argument
+program (`abifuzz`) was written first, to see what breaks.
+
+**Decision.** One table, one check, at the gate:
+- `kernel/abi/user_args.nim` (pure, host-tested) says, per syscall, which arguments are pointers and
+  how big the memory behind each must be: NUL-terminated strings (<= 512 bytes, inside one range),
+  buffers (pointer + length argument, element size, overflow-safe), fixed structs (optional or not),
+  and whether the kernel reads or *writes* through it. A call whose pointers leave the caller's own
+  memory is refused at `syscallDispatch` (returns -1; 0 for the two token-returning calls) before
+  any kernel code runs. The first eight refusals are logged.
+- "The caller's own memory" = its region, plus the arena blocks the buffers store currently grants
+  it: read for what the kernel reads, **read-write for what it writes** (`kbufAccessible`, from the
+  page rights already applied per task). So a sealed or borrowed buffer is not a target for a
+  kernel write, and another task's buffer is not reachable at all. This closes the arena seam the
+  first draft of this decision had left open.
+- Host test cross-checks the table against the ABI vtable by reflection: every syscall with a
+  `pointer` or `cstring` parameter must have a spec, with the same count, and the refusal value
+  must match the return type. A new syscall cannot be added without deciding how its pointers are
+  checked. `BufMsgHandles`' size is asserted against the table at compile time.
+
+**Rejected:** validating inside each syscall implementation (the same code runs for kernel tasks
+that legitimately pass kernel pointers, and it spreads the policy over 20 places); killing the task
+on a bad pointer (a refusal code is what a program can handle, and what Linux's EFAULT does);
+page-table walking per byte (the region/arena ranges plus per-block rights are exact for our layout
+and cheap).
+
+**Bugs the hostile program found (both fixed, with host tests):**
+1. `nimixMapAnon(size <= 0)` hit an `assert` in the kernel: any ring-3 program could panic it.
+2. `sipAlloc` with a negative size (e.g. -16) wrapped `bump + aligned` and moved the bump pointer
+   BACKWARDS: later allocations overlapped earlier ones. Sizes are now range-checked first.
+
+**Left open:** a pointer to the *app's own region* that the kernel treats as writable also covers
+its code pages (the region is one range; W^X inside a region is a loader matter); `nimixChanCall`'s
+5th argument (replyBufLen) cannot cross the 4-register gate, so it is always 0 (a latent API
+defect, recorded in the spec table); blocking calls (`nimixSleep` with huge ticks) are the
+program's own affair. TOCTOU: the kernel is not preempted between check and use on a single CPU,
+and other tasks cannot remap a region; revisit with SMP.

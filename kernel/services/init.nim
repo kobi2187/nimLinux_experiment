@@ -35,6 +35,7 @@ import ../../kern/interrupts
 import ../../arch/x86_64/syscall_gate
 import ../../kernel/abi/nimix_abi_impl   # user-fault policy
 import ../../kernel/abi/task_cleanup
+import ../../kernel/abi/user_args_gate
 import ../buffers/kbuffers
 import ../../fs/fatfs
 import ../../fs/fatfs_write   # registerFatFs
@@ -237,6 +238,7 @@ proc initSyscallGate*() =
   ## Wire ring-0 <-> ring-3 syscall dispatch, and the user-fault policy that
   ## comes with ring 3: a CPU fault in a user task kills that task (like exit)
   ## instead of halting the machine — kernel state is intact.
+  syscallArgsCheck = kernelUserArgsOk            # ring-3 pointer arguments must stay in the caller's memory
   syscallGateInit()
   installRegionReleaseHook()
   kbufInit()

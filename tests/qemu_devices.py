@@ -715,6 +715,37 @@ def test_raylib_mouse(tmp, iso, bios) -> list:
     return results
 
 
+def test_abi_hostile(tmp, iso, bios) -> list:
+    """V14: a ring-3 program passes hostile arguments (NULL, kernel and foreign addresses,
+    wrapping and negative sizes, unterminated names, stale handles and tokens) to every syscall.
+    Each must be refused and the kernel must carry on: the program reports all checks passed,
+    no kernel panic or CPU exception appears on serial, and the shell still answers."""
+    results = []
+    g = boot(tmp, iso=iso, bios=bios, devices=("blk",))
+    try:
+        try:
+            mark = len(g.out)
+            g.type("abifuzz")
+            done = g.wait("app exit code", 90, mark)
+            out = g.text(mark)
+            assert "KERNEL PANIC" not in out and "CPU EXCEPTION" not in out, "the kernel died: " + out[-700:]
+            assert done, "abifuzz did not finish: " + out[-500:]
+            assert "abifuzz: FAIL" not in out, "refusal failures:\n" + "\n".join(l for l in out.splitlines() if "FAIL" in l)[:800]
+            m = re.search(r"abifuzz: (\d+) checks, (\d+) failed", out)
+            assert m and m.group(2) == "0", f"abifuzz: {m and m.group(0)}"
+            assert "abifuzz: ok" in out, out[-400:]
+            assert "syscall refused" in out, "the kernel never logged a refused call (is the gate check installed?)"
+            results.append(("abi-hostile", True, f"{m.group(1)} hostile and legitimate calls, all as expected; kernel alive"))
+        except Exception as e:                 # noqa: BLE001
+            results.append(("abi-hostile", False, str(e)))
+        out = g.run("version")
+        if "NimixOS" not in out:
+            results.append(("abi-hostile-alive", False, "shell dead after abifuzz: " + out[-300:]))
+    finally:
+        g.close()
+    return results
+
+
 def test_user_faults(tmp, iso, bios, kernel) -> list:
     """Ring-3 faults kill only the faulting task: one boot survives them all."""
     results = []
@@ -766,6 +797,7 @@ def main():
             results += test_raylib(tmp, a.iso, a.bios)
             results += test_raylib_keys(tmp, a.iso, a.bios)
             results += test_raylib_mouse(tmp, a.iso, a.bios)
+            results += test_abi_hostile(tmp, a.iso, a.bios)
             results += test_crashes(tmp, a.iso, a.bios, a.kernel)
     for name, ok, msg in results:
         print(f"{'PASS' if ok else 'FAIL'}: {name:12} {msg}")
