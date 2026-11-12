@@ -96,7 +96,7 @@ proc testNet() =
     say("devtest net: send failed\n")
 
 proc testInput() =
-  if not gInput.ready:
+  if gInputCount == 0:
     say("devtest input: not available\n"); return
   let tok = eventSubscribe("input")
   say("devtest input: listening 5 s\n")
@@ -109,13 +109,17 @@ proc testInput() =
       let typ  = uint16(p.data[0]) or (uint16(p.data[1]) shl 8)
       let code = uint16(p.data[2]) or (uint16(p.data[3]) shl 8)
       let val  = uint32(p.data[4]) or (uint32(p.data[5]) shl 8)
-      if typ == 1:                            # EV_KEY (skip EV_SYN frames)
+      if typ == 1:                            # EV_KEY (skip EV_SYN frames); buttons are keys too
         say("input: key code="); sayInt(int64(code)); say(" value="); sayInt(int64(val)); say("\n")
+      elif typ == 2 or typ == 3:              # EV_REL (mouse) / EV_ABS (tablet)
+        say(if typ == 2: "input: rel code=" else: "input: abs code="); sayInt(int64(code))
+        say(" value="); sayInt(int64(cast[int32](uint32(p.data[4]) or (uint32(p.data[5]) shl 8) or
+                                          (uint32(p.data[6]) shl 16) or (uint32(p.data[7]) shl 24)))); say("\n")
       inc seen
     else:
       hlt()
   eventUnsubscribe(tok)
-  say("devtest input: done, events="); sayInt(seen); say(" irq-events="); sayInt(int64(gInput.evCount)); say("\n")
+  say("devtest input: done, events="); sayInt(seen); say(" devices="); sayInt(int64(gInputCount)); say(" irq-events="); sayInt(int64(gInputs[0].evCount)); say("\n")
 
 proc crashPageFault() {.noinline.} =
   let p = cast[ptr uint64](0x7FFF_DEAD_0000'u64)   # unmapped

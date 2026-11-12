@@ -38,8 +38,10 @@ proc keyEventChar(): int =
     let p = ev.get().payload.data            # virtio_input_event: type, code, value
     let typ  = uint16(p[0]) or (uint16(p[1]) shl 8)
     let code = uint16(p[2]) or (uint16(p[3]) shl 8)
-    let val  = int32(uint32(p[4]) or (uint32(p[5]) shl 8) or
-                     (uint32(p[6]) shl 16) or (uint32(p[7]) shl 24))
+    # cast, not a conversion: a pointer's relative motion is negative (0xFFFFFFFD = -3), and
+    # a checked uint32 -> int32 conversion of it is a RangeDefect (a kernel panic).
+    let val  = cast[int32](uint32(p[4]) or (uint32(p[5]) shl 8) or
+                           (uint32(p[6]) shl 16) or (uint32(p[7]) shl 24))
     if typ == EvKey:
       let c = gKeys.keyToChar(code, val)
       if c != NoChar: return c

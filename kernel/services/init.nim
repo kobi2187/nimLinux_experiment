@@ -181,9 +181,13 @@ proc initVirtioDevices*() =
     klog(llWarn, "[SERVICES] virtio-snd: not available")
 
   if virtioInputInit():
-    gInput.onEvent = publishInputEvent
-    wirePciIrq(gInput.irqLine, virtioInputIrqHandler)
-    klogInt(llInfo, "[SERVICES] ✓ virtio-input: IRQ line ", int64(gInput.irqLine))
+    gInputOnEvent = publishInputEvent
+    for i in 0 ..< gInputCount:                 # the handler drains all devices: wire each distinct line once
+      var seen = false
+      for k in 0 ..< i:
+        if gInputs[k].irqLine == gInputs[i].irqLine: seen = true
+      if not seen: wirePciIrq(gInputs[i].irqLine, virtioInputIrqHandler)
+    klogInt(llInfo, "[SERVICES] ✓ virtio-input: devices ", int64(gInputCount))
   else:
     klog(llWarn, "[SERVICES] virtio-input: not available")
 

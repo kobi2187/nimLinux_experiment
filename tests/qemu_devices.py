@@ -210,13 +210,36 @@ def test_devices(tmp, iso, bios) -> list:
             time.sleep(0.5)
             for k in ("a", "b"):
                 g.qmp.send_key(k)
-            g.wait(PROMPT, 15, mark + 14)
+            assert g.wait("devtest input: done", 15, mark), "devtest input did not finish"
             out = g.text(mark)
             for code in (30, 48):
                 for val in (1, 0):
                     assert f"key code={code} value={val}" in out, f"missing key {code}/{val}: {out[-300:]}"
+            g.wait(PROMPT, 10, mark)             # the shell is idle again before the next command
             return "a/b down+up delivered by IRQ"
         step("input", None, "", input_check)
+
+        def pointer_check():
+            """The mouse and the tablet are driven too, not just the keyboard: a tablet
+            position, a relative move and a button press arrive as evdev events."""
+            g.type("")                           # submit the a/b the previous check left on the line
+            time.sleep(0.5)
+            mark = len(g.out)
+            g.type("devtest input")
+            assert g.wait("listening", 15, mark), "devtest input did not start: " + g.text(mark)[-300:]
+            time.sleep(0.5)
+            g.qmp.tablet_move(16384, 8192)
+            g.qmp.mouse_move(7, -3)
+            g.qmp.button("left", True)
+            g.qmp.button("left", False)
+            assert g.wait("devtest input: done", 15, mark), "devtest input did not finish: " + g.text(mark)[-500:]
+            out = g.text(mark)
+            for want in ("abs code=0 value=16384", "abs code=1 value=8192", "rel code=0 value=7",
+                         "rel code=1 value=-3", "key code=272 value=1", "key code=272 value=0"):
+                assert want in out, f"missing '{want}': {out[-400:]}"
+            assert "devices=3" in out, "keyboard, mouse and tablet should all be driven: " + out[-200:]
+            return "tablet abs, mouse rel and left button arrive as evdev events (3 devices)"
+        step("pointer", None, "", pointer_check)
     finally:
         g.close()                               # flushes the wav + pcap files
     # snd/net evidence is complete only after QEMU exits.

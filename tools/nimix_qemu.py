@@ -13,7 +13,7 @@ and CLI (used by the Makefile `qemu*` targets; `make gdb-attach` connects gdb).
 
 Devices (virtio-pci, what the drivers expect): blk net gpu snd input — or "all".
 Host-side evidence for each: --pcap (net frames), --wav (audio out),
-QMP screendump (gpu framebuffer), QMP input-send-event (keyboard).
+QMP screendump (gpu framebuffer), QMP input-send-event (keyboard, mouse, tablet).
 """
 import argparse
 import json
@@ -73,8 +73,11 @@ def device_args(cfg: QemuConfig) -> list:
         # streams=1: output only (stream 0) — the driver has no capture path.
         args += ["-audiodev", backend, "-device", "virtio-sound-pci,id=snd0,audiodev=a0,streams=1"]
     if "input" in devs:
+        # keyboard + a relative mouse + an absolute tablet: the three kinds of pointer
+        # event the OS must understand (EV_REL, EV_ABS; buttons are EV_KEY).
         args += ["-device", "virtio-keyboard-pci,id=kbd0",
-                 "-device", "virtio-mouse-pci,id=mouse0"]
+                 "-device", "virtio-mouse-pci,id=mouse0",
+                 "-device", "virtio-tablet-pci,id=tablet0"]
     return args
 
 
@@ -164,6 +167,23 @@ class Qmp:
                 args["device"] = console
             self.execute("input-send-event", **args)
             time.sleep(hold_ms / 1000)
+
+    def _input(self, events: list):
+        self.execute("input-send-event", events=events)
+
+    def tablet_move(self, x: int, y: int):
+        """Absolute pointer position, 0..32767 on each axis (the tablet's range)."""
+        self._input([{"type": "abs", "data": {"axis": "x", "value": x}},
+                     {"type": "abs", "data": {"axis": "y", "value": y}}])
+
+    def mouse_move(self, dx: int, dy: int):
+        """Relative pointer motion in device units."""
+        self._input([{"type": "rel", "data": {"axis": "x", "value": dx}},
+                     {"type": "rel", "data": {"axis": "y", "value": dy}}])
+
+    def button(self, name: str, down: bool):
+        """name: left, right, middle, wheel-up, wheel-down."""
+        self._input([{"type": "btn", "data": {"down": down, "button": name}}])
 
     def close(self):
         try:
