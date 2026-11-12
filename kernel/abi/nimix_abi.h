@@ -74,5 +74,17 @@ typedef struct {
     int dx, dy;             /* where it lands on the display */
 } NimixPresent;
 
-int nimixDisplayInfo(NimixDisplayInfo* out);
+int nimixDisplayInfo(NimixDisplayInfo* out);          /* the CURRENT mode */
 int nimixDisplayPresent(const NimixPresent* req);
+
+/* ── Display ABI v2: modes ─────────────────────────────────────────────────────
+ * The boot console runs in the boot mode; a graphics program picks its own.
+ * nimixDisplayModes writes up to `max` entries and returns how many modes exist
+ * (ascending by size; call with max = 0 to count). nimixDisplaySetMode switches to one of
+ * them: like a present it makes you the display owner, and the screen is cleared.
+ * nimixDisplayInfo then reports the new size. When the owner ends, the kernel restores
+ * the boot mode and repaints the console. Modes larger than the boot mode are not offered.
+ * SetMode returns 0; -1 not a listed mode; -2 another task owns the display; -3 no display. */
+typedef struct { unsigned width, height; } NimixDisplayMode;
+int nimixDisplayModes(NimixDisplayMode* out, int max);
+int nimixDisplaySetMode(unsigned width, unsigned height);

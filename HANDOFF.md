@@ -4,6 +4,13 @@ Last updated: 2026-10-27 (session 9e, branch `ccr-56330414-wo65nx`, cloud contai
 
 
 
+## Session 9j — display modes (V5f)
+
+PR #6 merged. Human: a graphics session should change the display mode, not reuse the boot
+console's. **Done:** ABI v2 (`nimixDisplayModes`, `nimixDisplaySetMode`), restore on release,
+host + QEMU tests (30/30). Ceiling is the boot framebuffer (larger modes = V4b). **Next:** V6 the
+render server (design pass first), then V5d/V5e, V2c, V4b.
+
 ## Session 9i — V2 done (picolibc), V3b decided
 
 Human: picolibc yes (musl is heavier); apps read the clock via the lightest,

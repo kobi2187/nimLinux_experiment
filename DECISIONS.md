@@ -1854,3 +1854,27 @@ misaligned kernel stack earlier).
 
 **Left as it was:** the valgrind job still uses refc with `tests/valgrind.supp` (the
 documented refc stack-scan false positives); it passed in this CI run.
+
+---
+
+## 2026-11-12 — V5f: display ABI v2, modes (human's point)
+
+**Context.** The human: an OS switches to a graphics mode for a graphics session, not the boot
+shell's mode. Until now there was exactly one mode, fixed at boot.
+
+**Decision.** Two syscalls (39 `nimixDisplayModes`, 40 `nimixDisplaySetMode`); the owner switches to a
+listed mode; the screen is cleared; the boot mode and console return when the owner ends. Details
+and rationale in `docs/proposals/display_abi.md` §v2. Mechanism: a smaller mode is a prefix of the
+boot framebuffer (new 2D resource attached to the same DMA memory, ids alternate), so no allocation.
+
+**Rejected:** scaling a fixed mode at present time (per-frame cost, does not fix stale margins; may
+return on top, in the render server); EDID-derived modes (host-window property, not an OS one);
+allocating a framebuffer per mode (can fail late; needs a free for DMA pages we do not have).
+
+**Seams / left open:** modes larger than the boot mode (needs the framebuffer sized for the maximum:
+V4b). The console now clears its background when it resumes, which also settles the V5d item
+"clear the display when ownership ends".
+
+**Test finding:** the restore check needs polling, not one sleep: the console repaints in batched
+flushes and the prompt line can land after a fixed delay. It now polls until the screen equals the
+host replay.

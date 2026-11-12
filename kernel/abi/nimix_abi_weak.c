@@ -60,3 +60,5 @@ __attribute__((weak)) int  nimixBufMsgRecv(unsigned long long tok, void* buf, in
 /* display (docs/proposals/display_abi.md): -1 bad request, -2 busy, -3 no display */
 __attribute__((weak)) int  nimixDisplayInfo(void* out) { STUB_PAD; (void)out; return -3; }
 __attribute__((weak)) int  nimixDisplayPresent(const void* req) { STUB_PAD; (void)req; return -3; }
+__attribute__((weak)) int  nimixDisplayModes(void* out, int max) { STUB_PAD; (void)out; (void)max; return -3; }
+__attribute__((weak)) int  nimixDisplaySetMode(unsigned w, unsigned h) { STUB_PAD; (void)w; (void)h; return -3; }

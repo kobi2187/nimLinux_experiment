@@ -43,7 +43,9 @@ type
     height*:     uint32
     fbBase*:     uint64
     fbSize*:     uint32
-    resourceId*: uint32
+    resourceId*: uint32   # the resource the scanout shows (alternates 1/2 across mode sets)
+    bootWidth*:  uint32   # the mode at boot: the framebuffer's size is the ceiling
+    bootHeight*: uint32
     ready*:      bool
     usePci*:     bool
     qMem*:       pointer  # DMA ring memory (alloc via allocDmaPages on PCI path)
@@ -123,27 +125,26 @@ proc gpuQueryDisplay() =
     gGpu.width  = DefaultWidth
     gGpu.height = DefaultHeight
 
-proc gpuCreateResource(): bool =
+proc gpuCreateResource(id, w, h: uint32): bool =
   var cmd = GpuResourceCreate2d(hdr: mkHdr(GpuCmdResourceCreate2d),
-    resourceId: GpuResourceId, format: GpuFormatB8G8R8X8Unorm,
-    width: gGpu.width, height: gGpu.height)
+    resourceId: id, format: GpuFormatB8G8R8X8Unorm, width: w, height: h)
   var resp: GpuCtrlHdr
   gpuSubmitCmd(addr cmd, uint32(sizeof(cmd)), addr resp, uint32(sizeof(resp))) and
     gpuCheck("virtio-gpu: RESOURCE_CREATE_2D failed", resp)
 
-proc gpuAttachBacking(): bool =
+proc gpuAttachBacking(id, bytes: uint32): bool =
   let fbPhys = if gGpu.usePci: translatePhys(cast[pointer](gGpu.fbBase))
                else: gGpu.fbBase
   var cmd = GpuAttachBacking(hdr: mkHdr(GpuCmdResourceAttachBacking),
-    resourceId: GpuResourceId, nrEntries: 1,
-    entry: GpuMemEntry(addrLo: fbPhys, length: gGpu.fbSize))
+    resourceId: id, nrEntries: 1,
+    entry: GpuMemEntry(addrLo: fbPhys, length: bytes))
   var resp: GpuCtrlHdr
   gpuSubmitCmd(addr cmd, uint32(sizeof(cmd)), addr resp, uint32(sizeof(resp))) and
     gpuCheck("virtio-gpu: ATTACH_BACKING failed", resp)
 
-proc gpuSetScanout(): bool =
+proc gpuSetScanout(id, w, h: uint32): bool =
   var cmd = GpuSetScanout(hdr: mkHdr(GpuCmdSetScanout),
-    r: fullRect(gGpu.width, gGpu.height), scanoutId: 0, resourceId: GpuResourceId)
+    r: fullRect(w, h), scanoutId: 0, resourceId: id)
   var resp: GpuCtrlHdr
   gpuSubmitCmd(addr cmd, uint32(sizeof(cmd)), addr resp, uint32(sizeof(resp))) and
     gpuCheck("virtio-gpu: SET_SCANOUT failed", resp)
@@ -184,6 +185,7 @@ proc gpuInitPci(): bool =
   gGpu = VirtioGpu(usePci: true, qMem: mem, controlq: q, resourceId: GpuResourceId)
   gpuQueryDisplay()
   gGpu.fbSize = gGpu.width * gGpu.height * 4
+  gGpu.bootWidth = gGpu.width; gGpu.bootHeight = gGpu.height
   # The framebuffer gets its own contiguous DMA allocation sized from the real
   # mode. It used to sit right after the 3 ring pages: a 1280x800 (4 MB) fb
   # overran ~4 MB of unrelated physical memory on the first draw.
@@ -192,7 +194,9 @@ proc gpuInitPci(): bool =
     klog(llError, "virtio-gpu(pci): framebuffer alloc failed")
     return false
   gGpu.fbBase = cast[uint64](fb)
-  if not (gpuCreateResource() and gpuAttachBacking() and gpuSetScanout()):
+  if not (gpuCreateResource(GpuResourceId, gGpu.width, gGpu.height) and
+          gpuAttachBacking(GpuResourceId, gGpu.fbSize) and
+          gpuSetScanout(GpuResourceId, gGpu.width, gGpu.height)):
     klog(llError, "virtio-gpu(pci): display setup failed")
     return false
   gGpu.ready = true
@@ -238,7 +242,10 @@ proc gpuInitMmio(): bool =
                    resourceId: GpuResourceId)
   gpuQueryDisplay()
   gGpu.fbSize = gGpu.width * gGpu.height * 4
-  if not (gpuCreateResource() and gpuAttachBacking() and gpuSetScanout()):
+  gGpu.bootWidth = gGpu.width; gGpu.bootHeight = gGpu.height
+  if not (gpuCreateResource(GpuResourceId, gGpu.width, gGpu.height) and
+          gpuAttachBacking(GpuResourceId, gGpu.fbSize) and
+          gpuSetScanout(GpuResourceId, gGpu.width, gGpu.height)):
     klog(llError, "virtio-gpu(mmio): display setup failed")
     return false
   setStatusBit(base, VirtioStatusOk)
@@ -265,17 +272,49 @@ proc virtioGpuPresentRect*(x, y, w, h: int) =
   let r = GpuRect(x: uint32(x0), y: uint32(y0), w: uint32(x1 - x0), h: uint32(y1 - y0))
   # offset = where the rect's first pixel lives in the backing store.
   var xfer = GpuTransferToHost2d(hdr: mkHdr(GpuCmdTransferToHost2d), r: r,
-    offset: (uint64(y0) * uint64(gGpu.width) + uint64(x0)) * 4, resourceId: GpuResourceId)
+    offset: (uint64(y0) * uint64(gGpu.width) + uint64(x0)) * 4, resourceId: gGpu.resourceId)
   var resp1: GpuCtrlHdr
   if not (gpuSubmitCmd(addr xfer, uint32(sizeof(xfer)), addr resp1, uint32(sizeof(resp1))) and
           gpuCheck("virtio-gpu: TRANSFER_TO_HOST_2D failed", resp1)): return
-  var flush = GpuResourceFlush(hdr: mkHdr(GpuCmdResourceFlush), r: r, resourceId: GpuResourceId)
+  var flush = GpuResourceFlush(hdr: mkHdr(GpuCmdResourceFlush), r: r, resourceId: gGpu.resourceId)
   var resp2: GpuCtrlHdr
   if gpuSubmitCmd(addr flush, uint32(sizeof(flush)), addr resp2, uint32(sizeof(resp2))):
     discard gpuCheck("virtio-gpu: RESOURCE_FLUSH failed", resp2)
 
 proc virtioGpuPresent*() =
   virtioGpuPresentRect(0, 0, int(gGpu.width), int(gGpu.height))
+
+proc virtioGpuBootWidth*(): uint32 = gGpu.bootWidth
+proc virtioGpuBootHeight*(): uint32 = gGpu.bootHeight
+proc virtioGpuFbBytes*(): uint32 = gGpu.fbSize
+
+proc gpuUnref(id: uint32) =
+  var cmd = GpuResourceUnref(hdr: mkHdr(GpuCmdResourceUnref), resourceId: id)
+  var resp: GpuCtrlHdr
+  if gpuSubmitCmd(addr cmd, uint32(sizeof(cmd)), addr resp, uint32(sizeof(resp))):
+    discard gpuCheck("virtio-gpu: RESOURCE_UNREF failed", resp)
+
+proc virtioGpuSetMode*(w, h: uint32): bool =
+  ## Switch the scanout to w x h. A smaller mode is a prefix of the boot framebuffer's
+  ## memory: a new 2D resource of that size is attached to it, made the scanout, and the
+  ## old resource freed. The screen is cleared to black (a new mode shows nothing of the
+  ## last one). The caller has validated the size (display_checks.modeAllowed); the bound
+  ## on the framebuffer is checked again here because this writes memory.
+  if not gGpu.ready or w == 0 or h == 0: return false
+  let bytes = uint64(w) * uint64(h) * 4
+  if bytes > uint64(gGpu.fbSize): return false
+  let fb = cast[ptr UncheckedArray[uint32]](gGpu.fbBase)
+  for i in 0 ..< int(w * h): fb[i] = 0
+  let old = gGpu.resourceId
+  let nid = if old == GpuResourceId: GpuResourceId + 1 else: GpuResourceId
+  if not gpuCreateResource(nid, w, h): return false
+  if not (gpuAttachBacking(nid, uint32(bytes)) and gpuSetScanout(nid, w, h)):
+    gpuUnref(nid)                              # the scanout still shows the old resource
+    return false
+  gpuUnref(old)
+  gGpu.resourceId = nid; gGpu.width = w; gGpu.height = h
+  virtioGpuPresentRect(0, 0, int(w), int(h))
+  true
 
 proc virtioGpuWidth*(): uint32 = (if gGpu.ready: gGpu.width else: 0'u32)
 proc virtioGpuHeight*(): uint32 = (if gGpu.ready: gGpu.height else: 0'u32)

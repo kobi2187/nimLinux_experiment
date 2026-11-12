@@ -47,7 +47,32 @@ proc testInRange() =
   assert not inRange(150, high(uint64), 100, 200), "huge length"
   echo "PASS: user range check"
 
+proc testModes() =
+  var ms: array[MaxModes, DisplayMode]
+  let boot = DisplayMode(w: 1280, h: 800)
+  let n = modeList(boot, modeBytes(boot), ms)
+  assert n == 5, "640x480 800x600 1024x768 1280x720 1280x800 (1920x1080 does not fit)"
+  for i in 1 ..< n: assert modeBytes(ms[i - 1]) < modeBytes(ms[i]), "ascending"
+  assert ms[n - 1].w == 1280 and ms[n - 1].h == 800, "the boot mode is in the list"
+  # an unusual boot mode is listed too, in order, and nothing larger is offered
+  let odd = DisplayMode(w: 1000, h: 700)
+  let m = modeList(odd, modeBytes(odd), ms)
+  var seen = false
+  for i in 0 ..< m:
+    assert modeBytes(ms[i]) <= modeBytes(odd)
+    if i > 0: assert modeBytes(ms[i - 1]) < modeBytes(ms[i])
+    if ms[i].w == 1000 and ms[i].h == 700: seen = true
+  assert seen, "boot mode listed even though it is not a standard size"
+  assert modeAllowed(800, 600, boot, modeBytes(boot))
+  assert modeAllowed(1280, 800, boot, modeBytes(boot))
+  assert not modeAllowed(1920, 1080, boot, modeBytes(boot)), "larger than the boot framebuffer"
+  assert not modeAllowed(801, 600, boot, modeBytes(boot)), "not a listed size"
+  assert not modeAllowed(0, 0, boot, modeBytes(boot))
+  assert not modeAllowed(0xFFFFFFFF'u32, 0xFFFFFFFF'u32, boot, modeBytes(boot)), "no overflow"
+  echo "PASS: mode list and validation"
+
 when isMainModule:
+  testModes()
   testAccepts()
   testRefuses()
   testNoOverflow()

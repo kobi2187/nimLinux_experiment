@@ -60,3 +60,31 @@ Host: nothing to unit-test but the rect checks (pure, `display_checks`). QEMU: a
 draws with raylib and presents; the guest screendump must equal the host render of the same
 program pixel for pixel; a second presenter is refused; the console returns when the owner exits;
 a bad rectangle and a lent-away buffer are refused.
+
+## v2: display modes (2026-11-12)
+Raised by the human: an OS switches to a graphics mode for a graphics session; it does not reuse
+the boot console's.
+
+```c
+typedef struct { unsigned width, height; } NimixDisplayMode;
+int nimixDisplayModes(NimixDisplayMode *out, int max);   /* returns how many modes exist; writes up to max */
+int nimixDisplaySetMode(unsigned width, unsigned height); /* 0, -1 not a listed mode, -2 busy, -3 no display */
+```
+- **Who may set it.** The caller becomes the display owner (as a present does) and the screen is cleared.
+  Another task's owned display answers -2. `nimixDisplayInfo` always reports the current mode.
+- **Which modes.** A fixed list of standard sizes that fit the boot framebuffer, plus the boot mode
+  (`display_checks.modeList`, host-tested). Anything else is -1: the kernel never builds a resource of
+  a size a caller made up.
+- **Restore.** When the owner ends (exit, kill, fault) the kernel sets the boot mode back and the console
+  repaints over a cleared background: the state a user sees after a game exits is the state before it.
+- **Mechanism (virtio-gpu).** A smaller mode is a prefix of the boot framebuffer's DMA memory: a new 2D
+  resource of the new size is created and attached to it, made the scanout (`SET_SCANOUT`), and the old
+  resource freed (ids alternate 1/2). No allocation, so a mode change cannot fail for lack of memory.
+- **Ceiling = boot mode.** Larger modes need a larger DMA framebuffer allocated up front (8 MB for
+  1920x1080). Not offered yet: the seam is `virtioGpuFbBytes`, and the answer belongs with V4b sizing.
+- **Rejected:** a fixed mode with scaling at present time (a compositor does that; it costs a pass per
+  frame and leaves the console's stale margins); modes taken from the host's EDID (the host window is a
+  test-harness choice, not a property of the OS).
+- **Tests.** Host: the mode list and validation. QEMU (`display-mode-set`, `display-mode-restore`): the
+  screendump is 800x600 with the host pattern and nothing else lit; bad modes are refused; afterwards the
+  screen equals the host replay of the console stream, pixel for pixel.

@@ -63,6 +63,47 @@ proc abiDisplayInfo*(outp: pointer): int {.nimcall.} =
   o.strideBytes = uint32(w * BytesPerPixel)
   0
 
+proc takeDisplay(pid: uint32) =
+  ## The caller becomes the owner (no-op if it already is): the console steps aside.
+  if gOwnerPid == 0:
+    gOwnerPid = pid
+    fbConsoleSuspend(true)
+    consoleInputGrab(true)                          # input follows the display
+    klogInt(llInfo, "display: owned by pid ", int64(pid))
+
+proc bootMode(): DisplayMode =
+  DisplayMode(w: virtioGpuBootWidth(), h: virtioGpuBootHeight())
+
+proc abiDisplayModes*(outp: pointer; max: int): int {.nimcall.} =
+  ## Display ABI v2: the modes SetMode accepts, ascending. Returns how many there are and
+  ## writes up to `max` of them (NimixDisplayMode: width, height) to outp.
+  var w, h: int
+  if not displaySize(w, h): return ErrNone
+  var ms: array[MaxModes, DisplayMode]
+  let n = modeList(bootMode(), uint64(virtioGpuFbBytes()), ms)
+  let k = if max < 0: 0 else: min(n, max)
+  if k > 0:
+    if outp == nil or not userMemoryOk(outp, k * 8): return ErrBad
+    let o = cast[ptr UncheckedArray[uint32]](outp)
+    for i in 0 ..< k:
+      o[2 * i] = ms[i].w
+      o[2 * i + 1] = ms[i].h
+  n
+
+proc abiDisplaySetMode*(w, h: uint32): int {.nimcall.} =
+  ## Display ABI v2: switch the display to w x h (one of the listed modes). Like a present,
+  ## it makes the caller the owner; the screen is cleared. The boot mode comes back, and
+  ## the console with it, when the owner ends.
+  var cw, ch: int
+  if not displaySize(cw, ch): return ErrNone
+  if not modeAllowed(w, h, bootMode(), uint64(virtioGpuFbBytes())): return ErrBad
+  let pid = procTable.tasks[procTable.current].pid
+  if gOwnerPid != 0 and gOwnerPid != pid: return ErrBusy
+  takeDisplay(pid)
+  if not virtioGpuSetMode(w, h): return ErrBad
+  klogInt(llInfo, "display: mode ", int64(w))
+  0
+
 proc abiDisplayPresent*(reqp: pointer): int {.nimcall.} =
   var dw, dh: int
   if not displaySize(dw, dh): return ErrNone
@@ -80,11 +121,7 @@ proc abiDisplayPresent*(reqp: pointer): int {.nimcall.} =
 
   let fb = cast[ptr UncheckedArray[byte]](virtioGpuFbPtr())
   if fb == nil: return ErrNone
-  if gOwnerPid == 0:                               # first present: take the screen
-    gOwnerPid = pid
-    fbConsoleSuspend(true)
-    consoleInputGrab(true)                          # input follows the display
-    klogInt(llInfo, "display: owned by pid ", int64(pid))
+  takeDisplay(pid)                                 # the first present takes the screen
   let src = cast[ptr UncheckedArray[byte]](base)
   let rowBytes = int(q.w) * BytesPerPixel
   let dstStride = dw * BytesPerPixel
@@ -98,6 +135,8 @@ proc displayRelease*(pid: uint32) =
   ## Task exit, kill or fault: hand the screen back to the console.
   if gOwnerPid != 0 and gOwnerPid == pid:
     gOwnerPid = 0
+    if virtioGpuWidth() != virtioGpuBootWidth() or virtioGpuHeight() != virtioGpuBootHeight():
+      discard virtioGpuSetMode(virtioGpuBootWidth(), virtioGpuBootHeight())   # the console's mode
     consoleInputGrab(false)
     fbConsoleSuspend(false)
     klogInt(llInfo, "display: released by pid ", int64(pid))

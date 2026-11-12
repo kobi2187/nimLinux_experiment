@@ -436,6 +436,60 @@ def test_display(tmp, iso, bios) -> list:
     return results
 
 
+def test_display_modes(tmp, iso, bios) -> list:
+    """Display ABI v2: a graphics program switches the display to its own mode. The screen
+    really is 800x600 with only the program's frame on it (the rest black), bad modes are
+    refused, and when the program ends the boot mode and the console come back exactly
+    (the console check: the whole screen equals the host replay of the console stream)."""
+    results = []
+    ppm1, ppm2 = os.path.join(tmp, "mode1.ppm"), os.path.join(tmp, "mode2.ppm")
+    g = boot(tmp, iso=iso, bios=bios, devices=("blk", "gpu"))
+    try:
+        boot_dims = None
+        try:
+            g.qmp.screendump(ppm2, device="gpu0")
+            boot_dims = read_ppm(ppm2)[:2]
+            mark = len(g.out)
+            g.type("gfxtest mode")
+            assert g.wait("gfxtest: presented", 40, mark), "never presented: " + g.text(mark)[-600:]
+            out = g.text(mark)
+            assert "FAIL" not in out, out[-600:]
+            time.sleep(0.5)
+            g.qmp.screendump(ppm1, device="gpu0")
+            sw, sh, px = read_ppm(ppm1)
+            assert (sw, sh) == (800, 600), f"screen is {sw}x{sh}, want 800x600"
+            want = gfx_pattern()
+            got = region(ppm1, 100, 50, 640, 400)
+            bad = sum(1 for i in range(0, len(want), 3) if want[i:i + 3] != got[i:i + 3])
+            assert bad == 0, f"{bad} pixels of the frame differ from the host pattern"
+            lit = sum(1 for i in range(0, len(px), 3) if px[i:i + 3] != b"\0\0\0")
+            assert lit <= 640 * 400, f"{lit} lit pixels: more than the frame (stale console?)"
+            results.append(("display-mode-set", True, f"{sw}x{sh}, frame == host pattern, nothing else lit"))
+        except Exception as e:                 # noqa: BLE001
+            results.append(("display-mode-set", False, str(e)))
+        try:
+            assert g.wait("app exit code: 0", 30, mark), "gfxtest did not exit cleanly: " + g.text(mark)[-300:]
+            g.wait(PROMPT, 10, mark)
+            detail, err = None, ""
+            for _ in range(8):                 # the console repaints in batched flushes: poll until settled
+                time.sleep(0.75)
+                g.qmp.screendump(ppm2, device="gpu0")
+                assert read_ppm(ppm2)[:2] == boot_dims, f"mode is {read_ppm(ppm2)[:2]}, boot was {boot_dims}"
+                try:
+                    detail = check_console(bytes(g.out), ppm2, tmp)
+                    break
+                except AssertionError as e:
+                    err = str(e)
+            assert detail, err
+            results.append(("display-mode-restore", True, detail))
+        except Exception as e:                 # noqa: BLE001
+            results.append(("display-mode-restore", False, str(e)))
+        assert "NimixOS" in g.run("version"), "shell dead after the mode switch"
+    finally:
+        g.close()
+    return results
+
+
 def test_raylib(tmp, iso, bios) -> list:
     """V5b: raylib 6.2 (rlsw) running on NimixOS in a ring-3 C program. The guest
     screendump must equal the host render of the same scene, and show REAL colours."""
@@ -602,6 +656,7 @@ def main():
             results += test_libc(tmp, a.iso, a.bios)
             results += test_fpu(tmp, a.iso, a.bios)
             results += test_display(tmp, a.iso, a.bios)
+            results += test_display_modes(tmp, a.iso, a.bios)
             results += test_raylib(tmp, a.iso, a.bios)
             results += test_raylib_keys(tmp, a.iso, a.bios)
             results += test_crashes(tmp, a.iso, a.bios, a.kernel)

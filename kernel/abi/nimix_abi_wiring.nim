@@ -52,3 +52,5 @@ proc wireSharedAbi*(av: var NimixAbiVTable) =
     abiBufMsgRecv(tok, buf, bufLen, cast[ptr BufMsgHandles](hs))
   av.displayInfo    = abiDisplayInfo
   av.displayPresent = abiDisplayPresent
+  av.displayModes   = abiDisplayModes
+  av.displaySetMode = abiDisplaySetMode
