@@ -1878,3 +1878,37 @@ V4b). The console now clears its background when it resumes, which also settles 
 **Test finding:** the restore check needs polling, not one sleep: the console repaints in batched
 flushes and the prompt line can land after a fixed delay. It now polls until the screen equals the
 host replay.
+
+---
+
+## 2026-11-12 — V5e: pointer input (mouse, tablet) into raylib
+
+**Context.** A graphical OS needs a pointer. The launcher already passed `virtio-mouse-pci`, but
+the driver found only the first virtio-input device (`pciVirtioFind` returns one match), so the
+mouse was never read.
+
+**Survey.** Prior art: Linux `virtio_input` (one driver instance per device; evdev events);
+raylib's own platforms (GLFW/SDL) for the frame bookkeeping the memory platform lacks.
+Adopted the evdev model unchanged (the keyboard path already used it); built the driver
+instancing (up to 4 devices, one merged stream, one IRQ handler draining all) because the existing
+driver was single-instance by construction.
+
+**Decisions.**
+- Both pointer kinds are supported: a **tablet** (EV_ABS 0..32767, scaled to the display: the right
+  device for a VM window, no capture) and a **mouse** (EV_REL, accumulated into a cursor clamped to
+  the display). Buttons are EV_KEY 272..274; the wheel is EV_REL REL_WHEEL. The launcher passes all
+  three input devices.
+- The scaling/clamping/button maths is a pure header (`libnimix/nimix_pointer.h`) with a host test,
+  like the keymap; raylib's `MouseButton` enum is checked against it.
+- raylib's memory platform has no mouse bookkeeping: the generator adds the per-frame rollover
+  (previous position and buttons, wheel reset) and the same "a click's release is held one frame"
+  rule the keys use, so a click shorter than a frame still gives both edges.
+- The OS does not draw a cursor: programs draw their own (raylib's model), and a system cursor is
+  the render server's (V6) job.
+
+**Bug found by the test:** the console's key reader converted every event value with a checked
+`int32(uint32)`; a relative move of -3 (0xFFFFFFFD) is a RangeDefect, i.e. one mouse move would have
+panicked the kernel. It casts now. The `pointer` test sends a negative relative move on purpose.
+
+**Left open (V5e):** touch and gestures; a focus model beyond "the display owner gets all input"
+(needs windows, V6); `SetMousePosition` / cursor lock (no cursor ownership yet).

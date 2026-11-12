@@ -632,6 +632,89 @@ def test_raylib_keys(tmp, iso, bios) -> list:
     return results
 
 
+def test_raylib_mouse(tmp, iso, bios) -> list:
+    """V5e: pointer input into raylib. A tablet position, mouse motion, clicks and the
+    wheel injected through QEMU arrive as raylib's mouse position, buttons and wheel; the
+    square on the screen follows the pointer and changes colour with the buttons. Paced on
+    the program's own log lines (a frame is slow under TCG)."""
+    results = []
+    shot = os.path.join(tmp, "mouse.ppm")
+    BLUE, RED, GREEN, BG = (0, 121, 241), (230, 41, 55), (0, 228, 48), (245, 245, 245)
+
+    def px_of(v, extent):                          # libnimix/nimix_pointer.h: nimix_abs_to_px
+        return (v * (extent - 1) + 16383) // 32767
+
+    def pixel(x, y):
+        g.qmp.screendump(shot, device="gpu0")
+        sw, sh, px = read_ppm(shot)
+        i = (y * sw + x) * 3
+        return tuple(px[i:i + 3])
+
+    g = boot(tmp, iso=iso, bios=bios, devices=("blk", "gpu", "input"))
+    try:
+        mark = len(g.out)
+        g.type("rlmouse")
+
+        def wait_for(line, since, what):
+            assert g.wait(line, 20, since), f"{what}: never saw '{line}': " + g.text(since)[-300:]
+            time.sleep(0.5)                    # let the frame that reacts to it be drawn
+
+        try:
+            assert g.wait("rlmouse: ready", 60, mark), "never started: " + g.text(mark)[-500:]
+            time.sleep(1.0)
+            x, y = px_of(8000, 1280), px_of(6000, 800)           # 312, 146
+            seen = len(g.out)
+            g.qmp.tablet_move(8000, 6000)
+            wait_for(f"rlmouse: pos {x} {y}", seen, "tablet move")
+            assert pixel(x, y) == BLUE and pixel(100, 300) == BG, "the square is not at the tablet position"
+            seen = len(g.out)
+            g.qmp.button("left", True)
+            wait_for("rlmouse: left down", seen, "left press")
+            assert pixel(x, y) == RED, "the square did not turn red while the left button is down"
+            seen = len(g.out)
+            g.qmp.button("left", False)
+            wait_for("rlmouse: left up", seen, "left release")
+            assert pixel(x, y) == BLUE, "the square did not return to blue"
+            results.append(("mouse-tablet", True, f"tablet -> ({x}, {y}); the square follows and turns red on the left button"))
+        except Exception as e:                 # noqa: BLE001
+            results.append(("mouse-tablet", False, str(e)))
+        try:
+            seen = len(g.out)
+            g.qmp.mouse_move(10, -6)
+            wait_for(f"rlmouse: pos {x + 10} {y - 6}", seen, "relative move")
+            assert pixel(x + 10, y - 6) == BLUE, "the square did not follow the relative motion"
+            seen = len(g.out)
+            g.qmp.mouse_move(-4000, 0)                              # far past the left edge: clamps at 0
+            wait_for(f"rlmouse: pos 0 {y - 6}", seen, "clamped move")
+            results.append(("mouse-relative", True, "mouse motion moves the pointer (+10, -6) and clamps at the display edge"))
+        except Exception as e:                 # noqa: BLE001
+            results.append(("mouse-relative", False, str(e)))
+        try:
+            seen = len(g.out)
+            g.qmp.button("right", True)                              # a quick click: press and release back to back
+            g.qmp.button("right", False)
+            wait_for("rlmouse: right up", seen, "quick right click")
+            out = g.text(seen)
+            assert out.index("rlmouse: right down") < out.index("rlmouse: right up"), "click edges out of order: " + out[-200:]
+            seen = len(g.out)
+            g.qmp.button("wheel-up", True); g.qmp.button("wheel-up", False)
+            wait_for("rlmouse: wheel 1", seen, "wheel up")
+            seen = len(g.out)
+            g.qmp.button("wheel-down", True); g.qmp.button("wheel-down", False)
+            wait_for("rlmouse: wheel -1", seen, "wheel down")
+            results.append(("mouse-buttons", True, "a quick click keeps both edges; the wheel gives +1 and -1"))
+        except Exception as e:                 # noqa: BLE001
+            results.append(("mouse-buttons", False, str(e)))
+        g.qmp.send_key("q")
+        assert g.wait("rlmouse: ok", 20, mark), "did not quit on Q: " + g.text(mark)[-300:]
+        g.wait(PROMPT, 10, mark)
+        time.sleep(0.5)
+        assert "NimixOS" in g.run("version"), "shell dead after rlmouse"
+    finally:
+        g.close()
+    return results
+
+
 def test_user_faults(tmp, iso, bios, kernel) -> list:
     """Ring-3 faults kill only the faulting task: one boot survives them all."""
     results = []
@@ -682,6 +765,7 @@ def main():
             results += test_display_modes(tmp, a.iso, a.bios)
             results += test_raylib(tmp, a.iso, a.bios)
             results += test_raylib_keys(tmp, a.iso, a.bios)
+            results += test_raylib_mouse(tmp, a.iso, a.bios)
             results += test_crashes(tmp, a.iso, a.bios, a.kernel)
     for name, ok, msg in results:
         print(f"{'PASS' if ok else 'FAIL'}: {name:12} {msg}")

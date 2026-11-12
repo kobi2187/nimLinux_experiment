@@ -23,7 +23,9 @@ What changes, relative to the memory platform:
   - SetWindowPosition places the window on the display;
   - the terminal-polling input (termios/fcntl) is dropped; keys arrive from the event
     bus: evdev events on the "input" topic, mapped to raylib's KeyboardKey and to
-    characters by libnimix/nimix_keymap.h (V5c).
+    characters by libnimix/nimix_keymap.h (V5c); mouse and tablet events (EV_REL, EV_ABS,
+    buttons, wheel) become raylib's mouse position, buttons and wheel (V5e,
+    libnimix/nimix_pointer.h).
 Usage: tools/raylib_nimix.py [repo_root]
 """
 import os
@@ -55,6 +57,7 @@ def adapt(text):
 // and evdev -> raylib key mapping (libnimix/nimix_keymap.h, host-tested).
 #include "nimix_abi.h"
 #include "nimix_keymap.h"
+#include "nimix_pointer.h"
 ''', "include block")
 
     text = sub_once(text, '''typedef struct {
@@ -66,6 +69,8 @@ def adapt(text):
     unsigned int inputTok;  // NimixOS: our subscription to the "input" event topic (0 = none)
     NimixKeyState keys;     // NimixOS: modifier state for turning key events into characters
     unsigned char releaseNext[MAX_KEYBOARD_KEYS];   // NimixOS: a tap's release, held back one frame
+    int cursorX, cursorY;   // NimixOS: the pointer on the display (a mouse moves it; a tablet sets it)
+    unsigned char btnReleaseNext[MAX_MOUSE_BUTTONS]; // NimixOS: a click's release, held back one frame
 ''', "PlatformData")
 
     text = sub_once(text, '''#if !defined(_WIN32)
@@ -106,6 +111,19 @@ static char getch(void) { return getchar(); }   // Get pressed character
     for (int i = 0; i < MAX_KEYBOARD_KEYS; i++)
 ''', "previous key states cover only 260 keys")
 
+    text = sub_once(text, '''    // TODO: Poll input events for current platform
+''', '''    // NimixOS: mouse frame bookkeeping, which the memory platform does not have: the wheel
+    // resets, the previous position and button states roll over, and a click's release that was
+    // held back a frame (see below) is applied now.
+    CORE.Input.Mouse.currentWheelMove = (Vector2){ 0.0f, 0.0f };
+    CORE.Input.Mouse.previousPosition = CORE.Input.Mouse.currentPosition;
+    for (int i = 0; i < MAX_MOUSE_BUTTONS; i++)
+    {
+        CORE.Input.Mouse.previousButtonState[i] = CORE.Input.Mouse.currentButtonState[i];
+        if (platform.btnReleaseNext[i]) { CORE.Input.Mouse.currentButtonState[i] = 0; platform.btnReleaseNext[i] = 0; }
+    }
+''', "poll input events marker")
+
     text = sub_once(text, '''
     // Check for key pressed to exit
     if (kbhit())
@@ -129,7 +147,32 @@ static char getch(void) { return getchar(); }   // Get pressed character
         unsigned int type = (unsigned int)ev[0] | ((unsigned int)ev[1] << 8);
         unsigned int code = (unsigned int)ev[2] | ((unsigned int)ev[3] << 8);
         int value = (int)((unsigned int)ev[4] | ((unsigned int)ev[5] << 8) | ((unsigned int)ev[6] << 16) | ((unsigned int)ev[7] << 24));
-        if (type != NIMIX_EV_KEY) continue;     // mouse and others: no device yet
+        if (type == NIMIX_EV_REL || type == NIMIX_EV_ABS)       // mouse motion/wheel, tablet position
+        {
+            int dw = CORE.Window.display.width, dh = CORE.Window.display.height;
+            if (type == NIMIX_EV_ABS)
+            {
+                if (code == NIMIX_ABS_X) platform.cursorX = nimix_abs_to_px(value, dw);
+                else if (code == NIMIX_ABS_Y) platform.cursorY = nimix_abs_to_px(value, dh);
+            }
+            else if (code == NIMIX_REL_X) platform.cursorX = nimix_clamp_px((int64_t)platform.cursorX + value, dw);
+            else if (code == NIMIX_REL_Y) platform.cursorY = nimix_clamp_px((int64_t)platform.cursorY + value, dh);
+            else if (code == NIMIX_REL_WHEEL) CORE.Input.Mouse.currentWheelMove.y += (float)value;
+            CORE.Input.Mouse.currentPosition = (Vector2){ (float)(platform.cursorX - platform.posX), (float)(platform.cursorY - platform.posY) };
+            CORE.Input.Mouse.cursorOnScreen = (platform.cursorX >= platform.posX) && (platform.cursorX < platform.posX + CORE.Window.screen.width) &&
+                                              (platform.cursorY >= platform.posY) && (platform.cursorY < platform.posY + CORE.Window.screen.height);
+            continue;
+        }
+        int mb = (type == NIMIX_EV_KEY)? nimix_button_to_raylib(code) : -1;
+        if (mb >= 0)                                            // BTN_LEFT / RIGHT / MIDDLE
+        {
+            if (value == 0 && CORE.Input.Mouse.previousButtonState[mb] == 0 && CORE.Input.Mouse.currentButtonState[mb] == 1)
+                platform.btnReleaseNext[mb] = 1;                // a click: show it down for one frame
+            else
+                CORE.Input.Mouse.currentButtonState[mb] = (value != 0)? 1 : 0;
+            continue;
+        }
+        if (type != NIMIX_EV_KEY) continue;
 
         int ch = nimix_key_feed(&platform.keys, code, value);   // also tracks shift/ctrl/caps
         int key = nimix_evdev_to_raylib(code);

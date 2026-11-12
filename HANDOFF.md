@@ -4,6 +4,12 @@ Last updated: 2026-10-27 (session 9e, branch `ccr-56330414-wo65nx`, cloud contai
 
 
 
+## Session 9k — pointer input (V5e)
+
+Autonomous stretch. **Done** (stacked on PR #7's branch): every virtio-input device driven; tablet + mouse
++ wheel + buttons into raylib; a kernel panic on a negative relative move fixed. `make test-devices` 34/34.
+**Next:** V6 render server design pass, V5d damage present, V2c, V4b.
+
 ## Session 9j — display modes (V5f)
 
 PR #6 merged. Human: a graphics session should change the display mode, not reuse the boot
