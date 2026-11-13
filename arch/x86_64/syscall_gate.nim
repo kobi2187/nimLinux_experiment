@@ -19,6 +19,7 @@
 ##   SFMASK      = clears IF on entry (bit 9)
 
 import ./cpu_primitives
+import ../../kernel/abi/user_args   # refusedResult
 import ./tss
 import ../../kernel/abi/nimix_abi as abiMod
 
@@ -70,8 +71,10 @@ type NimixSyscall* = enum
   scBufMsgRecv     = 36
   scDisplayInfo    = 37
   scDisplayPresent = 38
+  scDisplayModes   = 39
+  scDisplaySetMode = 40
 
-const NimixSyscallCount* = 39   ## total number of syscalls
+const NimixSyscallCount* = 41   ## total number of syscalls
 
 const NimixSyscallSymbol*: array[NimixSyscall, cstring] = [
   ## App-side ABI symbol for each syscall — the ONE list the ELF loader patches
@@ -96,7 +99,8 @@ const NimixSyscallSymbol*: array[NimixSyscall, cstring] = [
   scBufClose: "nimixBufClose", scBufSeal: "nimixBufSeal",
   scBufReturn: "nimixBufReturn", scBufMsgSend: "nimixBufMsgSend",
   scBufMsgRecv: "nimixBufMsgRecv",
-  scDisplayInfo: "nimixDisplayInfo", scDisplayPresent: "nimixDisplayPresent"]
+  scDisplayInfo: "nimixDisplayInfo", scDisplayPresent: "nimixDisplayPresent",
+  scDisplayModes: "nimixDisplayModes", scDisplaySetMode: "nimixDisplaySetMode"]
 
 # ── Dispatch table ────────────────────────────────────────────────────────────
 # Raw function pointers indexed by NimixSyscall ordinal.
@@ -146,13 +150,22 @@ proc syscallTableInit*() =
   syscallTable[36] = cast[uint64](v.bufMsgRecv)
   syscallTable[37] = cast[uint64](v.displayInfo)
   syscallTable[38] = cast[uint64](v.displayPresent)
+  syscallTable[39] = cast[uint64](v.displayModes)
+  syscallTable[40] = cast[uint64](v.displaySetMode)
+
+var syscallArgsCheck*: proc(nr: uint64; a: array[4, uint64]): bool {.nimcall.}
+  ## Set at boot (kernel/abi/user_args_gate.nim): may the caller's pointer arguments be touched?
+  ## nil only in host tests, which have no caller memory to check against.
 
 proc syscallDispatch*(nr, a0, a1, a2, a3: uint64): uint64 {.exportc: "syscallDispatch", cdecl.} =
   ## Called from syscall_entry asm stub. Dispatches by nr through syscallTable.
   ## Returns result in RAX (Nim cdecl convention on x86-64).
+  ## A call whose pointer arguments leave the caller's own memory (kernel/abi/user_args.nim)
+  ## is refused here with -1, before any kernel code reads or writes through them.
   if nr >= NimixSyscallCount: return high(uint64)
   let fn = syscallTable[nr]
   if fn == 0: return high(uint64)
+  if syscallArgsCheck != nil and not syscallArgsCheck(nr, [a0, a1, a2, a3]): return refusedResult(nr)
   type Fn5 = proc(a0, a1, a2, a3, a4: uint64): uint64 {.cdecl.}
   cast[Fn5](fn)(a0, a1, a2, a3, 0)
 

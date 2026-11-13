@@ -54,3 +54,7 @@ gcc -O2 -Wall -Wextra -I"$ROOT/libnimix" -o "$OUT/test_clock" "$ROOT/tests/libni
 #    vectors and raylib 6.2's own KeyboardKey enum (the test includes raylib.h)
 gcc -O2 -Wall -Wextra -I"$ROOT/libnimix" -I"$RL" -o "$OUT/test_keymap" "$ROOT/tests/libnimix/test_keymap.c"
 "$OUT/test_keymap" "$ROOT/tests/libnimix/key_vectors.txt"
+
+# 6. libnimix's pointer helpers (tablet scaling, clamping, button codes) and raylib's MouseButton enum
+gcc -O2 -Wall -Wextra -I"$ROOT/libnimix" -I"$RL" -o "$OUT/test_pointer" "$ROOT/tests/libnimix/test_pointer.c"
+"$OUT/test_pointer"

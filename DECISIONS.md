@@ -1854,3 +1854,106 @@ misaligned kernel stack earlier).
 
 **Left as it was:** the valgrind job still uses refc with `tests/valgrind.supp` (the
 documented refc stack-scan false positives); it passed in this CI run.
+
+---
+
+## 2026-11-12 — V5f: display ABI v2, modes (human's point)
+
+**Context.** The human: an OS switches to a graphics mode for a graphics session, not the boot
+shell's mode. Until now there was exactly one mode, fixed at boot.
+
+**Decision.** Two syscalls (39 `nimixDisplayModes`, 40 `nimixDisplaySetMode`); the owner switches to a
+listed mode; the screen is cleared; the boot mode and console return when the owner ends. Details
+and rationale in `docs/proposals/display_abi.md` §v2. Mechanism: a smaller mode is a prefix of the
+boot framebuffer (new 2D resource attached to the same DMA memory, ids alternate), so no allocation.
+
+**Rejected:** scaling a fixed mode at present time (per-frame cost, does not fix stale margins; may
+return on top, in the render server); EDID-derived modes (host-window property, not an OS one);
+allocating a framebuffer per mode (can fail late; needs a free for DMA pages we do not have).
+
+**Seams / left open:** modes larger than the boot mode (needs the framebuffer sized for the maximum:
+V4b). The console now clears its background when it resumes, which also settles the V5d item
+"clear the display when ownership ends".
+
+**Test finding:** the restore check needs polling, not one sleep: the console repaints in batched
+flushes and the prompt line can land after a fixed delay. It now polls until the screen equals the
+host replay.
+
+---
+
+## 2026-11-12 — V5e: pointer input (mouse, tablet) into raylib
+
+**Context.** A graphical OS needs a pointer. The launcher already passed `virtio-mouse-pci`, but
+the driver found only the first virtio-input device (`pciVirtioFind` returns one match), so the
+mouse was never read.
+
+**Survey.** Prior art: Linux `virtio_input` (one driver instance per device; evdev events);
+raylib's own platforms (GLFW/SDL) for the frame bookkeeping the memory platform lacks.
+Adopted the evdev model unchanged (the keyboard path already used it); built the driver
+instancing (up to 4 devices, one merged stream, one IRQ handler draining all) because the existing
+driver was single-instance by construction.
+
+**Decisions.**
+- Both pointer kinds are supported: a **tablet** (EV_ABS 0..32767, scaled to the display: the right
+  device for a VM window, no capture) and a **mouse** (EV_REL, accumulated into a cursor clamped to
+  the display). Buttons are EV_KEY 272..274; the wheel is EV_REL REL_WHEEL. The launcher passes all
+  three input devices.
+- The scaling/clamping/button maths is a pure header (`libnimix/nimix_pointer.h`) with a host test,
+  like the keymap; raylib's `MouseButton` enum is checked against it.
+- raylib's memory platform has no mouse bookkeeping: the generator adds the per-frame rollover
+  (previous position and buttons, wheel reset) and the same "a click's release is held one frame"
+  rule the keys use, so a click shorter than a frame still gives both edges.
+- The OS does not draw a cursor: programs draw their own (raylib's model), and a system cursor is
+  the render server's (V6) job.
+
+**Bug found by the test:** the console's key reader converted every event value with a checked
+`int32(uint32)`; a relative move of -3 (0xFFFFFFFD) is a RangeDefect, i.e. one mouse move would have
+panicked the kernel. It casts now. The `pointer` test sends a negative relative move on purpose.
+
+**Left open (V5e):** touch and gestures; a focus model beyond "the display owner gets all input"
+(needs windows, V6); `SetMousePosition` / cursor lock (no cursor ownership yet).
+
+---
+
+## 2026-11-12 — V14: ring-3 syscall arguments are checked at the gate
+
+**Context.** The standing seam from V5a: only the display calls validated the pointers a ring-3
+program passes; every other syscall copied from or to whatever address it was given, with the
+kernel's own rights. Any program could read or write kernel memory, another task's region or
+another task's buffers through `nimixFsRead`, `nimixGetArgs`, `nimixWrite`... A hostile-argument
+program (`abifuzz`) was written first, to see what breaks.
+
+**Decision.** One table, one check, at the gate:
+- `kernel/abi/user_args.nim` (pure, host-tested) says, per syscall, which arguments are pointers and
+  how big the memory behind each must be: NUL-terminated strings (<= 512 bytes, inside one range),
+  buffers (pointer + length argument, element size, overflow-safe), fixed structs (optional or not),
+  and whether the kernel reads or *writes* through it. A call whose pointers leave the caller's own
+  memory is refused at `syscallDispatch` (returns -1; 0 for the two token-returning calls) before
+  any kernel code runs. The first eight refusals are logged.
+- "The caller's own memory" = its region, plus the arena blocks the buffers store currently grants
+  it: read for what the kernel reads, **read-write for what it writes** (`kbufAccessible`, from the
+  page rights already applied per task). So a sealed or borrowed buffer is not a target for a
+  kernel write, and another task's buffer is not reachable at all. This closes the arena seam the
+  first draft of this decision had left open.
+- Host test cross-checks the table against the ABI vtable by reflection: every syscall with a
+  `pointer` or `cstring` parameter must have a spec, with the same count, and the refusal value
+  must match the return type. A new syscall cannot be added without deciding how its pointers are
+  checked. `BufMsgHandles`' size is asserted against the table at compile time.
+
+**Rejected:** validating inside each syscall implementation (the same code runs for kernel tasks
+that legitimately pass kernel pointers, and it spreads the policy over 20 places); killing the task
+on a bad pointer (a refusal code is what a program can handle, and what Linux's EFAULT does);
+page-table walking per byte (the region/arena ranges plus per-block rights are exact for our layout
+and cheap).
+
+**Bugs the hostile program found (both fixed, with host tests):**
+1. `nimixMapAnon(size <= 0)` hit an `assert` in the kernel: any ring-3 program could panic it.
+2. `sipAlloc` with a negative size (e.g. -16) wrapped `bump + aligned` and moved the bump pointer
+   BACKWARDS: later allocations overlapped earlier ones. Sizes are now range-checked first.
+
+**Left open:** a pointer to the *app's own region* that the kernel treats as writable also covers
+its code pages (the region is one range; W^X inside a region is a loader matter); `nimixChanCall`'s
+5th argument (replyBufLen) cannot cross the 4-register gate, so it is always 0 (a latent API
+defect, recorded in the spec table); blocking calls (`nimixSleep` with huge ticks) are the
+program's own affair. TOCTOU: the kernel is not preempted between check and use on a single CPU,
+and other tasks cannot remap a region; revisit with SMP.

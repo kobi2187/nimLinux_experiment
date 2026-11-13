@@ -268,8 +268,9 @@ proc abiFreeRegion*(p: pointer; size: int) {.nimcall.} =
 
 proc abiMapAnon*(size: int): pointer {.nimcall.} =
   ## Allocate `size` bytes from the calling app's SIP bump heap.
-  ## Returns nil if size <= 0 or the task has no region.
-  assert size > 0, "mapAnon: size must be positive"
+  ## Returns nil if size <= 0 or the task has no region. (The size is the caller's: an assert here
+  ## was a way for any ring-3 program to panic the kernel.)
+  if size <= 0: return nil
   let slot = int(procTable.tasks[procTable.current].regionSlot)
   if slot < 0: return nil
   sipAlloc(slot, size)

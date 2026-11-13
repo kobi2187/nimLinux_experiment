@@ -18,7 +18,7 @@
 | PIT | `drivers/pit.nim` | BUILT | 100 Hz tick, pitUptimeTicks() |
 | Keyboard map | `libnimix/nimix_keymap.h` (C), `input/evdev_keymap.nim` (Nim, the authority) | BUILT | evdev to raylib keys and characters; 1024 golden vectors + raylib's KeyboardKey enum keep the two in step |
 | raylib platform | `tools/raylib_nimix.py` (generated `build/raylib-nimix/`), `apps/c/rldemo` | BUILT | PLATFORM_NIMIX: raylib's memory platform + the display ABI; whole-frame present (damage = V5d); input = V5c |
-| Display ABI | `kernel/display/` (`display.nim`, `display_checks.nim`), syscalls 37-38, `kernel/abi/nimix_abi.h` | BUILT | a program presents a rect of an owned buffer onto the scanout; implicit ownership; the kernel is still the only GPU toucher (device capabilities R0/R2 will move it) |
+| Display ABI | `kernel/display/` (`display.nim`, `display_checks.nim`), syscalls 37-40 (v2: modes), `kernel/abi/nimix_abi.h` | BUILT | a program presents a rect of an owned buffer onto the scanout; implicit ownership; the kernel is still the only GPU toucher (device capabilities R0/R2 will move it) |
 | libnimix | `libnimix/` (README), `apps/c/` | BUILT | the OS layer under picolibc: C programs run on NimixOS; files are the interim whole-file ABI (V2c: fs_server) |
 | picolibc | `vendor/picolibc` (pinned 1.8.12), `tools/picolibc_build.sh` | BUILT (host-verified) | libc + libm for server/app ELFs; the OS layer under it (V2b `libnimix`) is PLANNED |
 | ABI stubs | `kernel/abi/nimix_abi_weak.c` (patchable syscall stubs), `nimix_abi_stub.c` (+ Nim's mini-libc) | BUILT | split so C programs link only the ABI half |
@@ -320,4 +320,7 @@ monolithic model may still link a server in.
 | 2026-11-09 | Kernel built `-mgeneral-regs-only` (no x87/SSE in kernel code); new tasks start with the SysV default FPU state | DECISIONS.md §The kernel must not touch FPU/SSE state |
 | 2026-11-09 | Display ABI v1 (two syscalls: info, present); console suspends while a program owns the display; user request structs are range-checked against the caller's region (the other syscalls still trust user pointers: a standing seam) | DECISIONS.md §V5a |
 | 2026-11-09 | raylib 6.2 runs on NimixOS via a generated platform overlay; C app images are linked with --gc-sections and --strip-debug (1.1 MB to 248 KB); the shell's fixed 512 KB program buffer is a known limit | DECISIONS.md §V5b |
+| 2026-11-12 | Display ABI v2: `nimixDisplayModes` / `nimixDisplaySetMode` (syscalls 39-40, count 41); a graphics owner picks its mode, the boot mode and console return on release; modes are limited to the boot framebuffer's size | DECISIONS.md §V5f |
+| 2026-11-12 | Syscall pointer arguments are checked at the gate from one table (`kernel/abi/user_args.nim`, kernel half `user_args_gate.nim`, arena rights `kbufAccessible`); two kernel panics a ring-3 program could cause fixed | DECISIONS.md §V14 |
+| 2026-11-12 | virtio-input drives every input device (up to 4) into the one `input` event stream; mouse/tablet events reach raylib via the generated platform (`libnimix/nimix_pointer.h`) | DECISIONS.md §V5e |
 | 2026-11-10 | Input follows display ownership: while a program owns the display the console drains and ignores key events; raylib gets keys from the `input` topic via a generated platform change | DECISIONS.md §V5c |

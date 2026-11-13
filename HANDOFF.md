@@ -4,6 +4,27 @@ Last updated: 2026-10-27 (session 9e, branch `ccr-56330414-wo65nx`, cloud contai
 
 
 
+## Session 9l — syscall hardening (V14)
+
+Autonomous. The standing seam (syscalls trust user pointers) is closed: one table in
+`kernel/abi/user_args.nim`, checked at the gate, arena rights per block (read vs write), reflection
+test ties it to the ABI. `abifuzz` found two kernel-crash bugs (mapAnon assert; sipAlloc negative
+size wraps the bump pointer): fixed. `make test-devices` 35/35. **Next:** V6 render server
+(design pass; needs rings), V5d, V2c, V4b. All stacked on PR #7's branch.
+
+## Session 9k — pointer input (V5e)
+
+Autonomous stretch. **Done** (stacked on PR #7's branch): every virtio-input device driven; tablet + mouse
++ wheel + buttons into raylib; a kernel panic on a negative relative move fixed. `make test-devices` 34/34.
+**Next:** V6 render server design pass, V5d damage present, V2c, V4b.
+
+## Session 9j — display modes (V5f)
+
+PR #6 merged. Human: a graphics session should change the display mode, not reuse the boot
+console's. **Done:** ABI v2 (`nimixDisplayModes`, `nimixDisplaySetMode`), restore on release,
+host + QEMU tests (30/30). Ceiling is the boot framebuffer (larger modes = V4b). **Next:** V6 the
+render server (design pass first), then V5d/V5e, V2c, V4b.
+
 ## Session 9i — V2 done (picolibc), V3b decided
 
 Human: picolibc yes (musl is heavier); apps read the clock via the lightest,

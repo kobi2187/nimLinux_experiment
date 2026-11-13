@@ -2,6 +2,7 @@
  * gfxtest — the display ABI from ring 3 (docs/proposals/display_abi.md).
  *   gfxtest        refuse every bad request, then present a 640x400 pattern at (100, 50)
  *   gfxtest hold   ... and keep the screen for 8 s (the harness takes a screendump)
+ *   gfxtest mode   display ABI v2: list the modes, refuse bad ones, switch to 800x600, then as 'hold'
  * The pattern is a pure function of (x, y) so the host can recompute it exactly:
  *   R = x*255/639, G = y*255/399, B = (x ^ y) & 255, with a 1-pixel white border. */
 #include <stdint.h>
@@ -32,6 +33,32 @@ int main(int argc, char **argv) {
     printf("gfxtest: display %ux%u format %u stride %u\n", info.width, info.height, info.format, info.stride_bytes);
     expect(info.format == NIMIX_DISPLAY_FORMAT_B8G8R8X8 && info.stride_bytes == info.width * 4, 1, "display format");
 
+    int modes = argc > 1 && !strcmp(argv[1], "mode");
+    if (modes) {
+        NimixDisplayMode ms[16];
+        int n = nimixDisplayModes(ms, 16);
+        expect(n >= 2 && n <= 16, 1, "a sensible number of modes");
+        printf("gfxtest: %d modes:", n);
+        int has800 = 0, hasBoot = 0;
+        for (int i = 0; i < n && i < 16; i++) {
+            printf(" %ux%u", ms[i].width, ms[i].height);
+            if (ms[i].width == 800 && ms[i].height == 600) has800 = 1;
+            if (ms[i].width == info.width && ms[i].height == info.height) hasBoot = 1;
+        }
+        printf("\n");
+        expect(has800 && hasBoot, 1, "800x600 and the boot mode are listed");
+        expect(nimixDisplayModes(NULL, 0), n, "count only");
+        expect(nimixDisplayModes((NimixDisplayMode *)0x1000, 2), -1, "mode list written through a kernel pointer");
+        expect(nimixDisplaySetMode(801, 600), -1, "not a listed size");
+        expect(nimixDisplaySetMode(0, 0), -1, "zero size");
+        expect(nimixDisplaySetMode(7680, 4320), -1, "larger than the framebuffer");
+        expect(nimixDisplaySetMode(800, 600), 0, "set 800x600");
+        NimixDisplayInfo now = { sizeof now, 0, 0, 0, 0 };
+        expect(nimixDisplayInfo(&now), 0, "display info after the switch");
+        expect(now.width == 800 && now.height == 600 && now.stride_bytes == 3200, 1, "info reports the new mode");
+        info = now;
+    }
+
     int h = nimixBufCreate(W * H * 4);
     uint32_t *px = nimixBufMap((unsigned)h);
     if (h <= 0 || !px) { printf("gfxtest: FAIL no buffer\n"); return 1; }
@@ -50,6 +77,9 @@ int main(int argc, char **argv) {
     expect(nimixDisplayPresent(NULL), -1, "NULL request");
     expect(nimixDisplayPresent((const NimixPresent *)0x1000), -1, "request pointing into the kernel");
     expect(nimixDisplayInfo((NimixDisplayInfo *)0x1000), -1, "info written through a kernel pointer");
+    if (modes) {                           /* fits the boot mode, not this one */
+        b = q; b.dx = 200;                 expect(nimixDisplayPresent(&b), -1, "off the edge of the NEW mode");
+    }
 
     expect(nimixDisplayPresent(&q), 0, "present");                       /* first success: we own the screen */
     expect(nimixBufSeal((unsigned)h), 0, "seal the frame");
@@ -57,7 +87,7 @@ int main(int argc, char **argv) {
     expect(nimixDisplayPresent(&q), 0, "present a sealed buffer");        /* read access is enough */
 
     if (!fails) printf("gfxtest: presented\n");
-    if (argc > 1 && !strcmp(argv[1], "hold")) {
+    if (modes || (argc > 1 && !strcmp(argv[1], "hold"))) {
         struct timespec t = { 8, 0 };
         nanosleep(&t, NULL);
     }

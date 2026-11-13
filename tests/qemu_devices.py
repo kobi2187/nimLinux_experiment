@@ -210,13 +210,36 @@ def test_devices(tmp, iso, bios) -> list:
             time.sleep(0.5)
             for k in ("a", "b"):
                 g.qmp.send_key(k)
-            g.wait(PROMPT, 15, mark + 14)
+            assert g.wait("devtest input: done", 15, mark), "devtest input did not finish"
             out = g.text(mark)
             for code in (30, 48):
                 for val in (1, 0):
                     assert f"key code={code} value={val}" in out, f"missing key {code}/{val}: {out[-300:]}"
+            g.wait(PROMPT, 10, mark)             # the shell is idle again before the next command
             return "a/b down+up delivered by IRQ"
         step("input", None, "", input_check)
+
+        def pointer_check():
+            """The mouse and the tablet are driven too, not just the keyboard: a tablet
+            position, a relative move and a button press arrive as evdev events."""
+            g.type("")                           # submit the a/b the previous check left on the line
+            time.sleep(0.5)
+            mark = len(g.out)
+            g.type("devtest input")
+            assert g.wait("listening", 15, mark), "devtest input did not start: " + g.text(mark)[-300:]
+            time.sleep(0.5)
+            g.qmp.tablet_move(16384, 8192)
+            g.qmp.mouse_move(7, -3)
+            g.qmp.button("left", True)
+            g.qmp.button("left", False)
+            assert g.wait("devtest input: done", 15, mark), "devtest input did not finish: " + g.text(mark)[-500:]
+            out = g.text(mark)
+            for want in ("abs code=0 value=16384", "abs code=1 value=8192", "rel code=0 value=7",
+                         "rel code=1 value=-3", "key code=272 value=1", "key code=272 value=0"):
+                assert want in out, f"missing '{want}': {out[-400:]}"
+            assert "devices=3" in out, "keyboard, mouse and tablet should all be driven: " + out[-200:]
+            return "tablet abs, mouse rel and left button arrive as evdev events (3 devices)"
+        step("pointer", None, "", pointer_check)
     finally:
         g.close()                               # flushes the wav + pcap files
     # snd/net evidence is complete only after QEMU exits.
@@ -436,6 +459,60 @@ def test_display(tmp, iso, bios) -> list:
     return results
 
 
+def test_display_modes(tmp, iso, bios) -> list:
+    """Display ABI v2: a graphics program switches the display to its own mode. The screen
+    really is 800x600 with only the program's frame on it (the rest black), bad modes are
+    refused, and when the program ends the boot mode and the console come back exactly
+    (the console check: the whole screen equals the host replay of the console stream)."""
+    results = []
+    ppm1, ppm2 = os.path.join(tmp, "mode1.ppm"), os.path.join(tmp, "mode2.ppm")
+    g = boot(tmp, iso=iso, bios=bios, devices=("blk", "gpu"))
+    try:
+        boot_dims = None
+        try:
+            g.qmp.screendump(ppm2, device="gpu0")
+            boot_dims = read_ppm(ppm2)[:2]
+            mark = len(g.out)
+            g.type("gfxtest mode")
+            assert g.wait("gfxtest: presented", 40, mark), "never presented: " + g.text(mark)[-600:]
+            out = g.text(mark)
+            assert "FAIL" not in out, out[-600:]
+            time.sleep(0.5)
+            g.qmp.screendump(ppm1, device="gpu0")
+            sw, sh, px = read_ppm(ppm1)
+            assert (sw, sh) == (800, 600), f"screen is {sw}x{sh}, want 800x600"
+            want = gfx_pattern()
+            got = region(ppm1, 100, 50, 640, 400)
+            bad = sum(1 for i in range(0, len(want), 3) if want[i:i + 3] != got[i:i + 3])
+            assert bad == 0, f"{bad} pixels of the frame differ from the host pattern"
+            lit = sum(1 for i in range(0, len(px), 3) if px[i:i + 3] != b"\0\0\0")
+            assert lit <= 640 * 400, f"{lit} lit pixels: more than the frame (stale console?)"
+            results.append(("display-mode-set", True, f"{sw}x{sh}, frame == host pattern, nothing else lit"))
+        except Exception as e:                 # noqa: BLE001
+            results.append(("display-mode-set", False, str(e)))
+        try:
+            assert g.wait("app exit code: 0", 30, mark), "gfxtest did not exit cleanly: " + g.text(mark)[-300:]
+            g.wait(PROMPT, 10, mark)
+            detail, err = None, ""
+            for _ in range(8):                 # the console repaints in batched flushes: poll until settled
+                time.sleep(0.75)
+                g.qmp.screendump(ppm2, device="gpu0")
+                assert read_ppm(ppm2)[:2] == boot_dims, f"mode is {read_ppm(ppm2)[:2]}, boot was {boot_dims}"
+                try:
+                    detail = check_console(bytes(g.out), ppm2, tmp)
+                    break
+                except AssertionError as e:
+                    err = str(e)
+            assert detail, err
+            results.append(("display-mode-restore", True, detail))
+        except Exception as e:                 # noqa: BLE001
+            results.append(("display-mode-restore", False, str(e)))
+        assert "NimixOS" in g.run("version"), "shell dead after the mode switch"
+    finally:
+        g.close()
+    return results
+
+
 def test_raylib(tmp, iso, bios) -> list:
     """V5b: raylib 6.2 (rlsw) running on NimixOS in a ring-3 C program. The guest
     screendump must equal the host render of the same scene, and show REAL colours."""
@@ -555,6 +632,120 @@ def test_raylib_keys(tmp, iso, bios) -> list:
     return results
 
 
+def test_raylib_mouse(tmp, iso, bios) -> list:
+    """V5e: pointer input into raylib. A tablet position, mouse motion, clicks and the
+    wheel injected through QEMU arrive as raylib's mouse position, buttons and wheel; the
+    square on the screen follows the pointer and changes colour with the buttons. Paced on
+    the program's own log lines (a frame is slow under TCG)."""
+    results = []
+    shot = os.path.join(tmp, "mouse.ppm")
+    BLUE, RED, GREEN, BG = (0, 121, 241), (230, 41, 55), (0, 228, 48), (245, 245, 245)
+
+    def px_of(v, extent):                          # libnimix/nimix_pointer.h: nimix_abs_to_px
+        return (v * (extent - 1) + 16383) // 32767
+
+    def pixel(x, y):
+        g.qmp.screendump(shot, device="gpu0")
+        sw, sh, px = read_ppm(shot)
+        i = (y * sw + x) * 3
+        return tuple(px[i:i + 3])
+
+    g = boot(tmp, iso=iso, bios=bios, devices=("blk", "gpu", "input"))
+    try:
+        mark = len(g.out)
+        g.type("rlmouse")
+
+        def wait_for(line, since, what):
+            assert g.wait(line, 20, since), f"{what}: never saw '{line}': " + g.text(since)[-300:]
+            time.sleep(0.5)                    # let the frame that reacts to it be drawn
+
+        try:
+            assert g.wait("rlmouse: ready", 60, mark), "never started: " + g.text(mark)[-500:]
+            time.sleep(1.0)
+            x, y = px_of(8000, 1280), px_of(6000, 800)           # 312, 146
+            seen = len(g.out)
+            g.qmp.tablet_move(8000, 6000)
+            wait_for(f"rlmouse: pos {x} {y}", seen, "tablet move")
+            assert pixel(x, y) == BLUE and pixel(100, 300) == BG, "the square is not at the tablet position"
+            seen = len(g.out)
+            g.qmp.button("left", True)
+            wait_for("rlmouse: left down", seen, "left press")
+            assert pixel(x, y) == RED, "the square did not turn red while the left button is down"
+            seen = len(g.out)
+            g.qmp.button("left", False)
+            wait_for("rlmouse: left up", seen, "left release")
+            assert pixel(x, y) == BLUE, "the square did not return to blue"
+            results.append(("mouse-tablet", True, f"tablet -> ({x}, {y}); the square follows and turns red on the left button"))
+        except Exception as e:                 # noqa: BLE001
+            results.append(("mouse-tablet", False, str(e)))
+        try:
+            seen = len(g.out)
+            g.qmp.mouse_move(10, -6)
+            wait_for(f"rlmouse: pos {x + 10} {y - 6}", seen, "relative move")
+            assert pixel(x + 10, y - 6) == BLUE, "the square did not follow the relative motion"
+            seen = len(g.out)
+            g.qmp.mouse_move(-4000, 0)                              # far past the left edge: clamps at 0
+            wait_for(f"rlmouse: pos 0 {y - 6}", seen, "clamped move")
+            results.append(("mouse-relative", True, "mouse motion moves the pointer (+10, -6) and clamps at the display edge"))
+        except Exception as e:                 # noqa: BLE001
+            results.append(("mouse-relative", False, str(e)))
+        try:
+            seen = len(g.out)
+            g.qmp.button("right", True)                              # a quick click: press and release back to back
+            g.qmp.button("right", False)
+            wait_for("rlmouse: right up", seen, "quick right click")
+            out = g.text(seen)
+            assert out.index("rlmouse: right down") < out.index("rlmouse: right up"), "click edges out of order: " + out[-200:]
+            seen = len(g.out)
+            g.qmp.button("wheel-up", True); g.qmp.button("wheel-up", False)
+            wait_for("rlmouse: wheel 1", seen, "wheel up")
+            seen = len(g.out)
+            g.qmp.button("wheel-down", True); g.qmp.button("wheel-down", False)
+            wait_for("rlmouse: wheel -1", seen, "wheel down")
+            results.append(("mouse-buttons", True, "a quick click keeps both edges; the wheel gives +1 and -1"))
+        except Exception as e:                 # noqa: BLE001
+            results.append(("mouse-buttons", False, str(e)))
+        g.qmp.send_key("q")
+        assert g.wait("rlmouse: ok", 20, mark), "did not quit on Q: " + g.text(mark)[-300:]
+        g.wait(PROMPT, 10, mark)
+        time.sleep(0.5)
+        assert "NimixOS" in g.run("version"), "shell dead after rlmouse"
+    finally:
+        g.close()
+    return results
+
+
+def test_abi_hostile(tmp, iso, bios) -> list:
+    """V14: a ring-3 program passes hostile arguments (NULL, kernel and foreign addresses,
+    wrapping and negative sizes, unterminated names, stale handles and tokens) to every syscall.
+    Each must be refused and the kernel must carry on: the program reports all checks passed,
+    no kernel panic or CPU exception appears on serial, and the shell still answers."""
+    results = []
+    g = boot(tmp, iso=iso, bios=bios, devices=("blk",))
+    try:
+        try:
+            mark = len(g.out)
+            g.type("abifuzz")
+            done = g.wait("app exit code", 90, mark)
+            out = g.text(mark)
+            assert "KERNEL PANIC" not in out and "CPU EXCEPTION" not in out, "the kernel died: " + out[-700:]
+            assert done, "abifuzz did not finish: " + out[-500:]
+            assert "abifuzz: FAIL" not in out, "refusal failures:\n" + "\n".join(l for l in out.splitlines() if "FAIL" in l)[:800]
+            m = re.search(r"abifuzz: (\d+) checks, (\d+) failed", out)
+            assert m and m.group(2) == "0", f"abifuzz: {m and m.group(0)}"
+            assert "abifuzz: ok" in out, out[-400:]
+            assert "syscall refused" in out, "the kernel never logged a refused call (is the gate check installed?)"
+            results.append(("abi-hostile", True, f"{m.group(1)} hostile and legitimate calls, all as expected; kernel alive"))
+        except Exception as e:                 # noqa: BLE001
+            results.append(("abi-hostile", False, str(e)))
+        out = g.run("version")
+        if "NimixOS" not in out:
+            results.append(("abi-hostile-alive", False, "shell dead after abifuzz: " + out[-300:]))
+    finally:
+        g.close()
+    return results
+
+
 def test_user_faults(tmp, iso, bios, kernel) -> list:
     """Ring-3 faults kill only the faulting task: one boot survives them all."""
     results = []
@@ -602,8 +793,11 @@ def main():
             results += test_libc(tmp, a.iso, a.bios)
             results += test_fpu(tmp, a.iso, a.bios)
             results += test_display(tmp, a.iso, a.bios)
+            results += test_display_modes(tmp, a.iso, a.bios)
             results += test_raylib(tmp, a.iso, a.bios)
             results += test_raylib_keys(tmp, a.iso, a.bios)
+            results += test_raylib_mouse(tmp, a.iso, a.bios)
+            results += test_abi_hostile(tmp, a.iso, a.bios)
             results += test_crashes(tmp, a.iso, a.bios, a.kernel)
     for name, ok, msg in results:
         print(f"{'PASS' if ok else 'FAIL'}: {name:12} {msg}")

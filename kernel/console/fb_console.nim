@@ -27,6 +27,7 @@ var
   gTerm: Term                          # ~190 KB: a global, never on a stack
   gSnap: Term                          # what the renderer draws (see takeSnapshot)
   gView: TermView
+  gCanvas: Canvas                      # the boot-mode canvas, to clear on return
   gReady, gPending: bool
   gLastFlush: uint64
 
@@ -80,6 +81,7 @@ proc fbConsoleSuspend*(on: bool) =
       hlt()
       cli()
   if not on and gReady:
+    gCanvas.clear(XtermPalette[DefaultBg])   # a program's pixels may remain in the margins
     for y in 0 ..< gTerm.rows: gTerm.dirty[y] = true
     gPending = true
     fbConsoleFlush(force = true)
@@ -98,6 +100,7 @@ proc fbConsoleInit*(): bool =
   let (cols, rows) = gridSize(c, spleen8x16)
   gTerm.initTerm(cols, rows)
   gView.initView(c, spleen8x16)
+  gCanvas = c
   c.clear(XtermPalette[DefaultBg])
   gReady = true
   consoleMirror = fbConsolePut

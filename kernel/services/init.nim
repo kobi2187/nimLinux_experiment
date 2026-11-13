@@ -35,6 +35,7 @@ import ../../kern/interrupts
 import ../../arch/x86_64/syscall_gate
 import ../../kernel/abi/nimix_abi_impl   # user-fault policy
 import ../../kernel/abi/task_cleanup
+import ../../kernel/abi/user_args_gate
 import ../buffers/kbuffers
 import ../../fs/fatfs
 import ../../fs/fatfs_write   # registerFatFs
@@ -181,9 +182,13 @@ proc initVirtioDevices*() =
     klog(llWarn, "[SERVICES] virtio-snd: not available")
 
   if virtioInputInit():
-    gInput.onEvent = publishInputEvent
-    wirePciIrq(gInput.irqLine, virtioInputIrqHandler)
-    klogInt(llInfo, "[SERVICES] ✓ virtio-input: IRQ line ", int64(gInput.irqLine))
+    gInputOnEvent = publishInputEvent
+    for i in 0 ..< gInputCount:                 # the handler drains all devices: wire each distinct line once
+      var seen = false
+      for k in 0 ..< i:
+        if gInputs[k].irqLine == gInputs[i].irqLine: seen = true
+      if not seen: wirePciIrq(gInputs[i].irqLine, virtioInputIrqHandler)
+    klogInt(llInfo, "[SERVICES] ✓ virtio-input: devices ", int64(gInputCount))
   else:
     klog(llWarn, "[SERVICES] virtio-input: not available")
 
@@ -233,6 +238,7 @@ proc initSyscallGate*() =
   ## Wire ring-0 <-> ring-3 syscall dispatch, and the user-fault policy that
   ## comes with ring 3: a CPU fault in a user task kills that task (like exit)
   ## instead of halting the machine — kernel state is intact.
+  syscallArgsCheck = kernelUserArgsOk            # ring-3 pointer arguments must stay in the caller's memory
   syscallGateInit()
   installRegionReleaseHook()
   kbufInit()

@@ -30,3 +30,43 @@ proc checkPresent*(r: PresentRect; bufSize: int64; dispW, dispH: int64): Display
 proc inRange*(p, n, lo, hi: uint64): bool =
   ## [p, p+n) inside [lo, hi), with no wrap-around.
   n > 0 and p >= lo and p < hi and n <= hi - p
+
+# ── Display modes (v2) ─────────────────────────────────────────────────────────
+# The boot framebuffer is the ceiling: a smaller mode reuses a prefix of the same
+# DMA memory (a 2D resource of the new size attached to it), so a mode change
+# allocates nothing and cannot fail for lack of memory.
+
+const MaxModes* = 8
+
+type
+  DisplayMode* = object
+    w*, h*: uint32
+
+const ModeCandidates: array[6, DisplayMode] = [
+  DisplayMode(w: 640, h: 480), DisplayMode(w: 800, h: 600), DisplayMode(w: 1024, h: 768),
+  DisplayMode(w: 1280, h: 720), DisplayMode(w: 1280, h: 800), DisplayMode(w: 1920, h: 1080)]
+
+proc modeBytes*(m: DisplayMode): uint64 = uint64(m.w) * uint64(m.h) * BytesPerPixel
+
+proc modeList*(boot: DisplayMode; fbBytes: uint64; outp: var array[MaxModes, DisplayMode]): int =
+  ## Every mode the kernel accepts, ascending by pixel count: the standard sizes that fit
+  ## the boot framebuffer, and the boot mode itself (always, whatever its size).
+  var n = 0
+  var haveBoot = false
+  for c in ModeCandidates:
+    if modeBytes(c) <= fbBytes:
+      outp[n] = c; inc n
+      if c.w == boot.w and c.h == boot.h: haveBoot = true
+  if not haveBoot and boot.w > 0 and boot.h > 0 and n < MaxModes:
+    outp[n] = boot; inc n
+    var i = n - 1                              # keep the list ascending
+    while i > 0 and modeBytes(outp[i - 1]) > modeBytes(outp[i]):
+      swap(outp[i - 1], outp[i]); dec i
+  n
+
+proc modeAllowed*(w, h: uint32; boot: DisplayMode; fbBytes: uint64): bool =
+  var ms: array[MaxModes, DisplayMode]
+  let n = modeList(boot, fbBytes, ms)
+  for i in 0 ..< n:
+    if ms[i].w == w and ms[i].h == h: return true
+  false
