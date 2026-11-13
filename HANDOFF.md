@@ -4,6 +4,14 @@ Last updated: 2026-10-27 (session 9e, branch `ccr-56330414-wo65nx`, cloud contai
 
 
 
+## Session 9m — V6 proposal (awaiting the human)
+
+PR #7 merged. Wrote `docs/proposals/render_server_v6.md`: 12 decisions, consequences, 7 slices.
+Measured a raylib frame on NimixOS (`rlbench`): rasterization 94-96 % of the frame. **Waiting for the
+human on D1, D3/D4/D7, D5, D8, D10**; then record, freeze the three interfaces, SPAWN
+`subprojects/render_server`, start V6-0 (spike) and V6a. Smaller items that do not depend on it: V5d,
+V2c (sub-tick timer, also needed by D2), V4b sizing.
+
 ## Session 9l — syscall hardening (V14)
 
 Autonomous. The standing seam (syscalls trust user pointers) is closed: one table in

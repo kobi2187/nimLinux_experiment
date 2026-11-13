@@ -1957,3 +1957,24 @@ its code pages (the region is one range; W^X inside a region is a loader matter)
 defect, recorded in the spec table); blocking calls (`nimixSleep` with huge ticks) are the
 program's own affair. TOCTOU: the kernel is not preempted between check and use on a single CPU,
 and other tasks cannot remap a region; revisit with SMP.
+
+---
+
+## 2026-11-13 — V6 decomposition proposed; frame cost measured on NimixOS
+
+**What.** `docs/proposals/render_server_v6.md` (PROPOSED, nothing frozen): the three interfaces to
+freeze (display ABI, client protocol, input), twelve decisions with options, my pick, consequences and
+what each blocks, seven slices, tests, and what is unknown. Five need the human: transport (D1),
+rights at spawn for display/input/names (D3, D4, D7), what the user sees when the server runs (D5),
+both content lanes (D8), memory sizing (D10).
+
+**Measured** (`apps/c/rlbench`, a widget-like scene, QEMU TCG, whole-frame present): 320x200 draw 63 ms
++ end 3.8 ms; 640x400 draw 142 ms + end 8.5 ms; 1280x800 draw 557 ms + end 20.7 ms per frame ("end" =
+readback into the display format + `nimixDisplayPresent` = kernel copy + virtio-gpu transfer).
+Rasterization is 94-96 % of a frame, so damage-limited compositing is the lever and extra copies are
+cheap by comparison; TCG times are an emulator's, so frame-rate budgets can only be gated on KVM.
+
+**Facts found while writing it (they shape the decisions):** every buffer costs at least one 2 MB
+arena block (64 blocks in total), a channel message carries 256 bytes, the `input` topic and display
+ownership are ambient authority, the dispatcher has no session code, and nothing can block (servers poll
+on the 10 ms tick).
