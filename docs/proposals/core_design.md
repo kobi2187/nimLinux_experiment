@@ -18,18 +18,24 @@ fill-in that must not change this structure.
    each is the **single client** of the hardware-facing part it fronts.
 4. **Drivers: userspace if it performs the same, else in the kernel**, but always *conceptually*
    separate as modules. No physical separation mechanism is required between kernel-space modules.
-5. **The library path is soft.** An app may call a server directly; the library *hardens* (unique ids,
-   sequence checks, session handles), it is not the boundary.
+5. **The contract is the API, the library is an SDK** (the human's REST analogy). A client may speak the
+   wire protocol without the library; what it cannot do is get anything outside the contract, because
+   the servers enforce it and the dispatcher funnels it. The library gives idiomatic client code and
+   hardening (unique ids, sequence checks); it adds no authority and is not the boundary.
+7. **The dispatcher stands as designed** (VISION goal 3, axiom 1): the convergence point where QoS,
+   authorization, discovery and session brokering happen, so features land once for every service.
 6. **Everything written is useful in all three models** (SASOS, micro, monolithic), though the main
    line favours micro. A library earns its place on its own merits, whatever architecture results.
 
 ## 1. Roles
 
 ```
- app ──links──▶ client library (API + protocol + hardening) ──messages──▶ server        (isolated domain)
-                                                                           │ sole client of
-                                                                           ▼
-                                                      device module (the hardware-facing part)
+ app ──links──▶ client library (SDK over the contract) ──▶ dispatcher ──brokers──▶ server   (isolated domain)
+        (or speaks the wire protocol itself)                (QoS, authz,   session        │ sole client of
+                                                             discovery)  ┌─direct ring─▶  ▼
+                                                                         │       device module (hardware-facing part)
+                                      control plane (REST-like) via dispatcher; streams (frames, audio)
+                                      flow on the brokered session, like an upgraded connection
  kernel = mechanism libraries (scheduling, memory, handles, transport, ...)
           composed per model; device modules sit in it OR run as servers (placement, §3)
 ```
@@ -43,15 +49,18 @@ host-testable, and **no assumption about where it runs**. A *model* is a composi
 Each: what it fixes, the invariant, how it is tested, and where we are.
 
 ### M1. Authority: handles are the only way to act
-- Every action names its target by a **handle** held by the caller. No global names, no ambient topics,
-  no first-come ownership. Rights are granted at spawn, delegable, revocable, and die with the holder.
+- Every action is authorized by a **handle or capability token** held by the caller. **Names are
+  addresses; tokens are authority** (a channel is found by name, used only with a token, received only
+  by its creator's capability). No ambient topics, no first-come ownership. Rights are granted at spawn
+  or by the dispatcher, delegable, revocable, and die with the holder.
 - **The kernel stamps the sender** (pid, and the handle used) on every message. Authentication comes from
   the kernel; a library-assigned id is hardening only (point 5), never identity.
-- *Invariant:* no syscall or message accepts a name where a handle is possible; every exclusive
-  resource (display, input, a device module) has exactly one holder, released on its death.
-- *Today:* buffers and capability tokens are handle-based; **ambient** and to be removed: the `input`
-  topic (anyone reads every key), display ownership (first present), channel names (squattable),
-  event topics by string.
+- *Invariant:* no operation succeeds on a name alone; every exclusive resource (display, input, a
+  device module) has exactly one holder, released on its death.
+- *Today:* the gated path exists (`capSend` needs a `capIpc` token; receive needs the creator's
+  capability; buffers are handle-based). **Ungated shortcuts** to retire: plain `chanSend`, event
+  topics (`input` readable by anyone), and display ownership by first present. A name can still be
+  squatted by whoever creates it first; the dispatcher's discovery closes that.
 
 ### M2. Modules and placement: structure is fixed, location is a measured choice
 - A device module is used through a **device port**: a small interface with **no shared mutable state,
@@ -93,13 +102,29 @@ Each: what it fixes, the invariant, how it is tested, and where we are.
 - *Invariant:* no resource outlives its owner. *Today:* tasks' buffers, display and input grab are
   released on exit; channels and capabilities are not yet (a listed seam).
 
-### M7. Services and protocols: one description, two generated sides
-- Each service has **one protocol description** from which the server stub, the client library and
-  the validation are generated, so they cannot drift. The library connects through a handle it was
-  given (no global lookup), negotiates a **version** in `hello`, and applies its hardening (session
-  ids, sequence numbers). Servers treat all input as hostile (the draw protocol already does).
-- *Today:* hand-written record codecs (`bridge/`, `libnimix`); open question #3 (schema location)
-  resolves here.
+### M7. Services and protocols: the contract is the API (like REST)
+- Each service's **wire contract** is its public interface, written once (a PROPOSAL, not yet agreed:
+  from that description generate the server stub, the SDK and the validation, so they cannot drift;
+  open question #3, schema location, resolves here). Control plane = MsgPack, data plane = flat
+  records or buffer handles (agreed 2026-10-26). A client may skip the SDK; it cannot skip the
+  contract, because the server validates every message as hostile (the draw protocol already does)
+  and the dispatcher controls what handles a client gets.
+- The SDK negotiates a **version** in `hello` and adds hardening (session ids, sequence numbers); it
+  confers no authority.
+- *Today:* hand-written record codecs (`bridge/`, `libnimix`).
+
+### M8. The convergence point: the dispatcher
+- All control-plane requests funnel through the dispatcher (CPS, single actor, priority queue with
+  aging, QoS classes realtime/interactive/normal/background). It is the one place that authorizes
+  (kernel-stamped sender plus capability), discovers (which service, which handle), applies QoS and
+  quotas, and **brokers sessions**: for a stream it checks the capability, picks the QoS class, ring
+  depth and budget once, then hands each side one end of a ring; it can resize, reprioritise or revoke
+  it later. Steady-state data does not pass through it (agreed, `bulk_data.md` decision 2).
+- *Invariant:* a client reaches a server only through a handle the dispatcher brokered. A feature that
+  applies to every service (rate limits, tracing, priorities) is added here, once.
+- *Today:* Stage 1 built (actor run loop, strict wire decode, benchmark about 2.7M requests/s). Not
+  in the app path: apps talk to servers directly (STATE). Stage 2 (reply correlation, capability
+  gating, session brokering, discovery) is the work this skeleton needs.
 
 ## 3. Placement: the matrix (the residency map, restated)
 
@@ -116,7 +141,7 @@ The two device-module transports (M2) are what let us *measure* before moving an
 
 ## 4. What the structure forbids (each should become a failing test)
 
-1. A syscall or message taking a global name where a handle would do.
+1. An operation authorized by a name alone, or a client reaching a server without a brokered handle.
 2. A second holder of an exclusive resource.
 3. Mutable memory visible to two tasks.
 4. A device touched except through its module's port.
@@ -133,7 +158,7 @@ The two device-module transports (M2) are what let us *measure* before moving an
 | syscall gate argument table (V14) | M1's enforcement for the interim direct syscalls; the table shrinks as services replace calls |
 | display ABI v1/v2, `input` topic | the **first device ports** to define (display, input); today ambient, to become exclusive-client handles (V6 D3/D4) |
 | `libnimix`, raylib bridge | client libraries (M7), with the interim kernel calls behind them |
-| V6 decisions | D1 -> M3; D2 -> M4; D3, D4, D7 -> M1 + M7; D10 -> M5; D5, D8, D9, D11, D12 stay render-server local |
+| V6 decisions | D1 -> M3; D2 -> M4; D3, D4 -> M1; **D7 -> M8 (dispatcher brokers; my earlier "direct" pick is withdrawn)**; D10 -> M5; D5, D8, D9, D11, D12 stay render-server local |
 | residency map R0-R8 | remains the microkernel-model target; each move needs a device port first, then a measurement |
 
 ## 6. Decisions this structure needs from the human
@@ -143,11 +168,13 @@ The two device-module transports (M2) are what let us *measure* before moving an
    and is the most expensive to change later.
 2. **The device-port interface rules** (no pointers, no shared state, handles and ownership): is that
    the line, and is "message or direct call, same code" the right way to keep placement open?
-3. **Sender stamping and the service directory**: how does an app obtain its first handles (the
-   spawner hands them over, or a name service holds them under a right)?
-4. **Order**: this proposal places the skeleton (M1 handles/rights, M4 wait/wake, M3 rings and small
-   buffers, then the first device ports for display and input) *before* the render server's
-   executor. Agree?
+3. ~~How does an app obtain its first handles?~~ **Answered by the existing design:** the dispatcher
+   (discovery and capability grants). What remains is how a program obtains its *first* handle to the
+   dispatcher: the spawner hands it over at spawn (my assumption).
+4. **Order**: the skeleton (M1 rights, M8 dispatcher Stage 2, M4 wait/wake, M3 rings and small buffers,
+   then the first device ports for display and input) *before* the render server's executor. Agree?
+   Assumptions awaiting the human: the "hardware-related server" is the device module (server or kernel
+   module) fronted by a domain server; V6 test clients are ELF until the WASM host (V8) exists.
 5. **SMP** touches M1, M4, M6 (per-CPU state); declare it out of the structure for now, or in?
 
 ## 7. What this document is not

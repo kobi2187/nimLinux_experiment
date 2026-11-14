@@ -91,7 +91,7 @@ decide and log it (stays inside one module, reversible).
 | D4 | who may read input | **Gate** | restrict the `input` topic by capability; the server routes by focus | V6c |
 | D5 | what the user sees when the server runs | **Gate** | opt-in program first; a terminal window is the first real client; boot default later | the whole UX |
 | D6 | server implementation language | Mine (after a spike) | Nim core compiled with picolibc + raylib; C as fallback | V6a build |
-| D7 | session brokering and the dispatcher | **Gate** (it touches a VISION axiom) | direct on a named channel now, recorded as a temporary exception | V6b |
+| D7 | session brokering and the dispatcher | **Settled 2026-11-14** | the dispatcher brokers sessions (the existing design stands); my earlier "direct, temporary exception" pick is withdrawn. Consequence: V6 depends on dispatcher Stage 2 | V6b |
 | D8 | window content: server-drawn, client-drawn, or both | Gate (shapes the protocol) | both: commands by default, plus surface commits so every existing raylib ELF app becomes a window | V6d |
 | D9 | compositing and damage | Mine | damage-limited from the first compositor | |
 | D10 | mode, memory and budgets | Gate (VM size, arena size) | server owns the mode; arena 256 MB, VM 384 MB; server budget class | V6b+ |
@@ -290,15 +290,25 @@ the arena heap). B keeps the build simple and doubles the decode logic. Either w
 
 ---
 
-### D7. How are sessions brokered, and where is the dispatcher?
+### D7. How are sessions brokered, and where is the dispatcher? (SETTLED: the dispatcher brokers)
 
-**The problem.** VISION axiom 1: apps never do I/O directly; the dispatcher brokers a session
-(capability check, QoS class, budget) and then hands each side a ring. The dispatcher ELF exists
-(`dispatch_server.elf`) but does not broker sessions. The server could instead create the session
-itself on a named channel.
+The human confirmed 2026-11-14 that the dispatcher stands as designed: it is the convergence point for
+QoS, authorization and discovery, and it brokers sessions (capability check, QoS class, ring depth,
+budget), after which each side holds one end of a ring. The analogy is REST: the contract is the
+interface, the library an SDK, the dispatcher the gateway.
 
-| option | meaning |
-|--------|---------|
+**Consequences for V6.**
+- V6 does not start with a direct `hello` on a `render` channel. It starts with dispatcher Stage 2
+  (reply correlation, capability gating, session brokering, discovery), which is as large as V6a-V6c
+  together and is why the core-design order puts it first (`core_design.md` M8).
+- Name squatting is closed at the source: a client gets a handle from the dispatcher; it never needs
+  to find the render server by name.
+- The server's ELF is spawned with the right to register with the dispatcher; the dispatcher's own
+  first handle reaches each program at spawn.
+- Per-session budgets are granted by the dispatcher and enforced by the server.
+- Withdrawn: the "direct brokering" option and its ADR "exception to axiom 1".
+
+--------|---------|
 | A. dispatcher brokers (the axiom as written) | V6 waits on dispatcher growing session brokering |
 | **B. direct**: a client sends `hello` on channel `render`, the server creates a per-client channel and grants buffers | works now; a **temporary, recorded exception** to the axiom |
 | C. kernel brokers | kernel policy: against the principles |

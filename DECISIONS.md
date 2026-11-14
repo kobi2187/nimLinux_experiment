@@ -2000,3 +2000,30 @@ is the only path to a server and that driver fault containment is an invariant; 
 placement via device ports with two transports, ownership-based data movement, wait/wake, resource
 charging, failure cleanup, one protocol description per service), a placement matrix, eight forbidden
 things (each to become a failing test), and five questions for the human. Nothing frozen.
+
+---
+
+## 2026-11-14 — Alignment with the early design: the dispatcher stands; the contract is the API
+
+After the human's structural statements, the early record was re-read (OS Interaction Model, Driver
+Strategy, Dispatcher, Decision principles, Kernel residency) to see which statements were new and which
+were already decided. Result: most agree. Corrections to my own recent work:
+
+- **The dispatcher stands as designed** (human, 2026-11-14): the convergence point for QoS, authorization,
+  discovery and session brokering. My V6 pick of direct brokering with a "temporary exception to
+  axiom 1" is **withdrawn**; V6 depends on dispatcher Stage 2.
+- **REST analogy** (human): the wire contract is the API; the library is an SDK for idiomatic code and
+  hardening; a client may bypass the library but not the contract, which servers enforce and the
+  dispatcher funnels. So "the library is the boundary" and "no bypass" were both wrong readings.
+- **Names are addresses, tokens are authority.** I had called global names ambient authority; the
+  early design gates sends with `capIpc` tokens and receives with the creator's capability. The real
+  ungated shortcuts are plain `chanSend`, event topics and first-present display ownership.
+- **Placement** is a measured per-module choice (Driver Strategy; residency map), which the human's
+  performance rule refines; my two flip-flops on it were errors.
+- **Labelled as new proposals, not derived decisions:** device ports with two transports; generated
+  stubs from one contract; the render server's surface lane. Driver fault containment was rejected.
+- **Still interim and contrary to axiom 1 as written:** direct kernel calls for files, display and
+  input (`nimixFsRead`, display ABI, the `input` topic).
+
+Open, awaiting the human: whether the "hardware-related server" is the device module fronted by each
+domain server; whether V6's first clients are ELF test clients until the WASM host exists.
