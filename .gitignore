@@ -19,3 +19,5 @@ tests/test_*
 thoughts/
 __pycache__/
 qemu-debug/
+ipc/handles/channel
+ipc/handles/handle_table
