@@ -19,6 +19,10 @@ import ../fs/fatfs
 import ../apps/ping/ping_embedded
 import ../apps/pingpong/pingpong_embedded
 import ../kernel/abi/app_args
+import ../mm/user_window
+import devtest
+import ../core/klog_ring
+import ../kernel/console/console_input
 import ../arch/x86_64/syscall_gate
 import ../mm/region_allocator
 import ../mm/sip_heap
@@ -26,6 +30,12 @@ import ../kernel/process_table
 import ../core/ptr_helpers
 import ../drivers/pci/pci_device
 import ../drivers/virtio/virtio_net
+import ../drivers/pit
+import ../arch/x86_64/cpu_primitives
+import ../ipc/handles/handle_table
+import ../ipc/handles/channel
+import ../kernel/handles/khandles
+import ../kernel/space/kspace
 
 const
   ShellPrompt = "nimixos> "
@@ -42,15 +52,15 @@ type
     scModel
     scLoadPing      ## load ping — embedded WASM
     scLoadPingpong  ## load pingpong — actor mailbox demo
-    scLs            ## ls — list files on disk
     scMount         ## mount — mount FAT disk
     scRun           ## run <file> — load WASM from disk and execute
     scExec          ## exec <file> — load ELF from disk and jump to entry
-    scPs            ## ps — list all tasks with pid/class/state/cpu
-    scKill          ## kill <pid> — terminate task by PID
-    scStats         ## stats — scheduler stats + uptime
     scLspci         ## lspci — list PCI devices
     scNetinfo       ## netinfo — virtio-net MAC and packet counts
+    scDmesg         ## dmesg — kernel log ring (boot + driver messages)
+    scDevtest       ## devtest <gpu|snd|net|input> — exercise a virtio device
+    scChantest      ## chantest — handles and channels between this shell and a ring-3 program
+    scIsotest       ## isotest — is one app's memory out of another running app's reach?
 
 # ── String helpers ─────────────────────────────────────────────────────────
 
@@ -85,22 +95,22 @@ proc parseCommand*(buf: openArray[char], len: int): ShellCommand =
   if bufEq(buf, first, last, "version"):   return scVersion
   if bufEq(buf, first, last, "meminfo"):   return scMeminfo
   if bufEq(buf, first, last, "clear"):     return scClear
+  if bufEq(buf, first, last, "dmesg"):     return scDmesg
   if bufEq(buf, first, last, "model"):     return scModel
   if bufEq(buf, first, last, "load ping"):      return scLoadPing
   if bufEq(buf, first, last, "load pingpong"):  return scLoadPingpong
   if bufEq(buf, first, last, "mount"):   return scMount
-  if bufEq(buf, first, last, "ls"):    return scLs
-  if bufEq(buf, first, last, "ps"):    return scPs
-  if bufEq(buf, first, last, "stats"):  return scStats
   if bufEq(buf, first, last, "lspci"):   return scLspci
   if bufEq(buf, first, last, "netinfo"): return scNetinfo
+  if last - first >= 7 and bufEq(buf, first, first + 7, "devtest "): return scDevtest
+  if bufEq(buf, first, last, "devtest"): return scDevtest
+  if bufEq(buf, first, last, "chantest"): return scChantest
+  if bufEq(buf, first, last, "isotest"): return scIsotest
   # "run <file>", "exec <file>", "kill <pid>" — prefix match
   if last - first >= 3 and buf[first] == 'r' and buf[first+1] == 'u' and
      buf[first+2] == 'n' and buf[first+3] == ' ':  return scRun
   if last - first >= 4 and buf[first] == 'e' and buf[first+1] == 'x' and
      buf[first+2] == 'e' and buf[first+3] == 'c' and buf[first+4] == ' ':  return scExec
-  if last - first >= 4 and buf[first] == 'k' and buf[first+1] == 'i' and
-     buf[first+2] == 'l' and buf[first+3] == 'l' and buf[first+4] == ' ':  return scKill
   scUnknown
 
 # ── Command implementations ────────────────────────────────────────────────
@@ -115,14 +125,14 @@ proc cmdHelp() =
   kprint("  mount            - mount FAT disk\n")
   kprint("  load ping        - run embedded ping WASM app\n")
   kprint("  load pingpong    - run embedded pingpong demo\n")
-  kprint("  ls               - list files on disk\n")
+  kprint("  <name> [args]    - run name / name.elf (system, servers) / name.wasm (apps)\n")
+  kprint("                     e.g. ls /, ps, top, stats, kill <pid>, hello\n")
   kprint("  run <file.wasm>  - load and run WASM from disk\n")
   kprint("  exec <file.elf>  - load and execute ELF from disk\n")
-  kprint("  ps               - list all tasks\n")
-  kprint("  kill <pid>       - terminate task by PID\n")
-  kprint("  stats            - scheduler statistics and uptime\n")
   kprint("  lspci            - list PCI devices\n")
   kprint("  netinfo          - virtio-net MAC and packet counts\n")
+  kprint("  dmesg            - kernel log (last 16 KB of klog output)\n")
+  kprint("  devtest <dev>    - exercise gpu|snd|net|input (host-verifiable)\n")
 
 proc cmdVersion() =
   kprint("NimixOS v0.1.0\n")
@@ -137,6 +147,11 @@ proc cmdModel() =
     kprint("  (Microkernel - hardware-isolated servers)\n")
   else:
     kprint("  (Monolithic - direct in-kernel calls)\n")
+
+proc cmdDmesg() =
+  if klogRingDropped() > 0:
+    kprint("[... "); kprintInt(int64(klogRingDropped())); kprint(" earlier bytes dropped]\n")
+  for c in klogRingChars(): defaultSerial.putChar(c)
 
 proc cmdClear() =
   for i in 0..39: defaultSerial.putChar('\n')
@@ -224,31 +239,21 @@ proc cmdRun(filename: cstring) =
   if r != wasmOk:
     kprint("WASM execution failed\n")
 
-proc buildAbiPatches(): array[20, AbiPatch] =
-  ## Build the ABI patch table — each entry maps a weak stub name to its
-  ## NimixSyscall ordinal. The ELF loader overwrites stubs with
-  ## `movabs rax, <nr>; syscall` so apps issue the right syscall number.
-  proc p(name: cstring; nr: uint64): AbiPatch = AbiPatch(name: name, nr: nr)
-  result[0]  = p("nimixWrite",          ord(scWrite).uint64)
-  result[1]  = p("nimixExit",           ord(scExit).uint64)
-  result[2]  = p("nimixAllocRegion",    ord(scAllocRegion).uint64)
-  result[3]  = p("nimixFreeRegion",     ord(scFreeRegion).uint64)
-  result[4]  = p("nimixChanSend",       ord(scChanSend).uint64)
-  result[5]  = p("nimixChanRecv",       ord(scChanRecv).uint64)
-  result[6]  = p("nimixEventPublish",   ord(scEventPublish).uint64)
-  result[7]  = p("nimixEventSubscribe", ord(scEventSubscribe).uint64)
-  result[8]  = p("nimixEventPoll",      ord(scEventPoll).uint64)
-  result[9]  = p("nimixGetArgs",        ord(scGetArgs).uint64)
-  result[10] = p("nimixProcList",       ord(scProcList).uint64)
-  result[11] = p("nimixSchedStats",     ord(scSchedStats).uint64)
-  result[12] = p("nimixProcKillPid",    ord(scProcKillPid).uint64)
-  result[13] = p("nimixFsReadDir",      ord(scFsReadDir).uint64)
-  result[14] = p("nimixFsRead",         ord(scFsRead).uint64)
-  result[15] = p("nimixFsWrite",        ord(scFsWrite).uint64)
-  result[16] = p("nimixUptimeSecs",     ord(scUptimeSecs).uint64)
-  result[17] = p("nimixWallClock",      ord(scWallClock).uint64)
-  result[18] = p("nimixMapAnon",        ord(scMapAnon).uint64)
-  result[19] = p("nimixFreeAnon",       ord(scFreeAnon).uint64)
+proc buildAbiPatches(): array[NimixSyscallCount, AbiPatch] =
+  ## Build the ABI patch table — every syscall's weak stub name mapped to its
+  ## NimixSyscall ordinal, from the single NimixSyscallSymbol table. The ELF
+  ## loader overwrites stubs with `movabs rax, <nr>; syscall`. (A hand-kept
+  ## list here once covered 20 of 28 calls: nimixSleep/Yield silently no-op'd.)
+  for sc in NimixSyscall:
+    result[ord(sc)] = AbiPatch(name: NimixSyscallSymbol[sc], nr: ord(sc).uint64)
+
+var gLastSpawnSlot*: int = -1
+  ## The process slot and region slot of the program runPieElf started last (for the shell's tests).
+var gLastSpawnRegion*: int = -1
+
+var gSpawnGrant*: Handle
+  ## A handle of THIS (the spawner's) task to give the next spawned program as its bootstrap handle.
+  ## runPieElf moves it into the child's table before the child can run (a spawn-time grant).
 
 proc runPieElf(filename: cstring; dataBuf: ptr byte; nbytes: int; appArgs: cstring) =
   ## Load and run a PIE (ET_DYN) ELF. Allocates a region, patches ABI stubs,
@@ -276,9 +281,20 @@ proc runPieElf(filename: cstring; dataBuf: ptr byte; nbytes: int; appArgs: cstri
   # User stack: top 64 KB of the 4 MB region (above ELF + heap).
   let userStackTop = base + RegionSize - 16
   setAppArgs(int(slot), appArgs)
-  let procSlot = procSpawnRing3(filename, loaded.appMain, userStackTop, int32(slot))
+  let cr3 = ksCreate(int(slot))                      # its own page tables: only its own region is user-accessible
+  if cr3 == 0:
+    kprint("No address space for the app\n"); regionFree(slot); return
+  # The grant must land before the child can run: no preemption between creating it and granting.
+  let irqState = disableInterrupts()
+  let procSlot = procSpawnRing3(filename, loaded.appMain, userStackTop, int32(slot), cr3)
+  if procSlot >= 0 and gSpawnGrant != NoHandle:
+    if khGrant(khMe(), gSpawnGrant, procSlot, rtChannelDefault): gSpawnGrant = NoHandle
+  restoreInterrupts(irqState)
   if procSlot < 0:
+    ksDestroy(int(slot))
     kprint("procSpawnRing3 failed\n"); regionFree(slot); return
+  gLastSpawnSlot = procSlot
+  gLastSpawnRegion = int(slot)
   kprint("App spawned in ring 3\n")
   # Shell returns immediately; app runs in parallel via the preemptive scheduler.
   # Region and task slot are freed by abiExit when the app calls nimixExit().
@@ -326,41 +342,63 @@ proc extractArg[N: static int](buf: openArray[char]; first, last, skip: int;
     dst[di] = buf[si]; inc di; inc si
   dst[di] = '\0'
 
-# ── App exec helper ────────────────────────────────────────────────────────
+proc loadFile(name: cstring): int =
+  ## Read a disk file into diskFileBuf without printing. Bytes read, or -1.
+  if not fsMounted and not fsMount(): return -1
+  let (res, n) = fsReadInto(name, cast[ptr byte](addr diskFileBuf[0]),
+                            diskFileBuf.len)
+  if res != fOk: -1 else: n
 
-proc execApp(name: cstring; args: cstring) =
-  ## Load a PIE ELF app from disk with given args string.
-  cmdExec(name, args)
+proc launchLoaded(name: cstring; nbytes: int; args: cstring) =
+  ## Start what diskFileBuf holds, chosen by magic — not by extension:
+  ## ELF  = system tool or server (its own ring-3 task),
+  ## WASM = regular app (sandboxed; only the capabilities it is given).
+  let p = cast[ptr UncheckedArray[byte]](addr diskFileBuf[0])
+  if nbytes >= 4 and p[0] == 0x7f'u8 and p[1] == byte('E') and
+     p[2] == byte('L') and p[3] == byte('F'):
+    let dataBuf = cast[ptr byte](addr diskFileBuf[0])
+    if isPieElf(dataBuf): runPieElf(name, dataBuf, nbytes, args)
+    else: runExecElf(dataBuf, nbytes)
+  elif nbytes >= 4 and p[0] == 0'u8 and p[1] == byte('a') and
+       p[2] == byte('s') and p[3] == byte('m'):
+    let caps = [CapIpc, CapEvents]
+    wasmSetArgs(args)
+    if wasmRun(cast[ptr byte](addr diskFileBuf[0]), nbytes, caps) != wasmOk:
+      kprint("WASM execution failed\n")
+  else:
+    kprint("not an ELF or WASM file\n")
+
+proc withSuffix(dst: var array[128, char]; name: openArray[char]; n: int;
+                suffix: string) =
+  ## dst = name[0..<n] & suffix, NUL-terminated (no heap).
+  var k = 0
+  while k < n and k < dst.len - suffix.len - 1:
+    dst[k] = name[k]; inc k
+  for c in suffix:
+    dst[k] = c; inc k
+  dst[k] = '\0'
 
 proc cmdUnknown(buf: openArray[char], first, last: int) =
-  ## Try to execute as filename from disk. Detect .elf vs .wasm.
-  if not fsMounted and not fsMount():
-    kprint("No disk mounted\n")
-    return
-
-  var fname: array[128, char]
-  var flen = 0
+  ## `name [args]`: run a program from disk. Tries `name` as given, then
+  ## `name.elf` (system tools + servers), then `name.wasm` (regular apps).
+  var word: array[128, char]
+  var n = 0
   var i = first
-  while i <= last and flen < 127:
-    if buf[i] == ' ': break
-    fname[flen] = buf[i]
-    inc flen
-    inc i
-  fname[flen] = '\0'
-
-  let isElf = flen > 4 and fname[flen-4] == '.' and fname[flen-3] == 'e' and
-              fname[flen-2] == 'l' and fname[flen-1] == 'f'
-  let isWasm = flen > 5 and fname[flen-5] == '.' and fname[flen-4] == 'w' and
-               fname[flen-3] == 'a' and fname[flen-2] == 's' and fname[flen-1] == 'm'
-
-  if isElf:
-    cmdExec(cast[cstring](addr fname[0]))
-  elif isWasm:
-    cmdRun(cast[cstring](addr fname[0]))
-  else:
-    kprint("Unknown command: '")
-    for j in first..last: defaultSerial.putChar(buf[j])
-    kprint("' (not .elf or .wasm)\n")
+  while i <= last and buf[i] != ' ' and n < 100:
+    word[n] = buf[i]; inc n; inc i
+  var args: array[128, char]
+  extractArg(buf, i, last, 0, args)
+  var cand: array[128, char]
+  for suffix in ["", ".elf", ".wasm"]:
+    withSuffix(cand, word, n, suffix)
+    let nbytes = loadFile(cast[cstring](addr cand[0]))
+    if nbytes >= 0:
+      launchLoaded(cast[cstring](addr cand[0]), nbytes,
+                   cast[cstring](addr args[0]))
+      return
+  kprint("Unknown command: '")
+  for j in first..last: defaultSerial.putChar(buf[j])
+  kprint("' (no such program, .elf or .wasm)\n")
 
 # ── Shell input helpers ────────────────────────────────────────────────────
 
@@ -389,10 +427,178 @@ proc runWasmWithCaps(label: string; data: ptr byte; len: int) =
   let caps = [CapIpc, CapEvents]
   if wasmRun(data, len, caps) != wasmOk: wasmLog("error running", label)
 
-proc execArg[N: static int](buf: openArray[char]; first, last, skip: int; app: cstring) =
-  var dst: array[N, char]
-  extractArg(buf, first, last, skip, dst)
-  execApp(app, cast[cstring](addr dst[0]))
+proc cmdChantest() =
+  ## Plays the server of tests/qemu_devices.py `chan-*`: starts chantest.elf with ONE handle (its
+  ## bootstrap channel end, badge 77) and talks to it. Prints "chan-kernel: ..." for the harness.
+  let me = khMe()
+  if me < 0: kprint("chan-kernel: FAIL no current task\n"); return
+  var bad = 0
+  proc fail(what: string) =
+    inc bad
+    kprint("chan-kernel: FAIL "); kprint(what); kprint("\n")
+  var hA, hB: Handle
+  if chCreate(gHs, gCh, me, rtChannelDefault, rtChannelDefault, 0, 77, hA, hB) != crOk:
+    fail("create channel"); return
+  # decoys: handles this task holds and the child will be told the values of, but cannot use
+  var dA, dB: Handle
+  if chCreate(gHs, gCh, me, rtChannelDefault, rtChannelDefault, 0, 0, dA, dB) != crOk:
+    fail("create decoys"); return
+  gSpawnGrant = hB
+  var eA, eB: Handle
+  if chCreate(gHs, gCh, me, rtChannelDefault, rtChannelDefault, 0, 0, eA, eB) != crOk:
+    fail("create closer channel"); return
+  let n = loadFile("chantest.elf")
+  if n < 0: fail("chantest.elf not on disk"); gSpawnGrant = NoHandle; return
+  launchLoaded("chantest.elf", n, nil)
+  if gSpawnGrant != NoHandle: fail("the grant did not reach the child"); gSpawnGrant = NoHandle; return
+
+  proc pollRead(h: Handle; msg: var array[300, byte]; len: var int; badge: var uint64;
+                got: var array[ChMaxFlights, Handle]; nGot: var int): ChResult =
+    let deadline = pitTicks() + 600
+    while pitTicks() < deadline:
+      let r = chRead(gHs, gCh, me, h, msg, len, badge, got, nGot)
+      if r != crEmpty: return r
+      sti(); hlt()
+    crEmpty
+  proc asStr(m: array[300, byte]; len: int): string =
+    for i in 0 ..< len: result.add char(m[i])
+  proc bytesOf(s: string): seq[byte] =
+    for c in s: result.add byte(c)
+
+  var m: array[300, byte]
+  var len, nGot: int
+  var badge: uint64
+  var got: array[ChMaxFlights, Handle]
+  proc sleepTicks(n: uint64) =
+    let until = pitTicks() + n
+    while pitTicks() < until:
+      sti(); hlt()
+  sleepTicks(100)                       # the child is blocked in its wait for about a second
+  if chWrite(gHs, gCh, me, hA, bytesOf("hello")) != crOk: fail("write hello")
+  if pollRead(hA, m, len, badge, got, nGot) != crOk or asStr(m, len) != "ping": fail("read ping")
+  elif badge != 77: fail("badge of the child's handle is not 77")
+  else: kprint("chan-kernel: ping badge=77 ok\n")
+  if chWrite(gHs, gCh, me, hA, bytesOf("foreign:" & $uint32(dA) & " " & $uint32(dB))) != crOk:
+    fail("write foreign")
+  # the child's attacks on our decoys must change nothing: no message, nothing closed
+  if pollRead(hA, m, len, badge, got, nGot) != crOk or asStr(m, len) != "here is y" or nGot != 1:
+    fail("read the handle the child sent")
+  else:
+    let yh = got[0]
+    if badge != 77: fail("badge on the message that carried the handle")
+    if chQueued(gHs, gCh, me, dA) != 0 or chQueued(gHs, gCh, me, dB) != 0: fail("the child wrote to our decoys")
+    if chPeerClosed(gHs, gCh, me, dA) or chPeerClosed(gHs, gCh, me, dB): fail("the child closed our decoys")
+    if chWrite(gHs, gCh, me, yh, bytesOf("via y")) != crOk: fail("write through y")
+    else: kprint("chan-kernel: handle received and used ok\n")
+    # a burst for the child in ONE call, then a message that carries a handle: the child's batch
+    # read must take the burst and stop in front of the handle
+    var burst: seq[byte]
+    for i in 0 ..< 10:
+      let t = "r" & $i
+      burst.add byte(t.len); burst.add 0'u8
+      for c in t: burst.add byte(c)
+    var written: int
+    if chWriteBatch(gHs, gCh, me, hA, burst, 10, written) != crOk or written != 10: fail("write the burst")
+    # give the child one end of a channel and close the other after a moment: its wait must end
+    if chWrite(gHs, gCh, me, hA, bytesOf("closer"), [SendHandle(h: eB, rights: rtChannelDefault)]) != crOk:
+      fail("send the closer end")
+    sleepTicks(40)
+    discard chClose(gHs, gCh, me, eA)
+    # the child's burst of 12 (one batch call there): they arrive in order, stamped with badge 77
+    var ordered = true
+    for i in 0 ..< 12:
+      if pollRead(hA, m, len, badge, got, nGot) != crOk or asStr(m, len) != "b" & $i or badge != 77:
+        ordered = false
+        break
+    if not ordered: fail("the child's burst did not arrive in order with badge 77")
+    else: kprint("chan-kernel: burst of 12 in order ok\n")
+    if pollRead(hA, m, len, badge, got, nGot) != crOk: fail("read the child's report")
+    else:
+      let rep = asStr(m, len)
+      kprint("chan-kernel: child reports "); kprint(rep); kprint("\n")
+      if rep.len < 9 or rep[0 ..< 9] != "hostile:0": fail("the child's hostile checks did not all pass")
+  # the child exits: its bootstrap handle goes with it, so we must see the peer close
+  let deadline = pitTicks() + 600
+  while not chPeerClosed(gHs, gCh, me, hA) and pitTicks() < deadline:
+    sti(); hlt()
+  if not chPeerClosed(gHs, gCh, me, hA): fail("no peer-closed after the child exited")
+  else: kprint("chan-kernel: peer closed after exit ok\n")
+  discard chClose(gHs, gCh, me, hA)
+  discard chClose(gHs, gCh, me, dA)
+  discard chClose(gHs, gCh, me, dB)
+  if bad == 0: kprint("chan-kernel: ok\n")
+
+proc cmdIsotest() =
+  ## Keeps a victim alive and sends attackers at its memory, each running at the same time on its own
+  ## page tables. Prints "isotest-kernel: ..." for tests/qemu_devices.py. The victim's secrets are
+  ## read here too, from the kernel's tables (where every region is mapped), to prove they are intact.
+  const Offset = 0x300000'u64
+  const Magic = 0x4E494D4958495351'u64
+  var bad = 0
+  proc fail(what: string) =
+    inc bad
+    kprint("isotest-kernel: FAIL "); kprint(what); kprint("\n")
+  proc waitGone(slot: int; pid: uint32; maxTicks: uint64): bool =
+    let until = pitTicks() + maxTicks
+    while pitTicks() < until:
+      if not procTable.tasks[slot].used or procTable.tasks[slot].pid != pid: return true
+      sti(); hlt()
+    false
+  proc launch(name: cstring; args: cstring): tuple[slot: int, pid: uint32, region: int] =
+    let n = loadFile(name)
+    if n < 0: return (-1, 0'u32, -1)
+    launchLoaded(name, n, args)
+    (gLastSpawnSlot, procTable.tasks[gLastSpawnSlot].pid, gLastSpawnRegion)
+  proc hex(v: uint64): string =
+    const digits = "0123456789abcdef"
+    var started = false
+    for i in countdown(15, 0):
+      let d = int((v shr (uint64(i) * 4)) and 15)
+      if d != 0 or started or i == 0:
+        started = true
+        result.add digits[d]
+
+  let victim = launch("isotest.elf", "victim")
+  if victim.slot < 0: fail("isotest.elf not on disk"); return
+  let vbase = RegionBase + uint64(victim.region) * RegionSize
+  let secret = cast[ptr uint64](vbase + Offset)
+  # wait for the victim to plant its secret (read from the kernel's own tables)
+  var until = pitTicks() + 500
+  while secret[] != Magic and pitTicks() < until:
+    sti(); hlt()
+  if secret[] != Magic: fail("the victim never planted its secret"); return
+  kprint("isotest-kernel: victim alive, region at 0x"); kprint(hex(vbase)); kprint("\n")
+
+  # positive control: an app can use its OWN region and buffer while the victim is alive
+  block:
+    let a = launch("isotest.elf", "own")
+    if a.slot < 0 or not waitGone(a.slot, a.pid, 500): fail("the control app did not finish")
+    else: kprint("isotest-kernel: control finished\n")
+
+  # the attacks: each runs as its own app, concurrently with the victim
+  proc attack(label: string; mode: cstring; target: uint64) =
+    var args: array[40, char]
+    var k = 0
+    for c in $mode: args[k] = c; inc k
+    args[k] = ' '; inc k
+    for c in hex(target): args[k] = c; inc k
+    args[k] = '\0'
+    let a = launch("isotest.elf", cast[cstring](addr args[0]))
+    if a.slot < 0: fail("could not start the attacker " & label); return
+    if not waitGone(a.slot, a.pid, 500): fail("the attacker " & label & " is still running")
+    elif secret[] != Magic: fail("the secret changed after " & label)
+    else:
+      kprint("isotest-kernel: "); kprint(label); kprint(" contained\n")
+  attack("read of the victim's region", "read", vbase + Offset)
+  attack("write to the victim's region", "write", vbase + Offset)
+  attack("read of the victim's region start", "read", vbase)
+  attack("read of the victim's stack", "read", vbase + RegionSize - 64)
+  attack("read of the victim's buffer", "read", ArenaBase)
+  attack("write to the victim's buffer", "write", ArenaBase)
+  attack("read of kernel memory", "read", 0x200000'u64)
+  # the victim is untouched and finishes by itself
+  if not waitGone(victim.slot, victim.pid, 800): fail("the victim did not finish")
+  if bad == 0: kprint("isotest-kernel: ok\n")
 
 proc dispatchCmd(cmd: ShellCommand; buf: openArray[char];
                  first, last: int; physMgr: PhysicalMemManager) =
@@ -401,26 +607,26 @@ proc dispatchCmd(cmd: ShellCommand; buf: openArray[char];
   of scVersion:     cmdVersion()
   of scMeminfo:     cmdMeminfo(physMgr)
   of scClear:       cmdClear()
+  of scDmesg:       cmdDmesg()
   of scModel:       cmdModel()
   of scMount:       cmdMount()
   of scLoadPing:
     runWasm("ping",    cast[ptr byte](unsafeAddr pingWasm[0]),     pingWasm.len)
   of scLoadPingpong:
     runWasmWithCaps("pingpong", cast[ptr byte](unsafeAddr pingpongWasm[0]), pingpongWasm.len)
-  of scLs:     execApp("ls.elf", "/")
-  of scPs:     execApp("ps.elf", "")
-  of scStats:  execApp("stats.elf", "")
   of scLspci:  cmdLspci()
+  of scChantest: cmdChantest()
+  of scIsotest: cmdIsotest()
   of scNetinfo: cmdNetinfo()
+  of scDevtest:
+    var dev: array[16, char]
+    extractArg(buf, first, last, 7, dev); devtest(dev)
   of scRun:
     var fname: array[128, char]
     extractArg(buf, first, last, 4, fname); cmdRun(cast[cstring](addr fname[0]))
   of scExec:
     var fname: array[128, char]
     extractArg(buf, first, last, 5, fname); cmdExec(cast[cstring](addr fname[0]))
-  of scKill:
-    var pidBuf: array[32, char]
-    extractArg(buf, first, last, 5, pidBuf); execApp("kill.elf", cast[cstring](addr pidBuf[0]))
   of scEmpty:   discard
   of scUnknown: cmdUnknown(buf, first, last)
 
@@ -448,7 +654,7 @@ proc runShell*(physMgr: PhysicalMemManager) =
   var inputLen = 0
   kprint(ShellPrompt)
   while true:
-    let c = defaultSerial.getChar()
+    let c = consoleGetChar()         # serial or keyboard; flushes the display
     case c
     of '\r', '\n':       handleEnter(inputBuf, inputLen, physMgr)
     of '\b', char(127):  handleBackspace(inputBuf, inputLen)

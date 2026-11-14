@@ -1,0 +1,1208 @@
+diff --git a/packages/rui/src/event_source.nim b/packages/rui/src/event_source.nim
+index 959bbcb..1016240 100644
+--- a/packages/rui/src/event_source.nim
++++ b/packages/rui/src/event_source.nim
+@@ -87,11 +87,18 @@ type
+   ButtonEvent = tuple[down: bool, at: Point, stamp: MonoTime]
+   GlfwMouseCb = proc (window: pointer, button, action, mods: cint) {.cdecl.}
+ 
+-proc glfwSetMouseButtonCallback(window: pointer, cb: GlfwMouseCb): GlfwMouseCb
+-  {.importc: "glfwSetMouseButtonCallback", cdecl.}
+-proc glfwGetCurrentContext(): pointer {.importc: "glfwGetCurrentContext", cdecl.}
+-proc glfwGetCursorPos(window: pointer, x, y: ptr cdouble)
+-  {.importc: "glfwGetCursorPos", cdecl.}
++when defined(ruiNoGlfw):
++  # No GLFW window to hook: `hookMouseButtons` sees nil and raylib's polling
++  # is used (see `buttonEvents`).
++  proc glfwGetCurrentContext(): pointer = nil
++  proc glfwSetMouseButtonCallback(window: pointer, cb: GlfwMouseCb): GlfwMouseCb = nil
++  proc glfwGetCursorPos(window: pointer, x, y: ptr cdouble) = discard
++else:
++  proc glfwSetMouseButtonCallback(window: pointer, cb: GlfwMouseCb): GlfwMouseCb
++    {.importc: "glfwSetMouseButtonCallback", cdecl.}
++  proc glfwGetCurrentContext(): pointer {.importc: "glfwGetCurrentContext", cdecl.}
++  proc glfwGetCursorPos(window: pointer, x, y: ptr cdouble)
++    {.importc: "glfwGetCursorPos", cdecl.}
+ 
+ var
+   buttonQueue: seq[ButtonEvent]
+@@ -102,8 +109,11 @@ var
+ # say) and must be shown again. GLFW reports it; the App presents a frame when it
+ # sees `windowExposed`, instead of presenting on a timer just in case.
+ type GlfwRefreshCb = proc (window: pointer) {.cdecl.}
+-proc glfwSetWindowRefreshCallback(window: pointer, cb: GlfwRefreshCb): GlfwRefreshCb
+-  {.importc: "glfwSetWindowRefreshCallback", cdecl.}
++when defined(ruiNoGlfw):
++  proc glfwSetWindowRefreshCallback(window: pointer, cb: GlfwRefreshCb): GlfwRefreshCb = nil
++else:
++  proc glfwSetWindowRefreshCallback(window: pointer, cb: GlfwRefreshCb): GlfwRefreshCb
++    {.importc: "glfwSetWindowRefreshCallback", cdecl.}
+ var
+   windowExposed*: bool
+     ## Set when the OS says the window needs drawing again; the App clears it.
+diff --git a/packages/rui/src/idle_wait.nim b/packages/rui/src/idle_wait.nim
+index 272ae70..fd65cb9 100644
+--- a/packages/rui/src/idle_wait.nim
++++ b/packages/rui/src/idle_wait.nim
+@@ -11,8 +11,15 @@
+ 
+ import std/[monotimes, times, options]
+ 
+-proc glfwWaitEventsTimeout(seconds: cdouble) {.importc: "glfwWaitEventsTimeout", cdecl.}
+-proc glfwPostEmptyEvent() {.importc: "glfwPostEmptyEvent", cdecl.}
++when defined(ruiNoGlfw):
++  # raylib without GLFW (memory platform, NimixOS): no OS event wait to block
++  # in, so sleep out the timeout. A platform with its own wait replaces these.
++  from std/os import sleep
++  proc glfwWaitEventsTimeout(seconds: cdouble) = sleep(int(seconds * 1000))
++  proc glfwPostEmptyEvent() = discard
++else:
++  proc glfwWaitEventsTimeout(seconds: cdouble) {.importc: "glfwWaitEventsTimeout", cdecl.}
++  proc glfwPostEmptyEvent() {.importc: "glfwPostEmptyEvent", cdecl.}
+ 
+ const
+   minWait = initDuration(milliseconds = 1)     # never spin tighter than this
+diff --git a/packages/rui_drawing/src/pango_binding.nim b/packages/rui_drawing/src/pango_binding.nim
+index 2d32f1f..f6edc54 100644
+--- a/packages/rui_drawing/src/pango_binding.nim
++++ b/packages/rui_drawing/src/pango_binding.nim
+@@ -10,7 +10,8 @@
+ ## Only the calls used by `pango_text.nim` are declared. Everything is an opaque
+ ## pointer; nothing here is exposed to widget code.
+ 
+-import std/strutils
++import text_types
++export CairoAntialias, CairoSubpixelOrder, CairoHintStyle, fontDescString
+ 
+ {.passC: staticExec("pkg-config --cflags pangocairo").}
+ {.passL: staticExec("pkg-config --libs pangocairo").}
+@@ -58,31 +59,6 @@ type
+     ## Pango units (1/1024 px), not pixels.
+     x*, y*, width*, height*: cint
+ 
+-  CairoAntialias* {.size: sizeof(cint).} = enum
+-    ## cairo_antialias_t
+-    CairoAntialiasDefault = 0
+-    CairoAntialiasNone = 1
+-    CairoAntialiasGray = 2
+-    CairoAntialiasSubpixel = 3
+-    CairoAntialiasFast = 4
+-    CairoAntialiasGood = 5
+-    CairoAntialiasBest = 6
+-
+-  CairoSubpixelOrder* {.size: sizeof(cint).} = enum
+-    ## cairo_subpixel_order_t
+-    CairoSubpixelDefault = 0
+-    CairoSubpixelRgb = 1
+-    CairoSubpixelBgr = 2
+-    CairoSubpixelVrgb = 3
+-    CairoSubpixelVbgr = 4
+-
+-  CairoHintStyle* {.size: sizeof(cint).} = enum
+-    ## cairo_hint_style_t
+-    CairoHintDefault = 0
+-    CairoHintNone = 1
+-    CairoHintSlight = 2
+-    CairoHintMedium = 3
+-    CairoHintFull = 4
+ 
+ const
+   PANGO_SCALE* = 1024
+@@ -274,17 +250,3 @@ proc toPixels*(pangoUnits: cint): float32 {.inline.} =
+ 
+ proc toPangoUnits*(pixels: float32): cint {.inline.} =
+   cint(pixels * PANGO_SCALE.float32)
+-
+-# ---------------------------------------------------------------------------
+-# Font description strings
+-# ---------------------------------------------------------------------------
+-proc fontDescString*(family: string, size: float32,
+-                     bold = false, italic = false): string =
+-  ## Build a Pango font description such as "DejaVu Sans Bold Italic 14".
+-  ## An empty family falls back to the fontconfig "Sans" alias, which resolves
+-  ## on any system with fonts installed.
+-  result = if family.len == 0: "Sans" else: family
+-  if bold: result.add " Bold"
+-  if italic: result.add " Italic"
+-  # Pango parses a trailing number as the size in points.
+-  result.add " " & formatFloat(size, ffDecimal, 1)
+diff --git a/packages/rui_drawing/src/pango_text.nim b/packages/rui_drawing/src/pango_text.nim
+index d2a3f55..2087fbc 100644
+--- a/packages/rui_drawing/src/pango_text.nim
++++ b/packages/rui_drawing/src/pango_text.nim
+@@ -31,44 +31,14 @@
+ import std/[tables, hashes, math, unicode, options]
+ import std/times as stdtimes  # raylib also exports stdtimes.getTime()
+ import raylib
+-import pango_binding
++import text_types
++import text_engine
+ import perf
+ import std/monotimes
+ 
+-export fontDescString
+-export CairoAntialias, CairoSubpixelOrder, CairoHintStyle
++export text_types
+ 
+ type
+-  TextDir* = enum
+-    ## The base direction a run of text is laid out in. `tdAuto` lets Pango
+-    ## take it from the text's first strong character -- right for a whole
+-    ## paragraph, wrong for one wrapped line of it, which must keep its
+-    ## paragraph's direction.
+-    tdAuto, tdLtr, tdRtl
+-
+-  TextMeasure* = object
+-    width*: float32
+-    height*: float32
+-    baseline*: float32
+-    lineCount*: int
+-
+-  CursorPos* = object
+-    ## Caret geometry for a byte index, in pixels relative to the layout origin.
+-    x*, y*: float32
+-    height*: float32
+-
+-  HitResult* = object
+-    index*: int      ## byte index into the text
+-    trailing*: int   ## 0 = leading edge of the glyph, >0 = trailing
+-    inside*: bool    ## false when the point fell outside the layout
+-
+-  FontRenderOptions* = object
+-    ## Cairo font options. Carried over from the deleted `pango_helpers`, which
+-    ## mapped these but never got to apply them to a live context.
+-    antialias*: CairoAntialias
+-    hintStyle*: CairoHintStyle
+-    subpixelOrder*: CairoSubpixelOrder
+-
+   CacheKey = object
+     text: string
+     font: string
+@@ -102,8 +72,6 @@ proc hash(k: CacheKey): Hash =
+ # Module state
+ # ---------------------------------------------------------------------------
+ var
+-  measureSurface: CairoSurface
+-  measureCtx: CairoContext
+   cache: Table[CacheKey, CachedGlyphs]
+   cacheMemoryBytes = 0
+   cacheHits, cacheMisses = 0
+@@ -133,100 +101,22 @@ var
+   maxCacheMemoryMB* = 100
+     ## GPU memory ceiling for cached glyph textures, in megabytes.
+ 
+-  renderOptions = FontRenderOptions(
+-    antialias: CairoAntialiasGray,
+-    hintStyle: CairoHintSlight,
+-    subpixelOrder: CairoSubpixelDefault
+-  )
+ 
+ proc setFontRenderOptions*(opts: FontRenderOptions) =
+   ## Change antialiasing / hinting. Clears both caches, since every cached
+   ## texture and metric was produced under the previous settings.
+-  renderOptions = opts
++  engineSetRenderOptions(opts)
+   cache.clear()
+   cacheMemoryBytes = 0
+   measureCache.clear()
+   measureOld.clear()
+ 
+-proc fontRenderOptions*(): FontRenderOptions = renderOptions
+-
+-proc ensureMeasureCtx() =
+-  if measureCtx.pointer.isNil:
+-    measureSurface = cairoImageSurfaceCreate(CairoFormatA8, 1, 1)
+-    measureCtx = cairoCreate(measureSurface)
+-
+-proc applyFontOptions(layout: PangoLayout) =
+-  let opts = cairoFontOptionsCreate()
+-  cairoFontOptionsSetAntialias(opts, renderOptions.antialias)
+-  cairoFontOptionsSetHintStyle(opts, renderOptions.hintStyle)
+-  cairoFontOptionsSetSubpixelOrder(opts, renderOptions.subpixelOrder)
+-  pangoCairoContextSetFontOptions(pangoLayoutGetContext(layout), opts)
+-  cairoFontOptionsDestroy(opts)
+-  pangoLayoutContextChanged(layout)
+-
+-template withLayoutDir(font: string, wrapWidth: int32, markup: bool,
+-                       ctx: CairoContext, content: string, dir: TextDir,
+-                       body: untyped) =
+-  ## Build a configured PangoLayout named `layout`, run `body`, then free it.
+-  var layout {.inject.} = pangoCairoCreateLayout(ctx)
+-  applyFontOptions(layout)
+-
+-  let desc = pangoFontDescriptionFromString(font.cstring)
+-  pangoLayoutSetFontDescription(layout, desc)
+-  pangoFontDescriptionFree(desc)
+-
+-  # Let Pango pick the base direction from the text itself, so a Hebrew or
+-  # Arabic string lays out right-to-left without the caller saying so --
+-  # unless the caller knows better (a wrapped line keeps its paragraph's).
+-  if dir == tdAuto:
+-    pangoLayoutSetAutoDir(layout, 1)
+-  else:
+-    pangoLayoutSetAutoDir(layout, 0)
+-    pangoContextSetBaseDir(pangoLayoutGetContext(layout),
+-                           (if dir == tdRtl: 1.cint else: 0.cint))
+-    pangoLayoutContextChanged(layout)
+-
+-  if wrapWidth > 0:
+-    pangoLayoutSetWidth(layout, wrapWidth * PANGO_SCALE)
+-    pangoLayoutSetWrap(layout, PangoWrapWordChar)
+-  else:
+-    pangoLayoutSetWidth(layout, -1)
+-    pangoLayoutSetSingleParagraphMode(layout, 1)
+-
+-  if markup:
+-    pangoLayoutSetMarkup(layout, content.cstring, content.len.cint)
+-  else:
+-    pangoLayoutSetText(layout, content.cstring, content.len.cint)
+-
+-  body
+-  gObjectUnref(layout.pointer)
+-
+-template withLayout(font: string, wrapWidth: int32, markup: bool,
+-                    ctx: CairoContext, content: string, body: untyped) =
+-  withLayoutDir(font, wrapWidth, markup, ctx, content, tdAuto, body)
++proc fontRenderOptions*(): FontRenderOptions = engineRenderOptions()
+ 
+ 
+ # ---------------------------------------------------------------------------
+ # Measurement
+ # ---------------------------------------------------------------------------
+-proc measureUncached(text: string, font: string, wrapWidth: int32 = -1,
+-                     markup = false, dir = tdAuto): TextMeasure =
+-  ## Real text metrics from the layout engine.
+-  ensureMeasureCtx()
+-
+-  # An empty string still occupies a line, so measure a space to get the font's
+-  # line height: empty labels and inputs keep their row height.
+-  let content = if text.len == 0: " " else: text
+-  withLayoutDir(font, wrapWidth, markup and text.len > 0, measureCtx, content, dir):
+-    var w, h: cint
+-    pangoLayoutGetPixelSize(layout, addr w, addr h)
+-    result = TextMeasure(
+-      width: (if text.len == 0: 0.0'f32 else: w.float32),
+-      height: h.float32,
+-      baseline: toPixels(pangoLayoutGetBaseline(layout)),
+-      lineCount: pangoLayoutGetLineCount(layout).int
+-    )
+-
+ proc measure*(text: string, font: string, wrapWidth: int32 = -1,
+               markup = false, dir = tdAuto): TextMeasure =
+   ## Cached text metrics.
+@@ -243,7 +133,7 @@ proc measure*(text: string, font: string, wrapWidth: int32 = -1,
+     inc measureMisses
+     perfCount(pcMeasureMiss)
+     perfTime(phTextMeasure):
+-      result = measureUncached(text, font, wrapWidth, markup, dir)
++      result = engineMeasure(text, font, wrapWidth, markup, dir)
+ 
+   if measureCache.len >= maxMeasureEntries:
+     swap(measureOld, measureCache)     # the old generation is dropped
+@@ -259,24 +149,6 @@ proc measure*(text: string, font: string, wrapWidth: int32 = -1,
+ # delete. Pango knows the Unicode rules (UAX #29) and the per-script exceptions,
+ # so the editing code asks it rather than carrying tables of its own.
+ 
+-type
+-  CharAttrs* = object
+-    ## Per codepoint of a string (and one more for its end).
+-    byteAt*: seq[int]          ## byte offset of each codepoint, then text.len
+-    cursorStop*: seq[bool]     ## a caret may stand before this codepoint
+-    backspaceChar*: seq[bool]  ## Backspace removes just the codepoint before it,
+-                               ## not the whole cluster (a combining mark, say)
+-    wordStart*: seq[bool]      ## a word begins here / ends before here, by the
+-    wordEnd*: seq[bool]        ## Unicode rules plus Pango's per-script ones --
+-                               ## dictionary-based for Thai, Lao, Khmer, which
+-                               ## are written without spaces
+-
+-const
+-  LogAttrCursorPosition = 1'u32 shl 4
+-  LogAttrWordStart = 1'u32 shl 5
+-  LogAttrWordEnd = 1'u32 shl 6
+-  LogAttrBackspaceChar = 1'u32 shl 10
+-
+ var
+   attrsText: string
+   attrsCache: CharAttrs
+@@ -286,13 +158,7 @@ proc charAttrs*(text: string): CharAttrs =
+   ## the same string several times per key.
+   if attrsCache.byteAt.len > 0 and attrsText == text:
+     return attrsCache
+-  var offsets: seq[int]
+-  var i = 0
+-  while i < text.len:
+-    offsets.add i
+-    inc i
+-    while i < text.len and (ord(text[i]) and 0xC0) == 0x80: inc i
+-  offsets.add text.len
++  let offsets = codepointOffsets(text)
+   result.byteAt = offsets
+   result.cursorStop = newSeq[bool](offsets.len)
+   result.backspaceChar = newSeq[bool](offsets.len)
+@@ -301,16 +167,7 @@ proc charAttrs*(text: string): CharAttrs =
+   if text.len == 0:
+     result.cursorStop[0] = true
+   else:
+-    ensureMeasureCtx()
+-    withLayout("Sans 12", -1, false, measureCtx, text):
+-      var n: cint
+-      let attrs = cast[ptr UncheckedArray[uint32]](
+-        pangoLayoutGetLogAttrsReadonly(layout, addr n))
+-      for k in 0 ..< min(int(n), offsets.len):
+-        result.cursorStop[k] = (attrs[k] and LogAttrCursorPosition) != 0
+-        result.backspaceChar[k] = (attrs[k] and LogAttrBackspaceChar) != 0
+-        result.wordStart[k] = (attrs[k] and LogAttrWordStart) != 0
+-        result.wordEnd[k] = (attrs[k] and LogAttrWordEnd) != 0
++    engineClusterAttrs(text, result)
+   attrsText = text
+   attrsCache = result
+ 
+@@ -339,18 +196,7 @@ proc moveCaretVisually*(text: string, index: int, direction: int): Option[int] =
+   ## go in that direction (the end of the line on screen).
+   if text.len == 0:
+     return
+-  ensureMeasureCtx()
+-  withLayout("Sans 12", -1, false, measureCtx, text):
+-    var newIndex, newTrailing: cint
+-    pangoLayoutMoveCursorVisually(layout, 1, index.cint, 0, direction.cint,
+-                                  addr newIndex, addr newTrailing)
+-    if newIndex < 0 or newIndex > text.len:
+-      return none(int)
+-    var pos = int(newIndex)
+-    for _ in 0 ..< int(newTrailing):          # trailing = characters past the index
+-      inc pos
+-      while pos < text.len and (ord(text[pos]) and 0xC0) == 0x80: inc pos
+-    return some(pos)
++  engineMoveCaretVisually(text, index, direction)
+ 
+ proc softBreaks*(text, font: string, wrapWidth: int32): seq[int] =
+   ## Where one paragraph (no newlines) wraps at `wrapWidth` pixels: the byte
+@@ -360,13 +206,7 @@ proc softBreaks*(text, font: string, wrapWidth: int32): seq[int] =
+   result = @[0]
+   if text.len == 0 or wrapWidth <= 0:
+     return
+-  ensureMeasureCtx()
+-  withLayout(font, wrapWidth, false, measureCtx, text):
+-    let n = pangoLayoutGetLineCount(layout)
+-    for i in 1 ..< n:
+-      let line = pangoLayoutGetLineReadonly(layout, i)
+-      if line != nil:
+-        result.add int(line.start_index)
++  result = engineSoftBreaks(text, font, wrapWidth)
+ 
+ # ---------------------------------------------------------------------------
+ # Cursor geometry and hit testing (for editable text)
+@@ -374,97 +214,12 @@ proc softBreaks*(text, font: string, wrapWidth: int32): seq[int] =
+ proc cursorPosition*(text, font: string, byteIndex: int,
+                      wrapWidth: int32 = -1, dir = tdAuto): CursorPos =
+   ## Caret rectangle for a byte index — where to draw the insertion point.
+-  ensureMeasureCtx()
+-  withLayoutDir(font, wrapWidth, false, measureCtx, text, dir):
+-    var strong, weak: PangoRectangle
+-    pangoLayoutGetCursorPos(layout, byteIndex.cint, addr strong, addr weak)
+-    result = CursorPos(
+-      x: toPixels(strong.x),
+-      y: toPixels(strong.y),
+-      height: toPixels(strong.height)
+-    )
++  engineCursorPosition(text, font, byteIndex, wrapWidth, dir)
+ 
+ proc indexFromPosition*(text, font: string, x, y: float32,
+                         wrapWidth: int32 = -1, dir = tdAuto): HitResult =
+   ## Which byte index sits under a point — click-to-place-caret.
+-  ensureMeasureCtx()
+-  withLayoutDir(font, wrapWidth, false, measureCtx, text, dir):
+-    var index, trailing: cint
+-    let inside = pangoLayoutXyToIndex(layout, toPangoUnits(x), toPangoUnits(y),
+-                                      addr index, addr trailing)
+-    result = HitResult(index: index.int, trailing: trailing.int,
+-                       inside: inside != 0)
+-
+-# ---------------------------------------------------------------------------
+-# Rasterisation
+-# ---------------------------------------------------------------------------
+-proc rasteriseA8(text, font: string, wrapWidth: int32,
+-                 m: TextMeasure, dir = tdAuto): seq[Color] =
+-  ## Coverage mask -> white RGBA. Colour comes from the draw tint.
+-  let w = max(1'i32, m.width.int32)
+-  let h = max(1'i32, m.height.int32)
+-
+-  let surface = cairoImageSurfaceCreate(CairoFormatA8, w, h)
+-  let ctx = cairoCreate(surface)
+-  cairoSetSourceRgba(ctx, 1.0, 1.0, 1.0, 1.0)
+-
+-  withLayoutDir(font, wrapWidth, false, ctx, text, dir):
+-    cairoMoveTo(ctx, 0.0, 0.0)
+-    pangoCairoShowLayout(ctx, layout)
+-
+-  cairoSurfaceFlush(surface)
+-  let stride = cairoImageSurfaceGetStride(surface)
+-  let data = cairoImageSurfaceGetData(surface)
+-
+-  result = newSeq[Color](w * h)
+-  if not data.isNil:
+-    for y in 0 ..< h:
+-      let row = y * stride
+-      for x in 0 ..< w:
+-        result[y * w + x] = Color(r: 255, g: 255, b: 255, a: data[row + x])
+-
+-  cairoDestroy(ctx)
+-  cairoSurfaceDestroy(surface)
+-
+-proc rasteriseArgb32(markupText, font: string, wrapWidth: int32,
+-                     m: TextMeasure): seq[Color] =
+-  ## Full-colour path, for Pango markup with per-run colours
+-  ## (`<span foreground='red'>`). Draw this with a White tint.
+-  let w = max(1'i32, m.width.int32)
+-  let h = max(1'i32, m.height.int32)
+-
+-  let surface = cairoImageSurfaceCreate(CairoFormatArgb32, w, h)
+-  let ctx = cairoCreate(surface)
+-  cairoSetSourceRgba(ctx, 0.0, 0.0, 0.0, 1.0)
+-
+-  withLayout(font, wrapWidth, true, ctx, markupText):
+-    cairoMoveTo(ctx, 0.0, 0.0)
+-    pangoCairoShowLayout(ctx, layout)
+-
+-  cairoSurfaceFlush(surface)
+-  let stride = cairoImageSurfaceGetStride(surface)
+-  let data = cairoImageSurfaceGetData(surface)
+-
+-  result = newSeq[Color](w * h)
+-  if not data.isNil:
+-    for y in 0 ..< h:
+-      var src = y * stride
+-      for x in 0 ..< w:
+-        # Cairo ARGB32 on a little-endian host is B,G,R,A and *premultiplied*.
+-        # Undo the premultiplication, or every antialiased edge comes out dark.
+-        let a = data[src + 3]
+-        var r = data[src + 2]
+-        var g = data[src + 1]
+-        var b = data[src + 0]
+-        if a != 0 and a != 255:
+-          r = uint8(min(255, r.int * 255 div a.int))
+-          g = uint8(min(255, g.int * 255 div a.int))
+-          b = uint8(min(255, b.int * 255 div a.int))
+-        result[y * w + x] = Color(r: r, g: g, b: b, a: a)
+-        src += 4
+-
+-  cairoDestroy(ctx)
+-  cairoSurfaceDestroy(surface)
++  engineIndexFromPosition(text, font, x, y, wrapWidth, dir)
+ 
+ # ---------------------------------------------------------------------------
+ # LRU cache (design carried over from the deleted text_cache.nim)
+@@ -513,8 +268,8 @@ proc getGlyphs(text, font: string, wrapWidth: int32,
+   let w = max(1'i32, m.width.int32)
+   let h = max(1'i32, m.height.int32)
+ 
+-  let pixels = if markup: rasteriseArgb32(text, font, wrapWidth, m)
+-               else: rasteriseA8(text, font, wrapWidth, m, dir)
++  let pixels = if markup: engineRasteriseArgb32(text, font, wrapWidth, m)
++               else: engineRasteriseA8(text, font, wrapWidth, m, dir)
+ 
+   let bytes = w.int * h.int * 4
+   evictIfNeeded(bytes)
+@@ -590,9 +345,7 @@ proc measureTextPango*(text: string, font: string,
+ proc paragraphDir*(text: string): TextDir =
+   ## The direction a paragraph is laid out in: that of its first strong
+   ## character, as Pango decides it (left to right when it has none).
+-  if text.len == 0: tdLtr
+-  elif pangoFindBaseDir(text.cstring, text.len.cint) == 1: tdRtl
+-  else: tdLtr
++  engineParagraphDir(text)
+ 
+ proc measureMarkupPango*(markup: string, font: string,
+                          wrapWidth: int32 = -1): TextMeasure =
+diff --git a/packages/rui_drawing/src/rui_drawing.nim b/packages/rui_drawing/src/rui_drawing.nim
+index 75555b2..acb5239 100644
+--- a/packages/rui_drawing/src/rui_drawing.nim
++++ b/packages/rui_drawing/src/rui_drawing.nim
+@@ -24,7 +24,8 @@ import theme_check;        export theme_check   # contrast ratios, contrastProbl
+ import builtin_themes;     export builtin_themes
+ import widget_primitives;  export widget_primitives
+ import backdrop;           export backdrop     # a modal's frozen, themed page
+-import pango_binding;       export pango_binding   # Pango/Cairo FFI
++when not defined(ruiTextPixie):
++  import pango_binding;     export pango_binding   # Pango/Cairo FFI (Pango engine only)
+ import pango_text;          export pango_text      # glyph cache, cursor + hit-test API
+ import primitives/text;       export text
+ # primitives/text_cache was deleted: 428 lines with no callers anywhere. The
+diff --git a/packages/rui_drawing/src/text_engine.nim b/packages/rui_drawing/src/text_engine.nim
+new file mode 100644
+index 0000000..cfb91d3
+--- /dev/null
++++ b/packages/rui_drawing/src/text_engine.nim
+@@ -0,0 +1,11 @@
++## The text engine behind `pango_text`, chosen at compile time:
++##   default           Pango + Cairo (system libraries)
++##   -d:ruiTextPixie   Pixie (pure Nim; no system libraries; NimixOS)
++## Both export the same `engine*` procs (see text_engine_pango.nim).
++
++when defined(ruiTextPixie):
++  import text_engine_pixie
++  export text_engine_pixie
++else:
++  import text_engine_pango
++  export text_engine_pango
+diff --git a/packages/rui_drawing/src/text_engine_pango.nim b/packages/rui_drawing/src/text_engine_pango.nim
+new file mode 100644
+index 0000000..0fc9b54
+--- /dev/null
++++ b/packages/rui_drawing/src/text_engine_pango.nim
+@@ -0,0 +1,238 @@
++## Text engine: Pango + Cairo (the default; needs the system libraries).
++## =====================================================================
++##
++## Lays text out and rasterises it with Pango/PangoCairo. `pango_text` holds
++## the public API and the caches; the alternative engine is
++## `text_engine_pixie` (pure Nim, `-d:ruiTextPixie`). Both export the same
++## `engine*` procs.
++
++import std/options
++import raylib
++import pango_binding
++import text_types
++
++var
++  measureSurface: CairoSurface
++  measureCtx: CairoContext
++  renderOptions = FontRenderOptions(
++    antialias: CairoAntialiasGray,
++    hintStyle: CairoHintSlight,
++    subpixelOrder: CairoSubpixelDefault
++  )
++
++proc engineSetRenderOptions*(opts: FontRenderOptions) =
++  renderOptions = opts
++
++proc engineRenderOptions*(): FontRenderOptions = renderOptions
++
++proc ensureMeasureCtx() =
++  if measureCtx.pointer.isNil:
++    measureSurface = cairoImageSurfaceCreate(CairoFormatA8, 1, 1)
++    measureCtx = cairoCreate(measureSurface)
++
++proc applyFontOptions(layout: PangoLayout) =
++  let opts = cairoFontOptionsCreate()
++  cairoFontOptionsSetAntialias(opts, renderOptions.antialias)
++  cairoFontOptionsSetHintStyle(opts, renderOptions.hintStyle)
++  cairoFontOptionsSetSubpixelOrder(opts, renderOptions.subpixelOrder)
++  pangoCairoContextSetFontOptions(pangoLayoutGetContext(layout), opts)
++  cairoFontOptionsDestroy(opts)
++  pangoLayoutContextChanged(layout)
++
++template withLayoutDir(font: string, wrapWidth: int32, markup: bool,
++                       ctx: CairoContext, content: string, dir: TextDir,
++                       body: untyped) =
++  ## Build a configured PangoLayout named `layout`, run `body`, then free it.
++  var layout {.inject.} = pangoCairoCreateLayout(ctx)
++  applyFontOptions(layout)
++
++  let desc = pangoFontDescriptionFromString(font.cstring)
++  pangoLayoutSetFontDescription(layout, desc)
++  pangoFontDescriptionFree(desc)
++
++  # Let Pango pick the base direction from the text itself, so a Hebrew or
++  # Arabic string lays out right-to-left without the caller saying so --
++  # unless the caller knows better (a wrapped line keeps its paragraph's).
++  if dir == tdAuto:
++    pangoLayoutSetAutoDir(layout, 1)
++  else:
++    pangoLayoutSetAutoDir(layout, 0)
++    pangoContextSetBaseDir(pangoLayoutGetContext(layout),
++                           (if dir == tdRtl: 1.cint else: 0.cint))
++    pangoLayoutContextChanged(layout)
++
++  if wrapWidth > 0:
++    pangoLayoutSetWidth(layout, wrapWidth * PANGO_SCALE)
++    pangoLayoutSetWrap(layout, PangoWrapWordChar)
++  else:
++    pangoLayoutSetWidth(layout, -1)
++    pangoLayoutSetSingleParagraphMode(layout, 1)
++
++  if markup:
++    pangoLayoutSetMarkup(layout, content.cstring, content.len.cint)
++  else:
++    pangoLayoutSetText(layout, content.cstring, content.len.cint)
++
++  body
++  gObjectUnref(layout.pointer)
++
++template withLayout(font: string, wrapWidth: int32, markup: bool,
++                    ctx: CairoContext, content: string, body: untyped) =
++  withLayoutDir(font, wrapWidth, markup, ctx, content, tdAuto, body)
++
++
++proc engineMeasure*(text: string, font: string, wrapWidth: int32 = -1,
++                     markup = false, dir = tdAuto): TextMeasure =
++  ## Real text metrics from the layout engine.
++  ensureMeasureCtx()
++
++  # An empty string still occupies a line, so measure a space to get the font's
++  # line height: empty labels and inputs keep their row height.
++  let content = if text.len == 0: " " else: text
++  withLayoutDir(font, wrapWidth, markup and text.len > 0, measureCtx, content, dir):
++    var w, h: cint
++    pangoLayoutGetPixelSize(layout, addr w, addr h)
++    result = TextMeasure(
++      width: (if text.len == 0: 0.0'f32 else: w.float32),
++      height: h.float32,
++      baseline: toPixels(pangoLayoutGetBaseline(layout)),
++      lineCount: pangoLayoutGetLineCount(layout).int
++    )
++
++
++const
++  LogAttrCursorPosition = 1'u32 shl 4
++  LogAttrWordStart = 1'u32 shl 5
++  LogAttrWordEnd = 1'u32 shl 6
++  LogAttrBackspaceChar = 1'u32 shl 10
++
++proc engineClusterAttrs*(text: string; attrs: var CharAttrs) =
++  ## Fill cursorStop/backspaceChar/wordStart/wordEnd (byteAt already set):
++  ## Pango knows the Unicode rules (UAX #29) and the per-script exceptions.
++  ensureMeasureCtx()
++  withLayout("Sans 12", -1, false, measureCtx, text):
++    var n: cint
++    let logAttrs = cast[ptr UncheckedArray[uint32]](
++      pangoLayoutGetLogAttrsReadonly(layout, addr n))
++    for k in 0 ..< min(int(n), attrs.byteAt.len):
++      attrs.cursorStop[k] = (logAttrs[k] and LogAttrCursorPosition) != 0
++      attrs.backspaceChar[k] = (logAttrs[k] and LogAttrBackspaceChar) != 0
++      attrs.wordStart[k] = (logAttrs[k] and LogAttrWordStart) != 0
++      attrs.wordEnd[k] = (logAttrs[k] and LogAttrWordEnd) != 0
++
++proc engineMoveCaretVisually*(text: string, index: int, direction: int): Option[int] =
++  ensureMeasureCtx()
++  withLayout("Sans 12", -1, false, measureCtx, text):
++    var newIndex, newTrailing: cint
++    pangoLayoutMoveCursorVisually(layout, 1, index.cint, 0, direction.cint,
++                                  addr newIndex, addr newTrailing)
++    if newIndex < 0 or newIndex > text.len:
++      return none(int)
++    var pos = int(newIndex)
++    for _ in 0 ..< int(newTrailing):          # trailing = characters past the index
++      inc pos
++      while pos < text.len and (ord(text[pos]) and 0xC0) == 0x80: inc pos
++    return some(pos)
++
++proc engineSoftBreaks*(text, font: string, wrapWidth: int32): seq[int] =
++  result = @[0]
++  ensureMeasureCtx()
++  withLayout(font, wrapWidth, false, measureCtx, text):
++    let n = pangoLayoutGetLineCount(layout)
++    for i in 1 ..< n:
++      let line = pangoLayoutGetLineReadonly(layout, i)
++      if line != nil:
++        result.add int(line.start_index)
++
++proc engineCursorPosition*(text, font: string, byteIndex: int,
++                           wrapWidth: int32, dir: TextDir): CursorPos =
++  ensureMeasureCtx()
++  withLayoutDir(font, wrapWidth, false, measureCtx, text, dir):
++    var strong, weak: PangoRectangle
++    pangoLayoutGetCursorPos(layout, byteIndex.cint, addr strong, addr weak)
++    result = CursorPos(x: toPixels(strong.x), y: toPixels(strong.y),
++                       height: toPixels(strong.height))
++
++proc engineIndexFromPosition*(text, font: string, x, y: float32,
++                              wrapWidth: int32, dir: TextDir): HitResult =
++  ensureMeasureCtx()
++  withLayoutDir(font, wrapWidth, false, measureCtx, text, dir):
++    var index, trailing: cint
++    let inside = pangoLayoutXyToIndex(layout, toPangoUnits(x), toPangoUnits(y),
++                                      addr index, addr trailing)
++    result = HitResult(index: index.int, trailing: trailing.int,
++                       inside: inside != 0)
++
++proc engineParagraphDir*(text: string): TextDir =
++  if text.len == 0: tdLtr
++  elif pangoFindBaseDir(text.cstring, text.len.cint) == 1: tdRtl
++  else: tdLtr
++
++proc engineRasteriseA8*(text, font: string, wrapWidth: int32,
++                 m: TextMeasure, dir = tdAuto): seq[Color] =
++  ## Coverage mask -> white RGBA. Colour comes from the draw tint.
++  let w = max(1'i32, m.width.int32)
++  let h = max(1'i32, m.height.int32)
++
++  let surface = cairoImageSurfaceCreate(CairoFormatA8, w, h)
++  let ctx = cairoCreate(surface)
++  cairoSetSourceRgba(ctx, 1.0, 1.0, 1.0, 1.0)
++
++  withLayoutDir(font, wrapWidth, false, ctx, text, dir):
++    cairoMoveTo(ctx, 0.0, 0.0)
++    pangoCairoShowLayout(ctx, layout)
++
++  cairoSurfaceFlush(surface)
++  let stride = cairoImageSurfaceGetStride(surface)
++  let data = cairoImageSurfaceGetData(surface)
++
++  result = newSeq[Color](w * h)
++  if not data.isNil:
++    for y in 0 ..< h:
++      let row = y * stride
++      for x in 0 ..< w:
++        result[y * w + x] = Color(r: 255, g: 255, b: 255, a: data[row + x])
++
++  cairoDestroy(ctx)
++  cairoSurfaceDestroy(surface)
++
++proc engineRasteriseArgb32*(markupText, font: string, wrapWidth: int32,
++                     m: TextMeasure): seq[Color] =
++  ## Full-colour path, for Pango markup with per-run colours
++  ## (`<span foreground='red'>`). Draw this with a White tint.
++  let w = max(1'i32, m.width.int32)
++  let h = max(1'i32, m.height.int32)
++
++  let surface = cairoImageSurfaceCreate(CairoFormatArgb32, w, h)
++  let ctx = cairoCreate(surface)
++  cairoSetSourceRgba(ctx, 0.0, 0.0, 0.0, 1.0)
++
++  withLayout(font, wrapWidth, true, ctx, markupText):
++    cairoMoveTo(ctx, 0.0, 0.0)
++    pangoCairoShowLayout(ctx, layout)
++
++  cairoSurfaceFlush(surface)
++  let stride = cairoImageSurfaceGetStride(surface)
++  let data = cairoImageSurfaceGetData(surface)
++
++  result = newSeq[Color](w * h)
++  if not data.isNil:
++    for y in 0 ..< h:
++      var src = y * stride
++      for x in 0 ..< w:
++        # Cairo ARGB32 on a little-endian host is B,G,R,A and *premultiplied*.
++        # Undo the premultiplication, or every antialiased edge comes out dark.
++        let a = data[src + 3]
++        var r = data[src + 2]
++        var g = data[src + 1]
++        var b = data[src + 0]
++        if a != 0 and a != 255:
++          r = uint8(min(255, r.int * 255 div a.int))
++          g = uint8(min(255, g.int * 255 div a.int))
++          b = uint8(min(255, b.int * 255 div a.int))
++        result[y * w + x] = Color(r: r, g: g, b: b, a: a)
++        src += 4
++
++  cairoDestroy(ctx)
++  cairoSurfaceDestroy(surface)
++
+diff --git a/packages/rui_drawing/src/text_engine_pixie.nim b/packages/rui_drawing/src/text_engine_pixie.nim
+new file mode 100644
+index 0000000..054ea75
+--- /dev/null
++++ b/packages/rui_drawing/src/text_engine_pixie.nim
+@@ -0,0 +1,311 @@
++## Text engine: Pixie (pure Nim; `-d:ruiTextPixie`).
++## ==================================================
++##
++## The same `engine*` procs as `text_engine_pango`, built on Pixie's font
++## parsing, typesetting (`typeset` -> `Arrangement`) and rasterisation. No
++## system libraries: it runs where Pango cannot (NimixOS, WASM hosts,
++## minimal desktops).
++##
++## Differences from Pango, by design of what Pixie provides:
++## - Latin/Cyrillic/Greek/CJK lay out left to right with kerning; there is no
++##   complex shaping (no GSUB ligatures) and no bidi reordering: RTL text is
++##   laid out logically. `paragraphDir` still reports the paragraph's direction.
++## - Cluster and word rules are an approximation of UAX #29 (combining marks,
++##   ZWJ sequences, variation selectors, emoji modifiers, regional-indicator
++##   pairs), not Pango's per-script tables.
++## - Render options (hinting, subpixel order) are accepted and ignored.
++##
++## Fonts: a Pango-style description ("DejaVu Sans Bold 12": family, styles,
++## size in points) picks a registered face. `registerFontFile` /
++## `registerFontData` add faces; with none registered, the first match of
++## `RUI_FONT_FILE` or a few common system fonts becomes "Sans".
++
++import std/[options, os, strutils, tables, unicode]
++import pixie
++import raylib
++import text_types
++
++type
++  FaceKey = object
++    family: string        ## lower case
++    bold, italic: bool
++
++  FontSpec = object
++    face: Typeface
++    px: float32           ## pixel size (points at 96 dpi, as Cairo renders)
++
++var
++  faces: Table[FaceKey, Typeface]
++  renderOptions: FontRenderOptions
++  defaultsLoaded = false
++
++const SystemFonts = [
++  "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
++  "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
++  "/usr/share/fonts/truetype/crosextra/Carlito-Regular.ttf",
++  "/usr/share/fonts/TTF/DejaVuSans.ttf"]
++
++proc engineSetRenderOptions*(opts: FontRenderOptions) = renderOptions = opts
++proc engineRenderOptions*(): FontRenderOptions = renderOptions
++
++proc registerFontData*(family: string; bold, italic: bool; data: string) =
++  ## Add a face from TTF/OTF bytes (NimixOS: a sealed shared font buffer).
++  faces[FaceKey(family: family.toLowerAscii, bold: bold, italic: italic)] =
++    parseOtf(data)
++
++proc registerFontFile*(family: string; bold, italic: bool; path: string) =
++  faces[FaceKey(family: family.toLowerAscii, bold: bold, italic: italic)] =
++    readTypeface(path)
++
++proc loadDefaults() =
++  ## First use with nothing registered: find one regular face for "sans".
++  defaultsLoaded = true
++  if faces.len > 0: return
++  var candidates = @[getEnv("RUI_FONT_FILE")]
++  candidates.add SystemFonts
++  for path in candidates:
++    if path.len > 0 and fileExists(path):
++      registerFontFile("sans", false, false, path)
++      return
++
++proc parseDesc(desc: string): (FaceKey, float32) =
++  ## "DejaVu Sans Bold Italic 12.0" -> family, styles, size in points.
++  var key: FaceKey
++  var size = 12'f32
++  var family: seq[string]
++  for tok in strutils.splitWhitespace(desc):
++    let t = tok.toLowerAscii
++    if t == "bold" or t == "semi-bold" or t == "heavy": key.bold = true
++    elif t == "italic" or t == "oblique": key.italic = true
++    else:
++      try: size = parseFloat(tok)
++      except ValueError: family.add t
++  key.family = if family.len == 0: "sans" else: family.join(" ")
++  (key, size)
++
++proc lookupFace(key: FaceKey): Typeface =
++  ## Exact face, else the same family without styles, else any face.
++  if not defaultsLoaded: loadDefaults()
++  for k in [key, FaceKey(family: key.family),
++            FaceKey(family: "sans", bold: key.bold, italic: key.italic),
++            FaceKey(family: "sans")]:
++    if k in faces: return faces[k]
++  for f in faces.values: return f
++  raise newException(ValueError, "rui text (pixie): no font registered; " &
++    "call registerFontFile or set RUI_FONT_FILE")
++
++proc spec(desc: string): FontSpec =
++  let (key, pt) = parseDesc(desc)
++  FontSpec(face: lookupFace(key), px: pt * 96 / 72)
++
++proc newPixieFont(s: FontSpec; color = color(1, 1, 1, 1)): pixie.Font =
++  result = newFont(s.face)
++  result.size = s.px
++  result.paint = color
++
++# ── markup: Pango's common subset ------------------------------------------
++# <b>, <i>, <span foreground='#rrggbb' weight='bold' style='italic'>; entities.
++
++proc unescapeEntities(s: string): string =
++  s.multiReplace(("&lt;", "<"), ("&gt;", ">"), ("&quot;", "\""),
++                 ("&apos;", "'"), ("&amp;", "&"))
++
++proc attrValue(tag, name: string): string =
++  let i = tag.find(name & "=")
++  if i < 0: return ""
++  var j = i + name.len + 1
++  if j >= tag.len: return ""
++  let q = tag[j]
++  if q != '\'' and q != '"': return ""
++  inc j
++  let k = tag.find(q, j)
++  if k < 0: "" else: tag[j ..< k]
++
++proc markupSpans(markup: string; base: FontSpec; desc: string): seq[Span] =
++  ## Spans with their own weight/style/colour; unknown tags are ignored.
++  var bold, italic: seq[bool] = @[false]
++  var colors: seq[pixie.Color] = @[color(0, 0, 0, 1)]
++  let (baseKey, _) = parseDesc(desc)
++  var i = 0
++  var text = ""
++  template flush(acc: var string) =
++    if acc.len > 0:
++      let key = FaceKey(family: baseKey.family, bold: baseKey.bold or bold[^1],
++                        italic: baseKey.italic or italic[^1])
++      let f = newPixieFont(FontSpec(face: lookupFace(key), px: base.px), colors[^1])
++      result.add newSpan(unescapeEntities(acc), f)
++      acc = ""
++  while i < markup.len:
++    if markup[i] == '<':
++      let close = markup.find('>', i)
++      if close < 0: break
++      flush(text)
++      let tag = markup[i + 1 ..< close]
++      if tag.startsWith('/'):
++        if bold.len > 1: (discard bold.pop; discard italic.pop; discard colors.pop)
++      else:
++        bold.add(tag == "b" or attrValue(tag, "weight") == "bold" or bold[^1])
++        italic.add(tag == "i" or attrValue(tag, "style") == "italic" or italic[^1])
++        let fg = attrValue(tag, "foreground")
++        colors.add(if fg.startsWith('#') and fg.len == 7: parseHtmlColor(fg) else: colors[^1])
++      i = close + 1
++    else:
++      text.add markup[i]
++      inc i
++  flush(text)
++
++# ── layout ------------------------------------------------------------------
++
++proc arrange(text, desc: string; wrapWidth: int32; markup: bool): Arrangement =
++  let s = spec(desc)
++  let spans = if markup: markupSpans(text, s, desc)
++              else: @[newSpan(text, newPixieFont(s))]
++  let wrap = wrapWidth > 0
++  typeset(spans, bounds = vec2(if wrap: wrapWidth.float32 else: 0, 0), wrap = wrap)
++
++proc lineHeight(desc: string): float32 =
++  let f = newPixieFont(spec(desc))
++  f.defaultLineHeight
++
++proc baselineOf(desc: string): float32 =
++  ## Distance from the layout's top to the first baseline.
++  let s = spec(desc)
++  s.face.ascent * newPixieFont(s).scale
++
++proc engineMeasure*(text: string, font: string, wrapWidth: int32 = -1,
++                    markup = false, dir = tdAuto): TextMeasure =
++  if text.len == 0:
++    return TextMeasure(width: 0, height: lineHeight(font), baseline: baselineOf(font),
++                       lineCount: 1)
++  let a = arrange(text, font, wrapWidth, markup)
++  let b = a.layoutBounds()
++  let lines = max(1, a.lines.len)
++  TextMeasure(width: b.x, height: max(b.y, float32(lines) * lineHeight(font)),
++              baseline: baselineOf(font), lineCount: lines)
++
++# ── clusters, carets, hit tests ---------------------------------------------
++
++proc isClusterContinuation(r, prev: Rune): bool =
++  ## Codepoints that belong to the cluster before them (no caret before them).
++  let c = int(r)
++  r.isCombining or c == 0x200D or int(prev) == 0x200D or
++    c in 0xFE00 .. 0xFE0F or c in 0x1F3FB .. 0x1F3FF or c in 0xE0020 .. 0xE007F
++
++proc isWordRune(r: Rune): bool = r.isAlpha or (int(r) < 128 and char(int(r)) in Digits)
++
++proc engineClusterAttrs*(text: string; attrs: var CharAttrs) =
++  var runes = toRunes(text)
++  var regionalRun = 0
++  for k in 0 ..< runes.len:
++    let r = runes[k]
++    let prev = if k > 0: runes[k - 1] else: Rune(0)
++    var stop = k == 0 or not isClusterContinuation(r, prev)
++    if int(r) in 0x1F1E6 .. 0x1F1FF:            # flags: pairs of regional indicators
++      if regionalRun mod 2 == 1: stop = false
++      inc regionalRun
++    else: regionalRun = 0
++    attrs.cursorStop[k] = stop
++    attrs.backspaceChar[k] = r.isCombining
++    let w = isWordRune(r)
++    let pw = k > 0 and isWordRune(prev)
++    attrs.wordStart[k] = w and not pw
++    attrs.wordEnd[k] = pw and not w
++  attrs.cursorStop[runes.len] = true
++  attrs.wordEnd[runes.len] = runes.len > 0 and isWordRune(runes[^1])
++
++proc engineMoveCaretVisually*(text: string, index: int, direction: int): Option[int] =
++  ## Logical order (no bidi in this engine): the neighbouring caret stop.
++  var attrs = CharAttrs(byteAt: codepointOffsets(text))
++  let n = attrs.byteAt.len
++  attrs.cursorStop = newSeq[bool](n); attrs.backspaceChar = newSeq[bool](n)
++  attrs.wordStart = newSeq[bool](n); attrs.wordEnd = newSeq[bool](n)
++  engineClusterAttrs(text, attrs)
++  var k = attrs.byteAt.find(index)
++  if k < 0: return none(int)
++  while true:
++    k += (if direction < 0: -1 else: 1)
++    if k < 0 or k >= n: return none(int)
++    if attrs.cursorStop[k]: return some(attrs.byteAt[k])
++
++proc engineSoftBreaks*(text, font: string, wrapWidth: int32): seq[int] =
++  let a = arrange(text, font, wrapWidth, false)
++  let offsets = codepointOffsets(text)
++  result = @[0]
++  for i in 1 ..< a.lines.len:
++    result.add offsets[a.lines[i][0]]
++
++proc runeIndexOf(text: string; byteIndex: int): int =
++  let offsets = codepointOffsets(text)
++  for k, b in offsets:
++    if b >= byteIndex: return k
++  offsets.len - 1
++
++proc engineCursorPosition*(text, font: string, byteIndex: int,
++                           wrapWidth: int32, dir: TextDir): CursorPos =
++  let h = lineHeight(font)
++  if text.len == 0: return CursorPos(x: 0, y: 0, height: h)
++  let a = arrange(text, font, wrapWidth, false)
++  let k = runeIndexOf(text, byteIndex)
++  if k < a.selectionRects.len:
++    let r = a.selectionRects[k]
++    CursorPos(x: r.x, y: r.y, height: max(r.h, h))
++  else:
++    let r = a.selectionRects[^1]
++    CursorPos(x: r.x + r.w, y: r.y, height: max(r.h, h))
++
++proc engineIndexFromPosition*(text, font: string, x, y: float32,
++                              wrapWidth: int32, dir: TextDir): HitResult =
++  if text.len == 0: return HitResult(index: 0, inside: false)
++  let a = arrange(text, font, wrapWidth, false)
++  let offsets = codepointOffsets(text)
++  var best = -1
++  var bestDist = float32.high
++  for k, r in a.selectionRects:
++    let inRow = y >= r.y and y < r.y + r.h
++    if inRow and x >= r.x and x < r.x + r.w:
++      return HitResult(index: offsets[k], trailing: (if x >= r.x + r.w / 2: 1 else: 0),
++                       inside: true)
++    let dy = if y < r.y: r.y - y elif y >= r.y + r.h: y - (r.y + r.h) else: 0'f32
++    let dx = if x < r.x: r.x - x elif x >= r.x + r.w: x - (r.x + r.w) else: 0'f32
++    let d = dy * 1000 + dx                       # same row first, then nearest x
++    if d < bestDist: (bestDist = d; best = k)
++  let r = a.selectionRects[best]
++  HitResult(index: offsets[best], trailing: (if x >= r.x + r.w / 2: 1 else: 0),
++            inside: false)
++
++proc engineParagraphDir*(text: string): TextDir =
++  ## The first strong character's direction (left to right when there is none).
++  for r in text.runes:
++    let c = int(r)
++    if c in 0x0590 .. 0x08FF or c in 0xFB1D .. 0xFDFF or c in 0xFE70 .. 0xFEFF:
++      return tdRtl
++    if r.isAlpha: return tdLtr
++  tdLtr
++
++# ── rasterisation -----------------------------------------------------------
++
++proc render(text, font: string; wrapWidth: int32; m: TextMeasure;
++            markup: bool): pixie.Image =
++  let w = max(1, m.width.int)
++  let h = max(1, m.height.int)
++  result = newImage(w, h)
++  result.fillText(arrange(text, font, wrapWidth, markup))
++
++proc engineRasteriseA8*(text, font: string, wrapWidth: int32,
++                        m: TextMeasure, dir = tdAuto): seq[raylib.Color] =
++  ## Coverage as white RGBA; colour comes from the draw tint.
++  let img = render(text, font, wrapWidth, m, false)
++  result = newSeq[raylib.Color](img.width * img.height)
++  for i, px in img.data:
++    result[i] = raylib.Color(r: 255, g: 255, b: 255, a: px.a)
++
++proc engineRasteriseArgb32*(markupText, font: string, wrapWidth: int32,
++                            m: TextMeasure): seq[raylib.Color] =
++  ## Full colour for markup; Pixie stores premultiplied alpha: undo it.
++  let img = render(markupText, font, wrapWidth, m, true)
++  result = newSeq[raylib.Color](img.width * img.height)
++  for i, px in img.data:
++    let a = px.a
++    if a == 0: continue
++    let un = proc(c: uint8): uint8 = uint8(min(255, c.int * 255 div a.int))
++    result[i] = raylib.Color(r: un(px.r), g: un(px.g), b: un(px.b), a: a)
+diff --git a/packages/rui_drawing/src/text_types.nim b/packages/rui_drawing/src/text_types.nim
+new file mode 100644
+index 0000000..7044665
+--- /dev/null
++++ b/packages/rui_drawing/src/text_types.nim
+@@ -0,0 +1,94 @@
++## Text types shared by every text engine
++## ======================================
++##
++## `pango_text` is RUI's text API (measure, caret, hit test, draw, caches). The
++## engine underneath -- what lays text out and rasterises it -- is chosen at
++## compile time (`text_engine`): Pango/Cairo, or Pixie (pure Nim, no system
++## libraries; `-d:ruiTextPixie`). These are the types both engines speak, kept
++## here so neither engine's dependencies leak into the other.
++
++import std/strutils
++
++type
++  TextDir* = enum
++    ## The base direction a run of text is laid out in. `tdAuto` lets the
++    ## engine take it from the text's first strong character -- right for a
++    ## whole paragraph, wrong for one wrapped line of it, which must keep its
++    ## paragraph's direction.
++    tdAuto, tdLtr, tdRtl
++
++  TextMeasure* = object
++    width*: float32
++    height*: float32
++    baseline*: float32
++    lineCount*: int
++
++  CursorPos* = object
++    ## Caret geometry for a byte index, in pixels relative to the layout origin.
++    x*, y*: float32
++    height*: float32
++
++  HitResult* = object
++    index*: int      ## byte index into the text
++    trailing*: int   ## 0 = leading edge of the glyph, >0 = trailing
++    inside*: bool    ## false when the point fell outside the layout
++
++  CharAttrs* = object
++    ## Per codepoint of a string (and one more for its end).
++    byteAt*: seq[int]          ## byte offset of each codepoint, then text.len
++    cursorStop*: seq[bool]     ## a caret may stand before this codepoint
++    backspaceChar*: seq[bool]  ## Backspace removes just the codepoint before it,
++                               ## not the whole cluster (a combining mark, say)
++    wordStart*: seq[bool]      ## a word begins here / ends before here
++    wordEnd*: seq[bool]
++
++  CairoAntialias* {.size: sizeof(cint).} = enum
++    ## cairo_antialias_t (the Pixie engine always antialiases)
++    CairoAntialiasDefault = 0
++    CairoAntialiasNone = 1
++    CairoAntialiasGray = 2
++    CairoAntialiasSubpixel = 3
++    CairoAntialiasFast = 4
++    CairoAntialiasGood = 5
++    CairoAntialiasBest = 6
++
++  CairoSubpixelOrder* {.size: sizeof(cint).} = enum
++    ## cairo_subpixel_order_t
++    CairoSubpixelDefault = 0
++    CairoSubpixelRgb = 1
++    CairoSubpixelBgr = 2
++    CairoSubpixelVrgb = 3
++    CairoSubpixelVbgr = 4
++
++  CairoHintStyle* {.size: sizeof(cint).} = enum
++    ## cairo_hint_style_t
++    CairoHintDefault = 0
++    CairoHintNone = 1
++    CairoHintSlight = 2
++    CairoHintMedium = 3
++    CairoHintFull = 4
++
++  FontRenderOptions* = object
++    ## Antialiasing / hinting (honoured by the Pango engine).
++    antialias*: CairoAntialias
++    hintStyle*: CairoHintStyle
++    subpixelOrder*: CairoSubpixelOrder
++
++proc fontDescString*(family: string, size: float32,
++                     bold = false, italic = false): string =
++  ## Build a font description such as "DejaVu Sans Bold Italic 14" (Pango's
++  ## syntax; the Pixie engine parses the same). An empty family is "Sans".
++  result = if family.len == 0: "Sans" else: family
++  if bold: result.add " Bold"
++  if italic: result.add " Italic"
++  # A trailing number is the size in points.
++  result.add " " & formatFloat(size, ffDecimal, 1)
++
++proc codepointOffsets*(text: string): seq[int] =
++  ## Byte offset of each codepoint of `text`, then `text.len`.
++  var i = 0
++  while i < text.len:
++    result.add i
++    inc i
++    while i < text.len and (ord(text[i]) and 0xC0) == 0x80: inc i
++  result.add text.len

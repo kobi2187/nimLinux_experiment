@@ -8,16 +8,17 @@
 ##   if fsMount():
 ##     let data = fsReadFile("ping.wasm")
 
-const fatfsDir = "/home/kl/prog/nimLinux_experiment/vendor/fatfs"
+# Repo-relative: strip "fs/fatfs.nim" off this file's absolute path.
+const fatfsDir = currentSourcePath()[0 .. ^("fs/fatfs.nim".len + 1)] & "vendor/fatfs"
 
 {.passC: "-I" & fatfsDir.}
 
 when not defined(noKernelHardware):
   {.passC: "-ffreestanding -fno-stack-protector -mno-red-zone -mcmodel=kernel -fno-pic".}
-  {.compile: "/home/kl/prog/nimLinux_experiment/vendor/fatfs/ff.c".}
-  {.compile: "/home/kl/prog/nimLinux_experiment/vendor/fatfs/ffunicode.c".}
-  {.compile: "/home/kl/prog/nimLinux_experiment/vendor/fatfs/ffsystem.c".}
-  {.compile: "/home/kl/prog/nimLinux_experiment/vendor/fatfs/diskio_virtio.c".}
+  {.compile: "../vendor/fatfs/ff.c".}
+  {.compile: "../vendor/fatfs/ffunicode.c".}
+  {.compile: "../vendor/fatfs/ffsystem.c".}
+  {.compile: "../vendor/fatfs/diskio_virtio.c".}
   import ../drivers/virtio/diskio_virtio
 
 import ../core/log
@@ -42,8 +43,6 @@ const
   AM_DIR*  = 0x10'u8   ## fattrib bit: entry is a directory
 
 # ── FatFs C API ───────────────────────────────────────────────────────────────
-
-{.passC: "-I/home/kl/prog/nimLinux_experiment/vendor/fatfs".}
 
 proc f_mount(fs: ptr FATFS; path: cstring; opt: uint8): FRESULT
   {.importc: "f_mount", header: "ff.h".}
@@ -84,9 +83,11 @@ var fsMounted* = false
 
 proc fsMount*(): bool =
   ## Mount the FAT volume on drive 0 (ATA primary master).
-  earlyPutString("[TRACE fsMount] calling f_mount (forces boot-sector read)...\n")
+  when defined(virtioTrace):  # -d:virtioTrace: per-request trace
+    earlyPutString("[TRACE fsMount] calling f_mount (forces boot-sector read)...\n")
   let r = f_mount(addr fatfsObj, "", 1)  # "" = default drive, 1 = mount now
-  earlyPutString("[TRACE fsMount] f_mount returned, r="); earlyPutInt(int64(r)); earlyPutString("\n")
+  when defined(virtioTrace):  # -d:virtioTrace: per-request trace
+    earlyPutString("[TRACE fsMount] f_mount returned, r="); earlyPutInt(int64(r)); earlyPutString("\n")
   if r == FR_OK:
     fsMounted = true
     klog(llInfo, "fs: FAT volume mounted")

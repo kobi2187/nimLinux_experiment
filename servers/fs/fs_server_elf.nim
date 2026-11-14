@@ -1,84 +1,57 @@
 # SPDX-License-Identifier: GPL-2.0
-## fs_server — userspace ELF scaffold (ring-3 PIE)
+## fs_server — PIE ELF server: owns the "fs" channel, serves file reads.
 ##
-## Listens on "fs" channel. Receives a path (cstring in msg), calls fsLogicRead,
-## sends back FsReadReply as 24 bytes (token:u64 + base:u64 + len:i32 + err:i32).
+## Microkernel shape: the server creates its channel and receives through the
+## capability it gets back; clients (regular WASM apps) only send to "fs".
+##
+## Protocol: request "<reply-topic>\0<path>\0" on "fs". The reply is published
+## as an event on <reply-topic>: int32 LE status (bytes read, or < 0 error)
+## followed by up to FsInlineMax bytes of file data. Larger reads belong to the
+## zero-copy region-cap path (fs_logic) once clients can map regions.
 
-import fs_logic
-import dispatch_wire
+import nimix_common   # write, nimixWrite, nimixExit
+import nimix_entry
 
-# ── Kernel ABI (resolved by loader at runtime via stub patching) ──────────────
-
-proc nimixWrite(buf: pointer; len: int) {.importc, cdecl.}
-proc nimixExit(code: int) {.importc, cdecl, noreturn.}
-proc nimixChanSend(name: cstring; data: pointer; len: int): int {.importc, cdecl.}
-proc nimixChanRecv(name: cstring; buf: pointer; len: int): int {.importc, cdecl.}
-proc nimixGrantRegion(slot: int; right: uint32): uint64 {.importc, cdecl.}
-proc nimixAllocRegion(size: int): pointer {.importc, cdecl.}
-proc nimixFreeRegion(p: pointer; size: int) {.importc, cdecl.}
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-proc write(s: cstring) =
-  var i = 0
-  while s[i] != '\0': inc i
-  if i > 0: nimixWrite(cast[pointer](s), i)
-
-# ── Region slot management ────────────────────────────────────────────────────
-# Simple slot tracking via address arithmetic.
-# RegionBase = 0x400000, RegionSize = 4MB (matches mm/region_allocator.nim).
-
-const RegionBase = 0x400000'u64
-const RegionSize = 4 * 1024 * 1024'u64
-
-proc elfAlloc(size: uint64): int {.nimcall.} =
-  let p = nimixAllocRegion(int(size))
-  if p == nil: return -1
-  int((cast[uint64](p) - RegionBase) div RegionSize)
-
-proc elfFree(slot: int) {.nimcall.} =
-  let base = RegionBase + uint64(slot) * RegionSize
-  nimixFreeRegion(cast[pointer](base), int(RegionSize))
-
-proc elfBase(slot: int): uint64 {.nimcall.} =
-  RegionBase + uint64(slot) * RegionSize
-
-proc elfGrant(slot: int; pid: uint32; right: uint32): uint64 {.nimcall.} =
-  nimixGrantRegion(slot, right)
-
+proc nimixChanCreate(name: cstring): uint64 {.importc, cdecl.}
+proc nimixCapRecv(tok: uint64; buf: pointer; len: int): int {.importc, cdecl.}
 proc nimixFsRead(path: cstring; buf: pointer; len: int): int {.importc, cdecl.}
+proc nimixEventPublish(topic: cstring; data: pointer; len: int) {.importc, cdecl.}
+proc nimixYield() {.importc, cdecl.}
 
-proc elfReadFile(path: cstring; buf: pointer; len: int): (int, int) {.nimcall.} =
-  let n = nimixFsRead(path, buf, len)
-  if n < 0: return (n, 0)
-  (0, n)
+const
+  FsChannel   = "fs"
+  EventMax    = 512             ## kernel event payload limit (MaxPayloadLen)
+  FsInlineMax = EventMax - 4    ## data bytes after the int32 status
 
-# ── Module-level state ────────────────────────────────────────────────────────
+proc splitRequest(msg: var array[256, char]; n: int): (cstring, cstring) =
+  ## "<topic>\0<path>\0" → (topic, path); nil path when malformed.
+  msg[min(n, msg.len - 1)] = '\0'
+  var i = 0
+  while i < n and msg[i] != '\0': inc i
+  if i == 0 or i + 1 >= n: return (nil, nil)
+  (cast[cstring](addr msg[0]), cast[cstring](addr msg[i + 1]))
 
-var gIface: FsIface
-
-# ── Entry point ───────────────────────────────────────────────────────────────
+proc serve(topic, path: cstring) =
+  var reply: array[EventMax, byte]
+  let got = nimixFsRead(path, addr reply[4], FsInlineMax)
+  let status = int32(got)
+  for b in 0 .. 3: reply[b] = byte((status shr (8 * b)) and 0xFF)
+  nimixEventPublish(topic, addr reply[0], 4 + max(got, 0))
 
 proc appMain*() {.exportc.} =
+  nimixAppInit()   # module init first: --noMain skips it (nimix_entry)
   write("fs_server: starting\n")
-  gIface = FsIface(
-    readFile:  elfReadFile,
-    allocSlot: elfAlloc,
-    freeSlot:  elfFree,
-    slotBase:  elfBase,
-    grantCap:  elfGrant
-  )
+  let recvCap = nimixChanCreate(FsChannel)
+  if recvCap == 0:
+    write("fs_server: channel 'fs' unavailable (already running?) - exiting\n")
+    nimixExit(1)
   write("fs_server: ready on 'fs' channel\n")
-  var msgBuf: array[256, char]
+  var msg: array[256, char]
   while true:
-    let n = nimixChanRecv("fs", addr msgBuf[0], msgBuf.len)
+    let n = nimixCapRecv(recvCap, addr msg[0], msg.len - 1)
     if n > 0:
-      let path = cast[cstring](addr msgBuf[0])
-      let reply = fsLogicRead(gIface, path, 0'u32, 4 * 1024 * 1024)
-      let repData = encodeReply(WireReply(
-        token: reply.token,
-        base:  reply.base,
-        len:   int32(reply.len),
-        err:   int32(reply.err)
-      ))
-      discard nimixChanSend("fs", cast[pointer](unsafeAddr repData[0]), repData.len)
+      let (topic, path) = splitRequest(msg, n)
+      if not path.isNil: serve(topic, path)
+      else: write("fs_server: dropped malformed request\n")
+    else:
+      nimixYield()   # idle: give the CPU away (interim until block-on-mailbox)

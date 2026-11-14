@@ -8,6 +8,7 @@ import ../core/types
 import ./physical_manager
 import ../sync/spinlock
 import ../core/serial
+import ./map_generation
 
 when defined(amd64) or defined(x86_64):
   import ../arch/x86_64/cpu_primitives
@@ -232,6 +233,12 @@ proc getOrCreateTable(self: VirtualMemManager, parent: ptr uint64,
                       flags: uint64): Result[ptr array[PT_ENTRIES, uint64], MappingError] =
   ## Get or create a page table entry
   if (parent[] and PTE_PRESENT) != 0:
+    # A huge page is DATA, not a table: walking into it would write "PTEs"
+    # into the 2 MB page itself (this corrupted the kernel's early heap
+    # whenever a DMA page landed in the boot identity map). The address is
+    # already mapped by that huge page.
+    if (parent[] and PTE_HUGE) != 0:
+      return err(meAlreadyMapped)
     # Table exists — extract physical address from the PTE
     let tablePhys = PhysAddr(parent[] and PTE_ADDR_MASK)
     return ok(physPtr[array[PT_ENTRIES, uint64]](tablePhys))
@@ -273,7 +280,11 @@ proc mapPage*(self: VirtualMemManager, space: AddressSpace,
 
   let pdpt = ?self.getOrCreateTable(addr pml4[idx.pml4], tableFlags)
   let pd = ?self.getOrCreateTable(addr pdpt[idx.pdpt], tableFlags)
-  let pt = ?self.getOrCreateTable(addr pd[idx.pd], tableFlags)
+  # Not `?`: core/types' `?` raises a Defect on error rather than returning,
+  # and "already mapped by a huge page" is an expected answer here.
+  let ptr0 = self.getOrCreateTable(addr pd[idx.pd], tableFlags)
+  if not ptr0.isOk: return err(ptr0.error)
+  let pt = ptr0.value
 
   # Check if already mapped
   if (pt[idx.pt] and PTE_PRESENT) != 0:
@@ -282,6 +293,7 @@ proc mapPage*(self: VirtualMemManager, space: AddressSpace,
   # Set the page table entry
   doAssert idx.pt >= 0 and idx.pt < PT_ENTRIES, "PT index validation after walk"
   pt[idx.pt] = uint64(phys) or flagsToEntry(flags)
+  kernelMapsChanged()           # every task's private copy of the kernel's mappings must catch up
 
   ok()
 
@@ -314,6 +326,7 @@ proc unmapPage*(self: VirtualMemManager, space: AddressSpace,
 
   let phys = PhysAddr(pt[idx.pt] and PTE_ADDR_MASK)
   pt[idx.pt] = 0
+  kernelMapsChanged()
 
   ok(phys)
 
@@ -370,6 +383,12 @@ proc translate*(self: VirtualMemManager, space: AddressSpace,
 # ═══════════════════════════════════════════════════════════════════════════
 # Kernel Mappings
 # ═══════════════════════════════════════════════════════════════════════════
+
+proc kernelMapPage*(self: VirtualMemManager, virt: VirtAddr, phys: PhysAddr,
+                    flags: set[PageFlags]): Result[void, MappingError] =
+  ## One page into the kernel space, returning mapPage's answer as-is
+  ## (e.g. meAlreadyMapped) — mapRegion's `?` would turn any error into a panic.
+  self.mapPage(self.kernelSpace, virt, phys, flags)
 
 proc kernelMap*(self: VirtualMemManager, virt: VirtAddr, phys: PhysAddr,
                 length: uint64, flags: set[PageFlags]): Result[void, MappingError] =

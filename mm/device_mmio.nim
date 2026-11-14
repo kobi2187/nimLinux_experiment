@@ -39,7 +39,7 @@ proc roundUpFrames(length: uint64): uint64 {.inline.} =
 
 proc mapOnePage(virt: VirtAddr, phys: PhysAddr): bool =
   ## Map a single uncached page; already-mapped counts as success (idempotent).
-  let r = gMapper.kernelMapRegion(virt, phys, FrameSize, deviceMmioFlags())
+  let r = gMapper.kernelMapPage(virt, phys, deviceMmioFlags())
   r.isOk or r.error == meAlreadyMapped
 
 proc mapDeviceMmio*(phys: PhysAddr, length: uint64): VirtAddr =

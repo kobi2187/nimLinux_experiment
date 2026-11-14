@@ -53,7 +53,7 @@ proc dispatchTick*(ds: var DispatchState) =
     applyAging(ds.queue, ds.tickNow)
     ds.lastAge = ds.tickNow
 
-# ── Dispatcher actor (excluded from --os:standalone ELF build for now) ───────
+# ── Dispatcher actor (-d:dispatchNoCps omits it for builds without nim-cps) ──
 #
 # One long-lived actor is the whole run loop. The transport delivers a MailMsg
 # per event (request arrived / scheduler tick); the actor ingests, then drains
@@ -79,9 +79,13 @@ when not defined(dispatchNoCps):
 
   proc ingest(ds: ptr DispatchState; msg: MailMsg) =
     ## Decode a request message, classify it, enqueue it.
+    ## Malformed wire bytes come from untrusted apps: drop and log, never die.
     var wire = newString(int(msg.len) - 1)
     copyMem(addr wire[0], unsafeAddr msg.data[1], wire.len)
-    let wreq = decodeRequest(wire)
+    var wreq: WireRequest
+    if not tryDecodeRequest(wire, wreq):
+      ds.iface.log("dispatch: dropped malformed request\n")
+      return
     let class = classifyRequest(wreq.op, false)
     var req = DispatchRequest(
       op:          wreq.op,
@@ -133,3 +137,24 @@ when not defined(dispatchNoCps):
     result = Actor(whelp dispatcherBody(ds))
     resume(result)
     assert result.isSuspended, "dispatcher must park awaiting first message"
+
+  # ── Transport pump (shared by kmod and ELF variants) ───────────────────────
+
+  const PumpMaxPerQuantum* = 64   ## bound inbound work per quantum (fairness)
+
+  proc dispatchPump*(ds: ptr DispatchState; a: Actor): int =
+    ## One scheduler quantum: move pending requests from the inbound channel
+    ## into the actor, then deliver one tick. Returns requests delivered.
+    ## A recv that fills the buffer may have been truncated — dropped, not decoded.
+    var msg: MailMsg
+    msg.data[0] = MsgKindRequest
+    for _ in 0 ..< PumpMaxPerQuantum:
+      let n = ds.iface.recv(DispatchChannel, addr msg.data[1], MailMsgMax - 1)
+      if n <= 0: break
+      if n >= MailMsgMax - 1:
+        ds.iface.log("dispatch: dropped oversize request\n")
+      else:
+        msg.len = uint16(n + 1)
+        a.deliver(msg)
+        inc result
+    a.deliver(mkTickMsg())

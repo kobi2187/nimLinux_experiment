@@ -53,11 +53,13 @@ proc tokenSerial*(t: CapToken): uint32 = uint32(uint64(t) shr 32)
 proc capGrant*(pid: uint32; right: CapRight): CapToken =
   ## Mint a new capability token for `pid` with `right`.
   ## Returns NullCap if table is full.
+  ## Serial 0 is never minted: makeToken(0, slot 0) == NullCap. Checked before
+  ## minting so a zero-initialised table (capTableInit never called) is valid.
   for i in 0 ..< MaxCaps:
     if not gCapTable.entries[i].valid:
+      if gCapTable.nextSerial == 0: gCapTable.nextSerial = 1
       let tok = makeToken(gCapTable.nextSerial, i)
       inc gCapTable.nextSerial
-      if gCapTable.nextSerial == 0: gCapTable.nextSerial = 1  # skip 0
       gCapTable.entries[i] = CapEntry(token: tok, pid: pid, right: right, valid: true, regionSlot: -1)
       return tok
   NullCap
@@ -88,6 +90,14 @@ proc capGrantRegion*(slot: int; pid: uint32; right: CapRight): CapToken =
   regionAddRef(h)
   tok
 
+proc capOwner*(tok: CapToken): uint32 =
+  ## PID the (valid) token was granted to; 0 if invalid or revoked.
+  if tok.isNull: return 0
+  let slot = tokenSlot(tok)
+  if slot < 0 or slot >= MaxCaps: return 0
+  let e = gCapTable.entries[slot]
+  if e.valid and e.token == tok: e.pid else: 0
+
 proc capCheck*(tok: CapToken; right: CapRight): bool =
   ## Returns true iff tok is valid, not revoked, and grants `right`.
   if tok.isNull: return false
@@ -95,3 +105,21 @@ proc capCheck*(tok: CapToken; right: CapRight): bool =
   if slot < 0 or slot >= MaxCaps: return false
   let e = gCapTable.entries[slot]
   e.valid and e.token == tok and e.right == right
+
+proc capMayGrantRegion*(pid: uint32; ownSlot, slot: int): bool =
+  ## Who may mint a capability on region `slot`: the task whose region it is
+  ## (`ownSlot`), or a holder of a capMemGrant capability on that slot.
+  ## A slot number alone confers nothing.
+  if not regionValid(RegionHandle(slot)): return false
+  if slot == ownSlot: return true
+  for e in gCapTable.entries:
+    if e.valid and e.pid == pid and e.regionSlot == slot and e.right == capMemGrant:
+      return true
+  false
+
+proc capRevokeAllOf*(pid: uint32) =
+  ## Task exit: revoke every capability `pid` still holds (region caps drop
+  ## their reference, so memory others shared with it can be reclaimed).
+  for i in 0 ..< MaxCaps:
+    let e = gCapTable.entries[i]
+    if e.valid and e.pid == pid: capRevoke(e.token)

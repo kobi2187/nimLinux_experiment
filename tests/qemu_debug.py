@@ -15,7 +15,7 @@ Three complementary modes (QEMU debugging best practices, see DECISIONS.md
         to attach with kernel symbols loaded. The "scalpel" — breakpoints,
         single-step, inspect registers/memory/used.idx etc.
 
-  qmp   Boot with a QMP socket and drive QEMU programmatically over raw JSON
+  qmp   Boot with a QMP socket and drive QEMU programmatically via tools/nimix_qemu.Qmp
         (no external dependency): query run-state, issue monitor commands
         (info registers / info mem), and quit cleanly. Automation.
 
@@ -34,20 +34,19 @@ Examples:
 """
 
 import argparse
-import json
 import os
 import re
-import socket
 import subprocess
 import sys
-import threading
 import time
 
-QEMU = "qemu-system-x86_64"
-DEFAULT_BIOS = "/usr/share/ovmf/OVMF.fd"
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools"))
+import nimix_qemu as nq            # noqa: E402 — the one QEMU command-line builder
+import symbolize                   # noqa: E402
+
+DEFAULT_BIOS = nq.DEFAULT_BIOS
 SCRATCH = os.environ.get("QEMU_DEBUG_OUT", "qemu-debug")
 GDB_PORT = 1234
-QMP_PORT = 4445
 
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
@@ -57,20 +56,22 @@ def strip_noise(text: str) -> str:
     return ANSI.sub("", text.replace("\x00", ""))
 
 
-def disk_args(disk, virtio_blk):
-    """Attach a disk image, as virtio-blk-pci (real path) or legacy IDE."""
-    if not disk or not os.path.exists(disk):
-        return []
-    if virtio_blk:
-        return ["-drive", f"if=none,file={disk},format=raw,id=d0",
-                "-device", "virtio-blk-pci,drive=d0"]
-    return ["-hda", disk]
+def config(args, **kw) -> nq.QemuConfig:
+    """QEMU config shared by all modes (display-less, deterministic)."""
+    extra = list(kw.pop("extra", []))
+    if args.disk and os.path.exists(args.disk) and not args.virtio_blk:
+        extra += ["-hda", args.disk]            # legacy IDE path
+    return nq.QemuConfig(iso=args.iso, bios=args.bios, mem_mb=args.mem,
+                         disk=args.disk or "", devices=("blk",) if args.virtio_blk else (),
+                         extra=extra, **kw)
 
 
-def base_cmd(args):
-    """QEMU invocation shared by all modes (display-less, deterministic)."""
-    return [QEMU, "-cdrom", args.iso, "-bios", args.bios, "-m", str(args.mem),
-            "-display", "none"] + disk_args(args.disk, args.virtio_blk)
+def symbolized(text: str, kernel: str) -> str:
+    """Name the frames of any crash report in a serial transcript."""
+    if "backtrace:" not in text or not os.path.exists(kernel):
+        return text
+    return "".join(symbolize.symbolize(text.splitlines(keepends=True),
+                                       [symbolize.SymTab(kernel)]))
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -83,12 +84,10 @@ def mode_log(args):
     qemu_path = os.path.join(SCRATCH, "qemu-events.log")
     serial_raw = open(serial_path + ".raw", "wb")
 
-    cmd = base_cmd(args) + [
-        "-no-reboot", "-no-shutdown",            # freeze on triple-fault, don't silently reset
-        "-d", "int,cpu_reset,guest_errors",      # log interrupts/exceptions + CPU state on reset
-        "-D", qemu_path,                          # QEMU event log → file
-        "-serial", "file:" + serial_path + ".raw",
-    ]
+    # -no-reboot -no-shutdown: freeze on triple fault instead of silently
+    # resetting; -d int,cpu_reset,guest_errors → QEMU event log file.
+    cmd = nq.build_cmd(config(args, serial="file:" + serial_path + ".raw",
+                              log="int,cpu_reset,guest_errors", log_file=qemu_path))
     print(f"[debug-log] {' '.join(cmd)}")
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -100,7 +99,7 @@ def mode_log(args):
     serial_raw.close()
 
     raw = open(serial_path + ".raw", "rb").read().decode("latin-1")
-    clean = strip_noise(raw)
+    clean = symbolized(strip_noise(raw), args.kernel or _guess_kernel(args.iso))
     open(serial_path, "w").write(clean)
 
     print(f"\n=== serial (clean) → {serial_path} ===")
@@ -167,13 +166,15 @@ def mode_gdb(args):
     os.makedirs(SCRATCH, exist_ok=True)
     _write_gdbinit(gdbinit, kernel)
 
-    cmd = base_cmd(args) + ["-s", "-S", "-no-reboot", "-no-shutdown"]
+    serial = os.path.join(SCRATCH, "serial-gdb.log")
+    cmd = nq.build_cmd(config(args, gdb="wait", gdb_port=GDB_PORT, serial="file:" + serial,
+                              extra=["-no-shutdown"]))
     print(f"[debug-gdb] launching paused QEMU with GDB stub on :{GDB_PORT}")
     print(f"[debug-gdb] {' '.join(cmd)}")
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(0.5)
     print("\n=== Connect a debugger in another terminal: ===")
-    print(f"    gdb -x {gdbinit}")
+    print(f"    gdb -x {gdbinit}        (serial → {serial})")
     print("  (kernel symbols loaded; breakpoints set; 'continue' to run)")
     print("\n[debug-gdb] Ctrl-C here to stop QEMU when done.")
     try:
@@ -183,29 +184,21 @@ def mode_gdb(args):
     return 0
 
 
+GDB_HELPERS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                           "tools", "gdb", "nimix.gdb")
+
+
 def _write_gdbinit(path, kernel):
-    """A .gdbinit that loads kernel symbols, connects, and sets useful stops."""
-    content = f"""# Auto-generated by qemu_debug.py — NimixOS kernel debugging
+    """A .gdbinit that loads kernel symbols + NimixOS helpers and connects."""
+    open(path, "w").write(f"""# Auto-generated by qemu_debug.py — NimixOS kernel debugging
 set confirm off
 set architecture i386:x86-64
 file {kernel}
+source {GDB_HELPERS}
 target remote localhost:{GDB_PORT}
-
-# Stops that matter for this kernel. Add your own with: break <proc>
-break kernelMain
-break panic
-# virtio disk path (the V10 bug lived here):
-break virtioBlkRead
-break virtioBlkInitPci
-
-# Handy: dump the virtqueue used-ring index when stopped in the blk path
-define vq
-  printf "used.idx=%d lastUsed=%d\\n", gVirtioBlk.queue.used.idx, gVirtioBlk.queue.lastUsed
-end
-
-echo \\n[gdbinit] symbols loaded, connected to :{GDB_PORT}. 'continue' to boot.\\n
-"""
-    open(path, "w").write(content)
+nimix-breaks
+echo \\n[gdbinit] symbols + helpers loaded ('nimix-help'). 'continue' to boot.\\n
+""")
 
 
 def _guess_kernel(iso):
@@ -217,44 +210,14 @@ def _guess_kernel(iso):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Mode: qmp — automation via raw JSON over a socket (no dependency)
+# Mode: qmp — automation over a QMP unix socket (tools/nimix_qemu.Qmp)
 # ──────────────────────────────────────────────────────────────────────────────
 
-class Qmp:
-    """Minimal QMP client: connect, handshake, execute, monitor-command."""
-
-    def __init__(self, port):
-        self.sock = socket.create_connection(("localhost", port), timeout=10)
-        self.f = self.sock.makefile("rwb", buffering=0)
-        self._readline()                       # greeting (QMP capabilities banner)
-        self.execute("qmp_capabilities")       # leave negotiation mode
-
-    def _readline(self):
-        return json.loads(self.f.readline().decode())
-
-    def execute(self, cmd, **args):
-        msg = {"execute": cmd}
-        if args:
-            msg["arguments"] = args
-        self.f.write((json.dumps(msg) + "\n").encode())
-        while True:                            # skip async events, return the reply
-            reply = self._readline()
-            if "return" in reply or "error" in reply:
-                return reply
-
-    def monitor(self, line):
-        """Run a human-monitor command (info registers, info mem, x/…)."""
-        r = self.execute("human-monitor-command", **{"command-line": line})
-        return r.get("return", r)
-
-
 def mode_qmp(args):
-    cmd = base_cmd(args) + [
-        "-qmp", f"tcp:localhost:{QMP_PORT},server,nowait",
-        "-no-reboot", "-no-shutdown",
-        "-serial", "file:" + os.path.join(SCRATCH, "serial.log") + ".raw",
-    ]
     os.makedirs(SCRATCH, exist_ok=True)
+    qmp_sock = os.path.join(SCRATCH, "qmp.sock")
+    cmd = nq.build_cmd(config(args, qmp=qmp_sock, extra=["-no-shutdown"],
+                              serial="file:" + os.path.join(SCRATCH, "serial.log") + ".raw"))
     print(f"[debug-qmp] {' '.join(cmd)}")
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -262,12 +225,12 @@ def mode_qmp(args):
     found = _wait_for_file_pattern(serial, args.until, args.timeout, proc)
 
     try:
-        q = Qmp(QMP_PORT)
+        q = nq.Qmp(qmp_sock)
         print("[debug-qmp] connected.")
-        print("status:", q.execute("query-status").get("return"))
+        print("status:", q.execute("query-status"))
         if args.monitor:
             print(f"\n=== monitor: {args.monitor} ===")
-            print(q.monitor(args.monitor))
+            print(q.hmp(args.monitor))
         q.execute("quit")
     except Exception as e:                      # noqa: BLE001 — report any QMP failure
         print(f"[debug-qmp] QMP error: {e}", file=sys.stderr)

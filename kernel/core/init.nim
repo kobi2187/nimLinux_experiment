@@ -13,6 +13,7 @@ import ../../mm/physical_manager
 import ../../mm/virtual_manager
 import ../../mm/device_mmio
 import ../../mm/heap_manager
+import ../../mm/memory_windows
 import ../../sched/task_manager
 import ../../sched/scheduler
 
@@ -155,6 +156,9 @@ proc initCoreKernel*(bootInfo: ptr BootInfo): CoreKernel =
   result.virtMgr = virtMgr
   result.heapMgr = heapMgr
   klog(llInfo, "  ✓ Virtual memory + heap initialized")
+  if not initMemoryWindows(result.physMgr):
+    kprintln("PANIC: app region / buffer arena windows unavailable")
+    while true: discard
 
   # ─────────────────────────────────────────────────────────────────────────
   # PHASE 3: Scheduling (Processes + Scheduler)

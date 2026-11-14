@@ -1,0 +1,16 @@
+# Nim refc's conservative stack scan reads every word of the stack, including
+# uninitialised ones, by design (gc_common.markStackAndRegisters). Memcheck
+# reports those reads as Cond/Value8 errors on a GC that runs correctly; this
+# suppresses only reads reached FROM that scan.
+{
+   nim-refc-conservative-stack-scan-cond
+   Memcheck:Cond
+   ...
+   fun:*markStackAndRegisters*
+}
+{
+   nim-refc-conservative-stack-scan-value8
+   Memcheck:Value8
+   ...
+   fun:*markStackAndRegisters*
+}

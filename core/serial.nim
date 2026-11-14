@@ -115,10 +115,28 @@ proc isReceiveReady(serial: SerialPort): bool {.inline.} =
 # Output
 # ═══════════════════════════════════════════════════════════════════════════
 
+var consoleMirror*: proc(c: char) {.nimcall.}
+  ## Optional second console (the framebuffer console sets this): every byte
+  ## written to serial is also handed to it. Set once at boot.
+var consoleFlush*: proc() {.nimcall.}
+  ## Present the mirror console now (crash paths call consoleFlushNow so a
+  ## report is visible on screen, not only on serial).
+var inMirror: bool
+
+proc consoleFlushNow*() =
+  if consoleFlush != nil and not inMirror:
+    inMirror = true
+    consoleFlush()
+    inMirror = false
+
 proc putChar*(serial: SerialPort, c: char) =
   ## Write a single character to serial port.
   ##
   ## Note: Blocks until transmitter is ready (busy-wait).
+  if consoleMirror != nil and not inMirror:   # guard: the mirror may log
+    inMirror = true
+    consoleMirror(c)
+    inMirror = false
   if not serial.initialized:
     return
 

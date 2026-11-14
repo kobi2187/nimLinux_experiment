@@ -24,6 +24,8 @@ import ../../drivers/virtio/virtio_snd
 import ../../drivers/virtio/virtio_input
 import ../../drivers/pic
 import ../../drivers/pit
+import ../../drivers/tsc
+import ../../mm/memory_windows
 import ../../drivers/ps2_keyboard
 import ../../drivers/ps2_mouse
 import ../../drivers/vga_text
@@ -31,8 +33,17 @@ import ../../drivers/pci/pci_device
 import ../../drivers/rtc
 import ../../kern/interrupts
 import ../../arch/x86_64/syscall_gate
+import ../../kernel/abi/nimix_abi_impl   # user-fault policy
+import ../../kernel/abi/task_cleanup
+import ../../kernel/abi/user_args_gate
+import ../../kernel/handles/khandles
+import ../../kernel/space/kspace
+import ../buffers/kbuffers
 import ../../fs/fatfs
+import ../../fs/fatfs_write   # registerFatFs
+import ../../fs/ramfs         # registerRamFs
 import ../../shell/shell
+import ../console/fb_console
 
 when defined(amd64) or defined(x86_64):
   import ../../arch/x86_64/cpu_primitives
@@ -60,6 +71,10 @@ proc initPIC*() =
 proc initTimers*() =
   ## Setup PIT for 100 Hz tick.
   pitInit(100)
+  tscInit()          # fine clock: PIT channel 2 is free of the tick, and IRQs are still off
+  if tscReady():
+    if publishTimePage(tscClock()): klog(llInfo, "[TSC] ✓ time page published (apps read the clock without a syscall)")
+    else: klog(llWarn, "[TSC] no time page window; apps use the coarse clock")
   pitRegisterHandler()
   picUnmask(0)
   klog(llInfo, "[SERVICES] ✓ PIT: 100 Hz, IRQ0 wired")
@@ -100,8 +115,49 @@ proc initClock*() =
 # Stage 3: Drivers + I/O
 # ═══════════════════════════════════════════════════════════════════════════
 
+# PCI INTx lines are shared between devices: one dispatcher per line runs
+# every handler on it, then EOIs. (Registering per device would let the last
+# device silently replace the others' handler.)
+const MaxIrqShares = 4
+var gIrqHandlers: array[16, array[MaxIrqShares, proc() {.nimcall.}]]
+
+proc irqLineDispatch(line: int) =
+  for h in gIrqHandlers[line]:
+    if h != nil: h()
+  picEoi(uint8(line))
+
+template lineEntry(n: static int): untyped =
+  proc(ctx: ptr ExceptionContext) {.nimcall.} = irqLineDispatch(n)
+
+proc wirePciIrq(line: uint8; handler: proc() {.nimcall.}) =
+  ## Add `handler` to the device IRQ `line` (shared-line safe).
+  let l = int(line)
+  if l >= 16: return
+  var installed = false
+  for i in 0 ..< MaxIrqShares:
+    if gIrqHandlers[l][i] != nil: installed = true
+  for i in 0 ..< MaxIrqShares:
+    if gIrqHandlers[l][i] == nil:
+      gIrqHandlers[l][i] = handler
+      break
+  if not installed:
+    const entries = [lineEntry(0), lineEntry(1), lineEntry(2), lineEntry(3),
+                     lineEntry(4), lineEntry(5), lineEntry(6), lineEntry(7),
+                     lineEntry(8), lineEntry(9), lineEntry(10), lineEntry(11),
+                     lineEntry(12), lineEntry(13), lineEntry(14), lineEntry(15)]
+    discard getInterruptManager().registerExceptionHandler(
+      uint32(irqToVector(l)), entries[l])
+    picSetLevelTriggered(line)
+    picUnmask(line)
+
+proc publishInputEvent(ev: VirtioInputEvent) {.nimcall.} =
+  ## Driver → event bus (topic "input"): an input/app server subscribes; the
+  ## kernel keeps no input policy. Payload = the 8-byte virtio input event.
+  var e = ev
+  eventPublish("input", addr e, sizeof(e))
+
 proc initVirtioDevices*() =
-  ## PCI scan + virtio-net / virtio-blk probing.
+  ## PCI scan + virtio device probing; interrupts wired per (shared) line.
   pciScan()
   klogInt(llInfo, "[SERVICES] PCI scan: found ", int64(gPciCount))
 
@@ -109,15 +165,8 @@ proc initVirtioDevices*() =
     klog(llWarn, "[SERVICES] virtio-net: not available")
   else:
     klog(llInfo, "[SERVICES] ✓ virtio-net initialized")
-    let netIrq = gVirtioNet.irqLine
-    picUnmask(netIrq)
-    discard getInterruptManager().registerExceptionHandler(
-      uint32(irqToVector(int(netIrq))),
-      proc(ctx: ptr ExceptionContext) {.nimcall.} =
-        virtioNetIrqHandler()
-        picEoi(gVirtioNet.irqLine))
-    klogInt(llInfo, "[SERVICES] ✓ virtio-net: IRQ wired (", int64(netIrq))
-    klog(llInfo, ")")
+    wirePciIrq(gVirtioNet.irqLine, virtioNetIrqHandler)
+    klogInt(llInfo, "[SERVICES] ✓ virtio-net: IRQ line ", int64(gVirtioNet.irqLine))
 
   if virtioBlkInit():
     klog(llInfo, "[SERVICES] ✓ virtio-blk initialized")
@@ -135,7 +184,13 @@ proc initVirtioDevices*() =
     klog(llWarn, "[SERVICES] virtio-snd: not available")
 
   if virtioInputInit():
-    klog(llInfo, "[SERVICES] ✓ virtio-input initialized")
+    gInputOnEvent = publishInputEvent
+    for i in 0 ..< gInputCount:                 # the handler drains all devices: wire each distinct line once
+      var seen = false
+      for k in 0 ..< i:
+        if gInputs[k].irqLine == gInputs[i].irqLine: seen = true
+      if not seen: wirePciIrq(gInputs[i].irqLine, virtioInputIrqHandler)
+    klogInt(llInfo, "[SERVICES] ✓ virtio-input: devices ", int64(gInputCount))
   else:
     klog(llWarn, "[SERVICES] virtio-input: not available")
 
@@ -171,13 +226,27 @@ proc initIPC*() =
   serverChanRegistryInit()
   klog(llInfo, "[SERVICES] ✓ ServerChan registry ready")
 
+proc initFilesystems*() =
+  ## Register VFS drivers (mounting stays lazy, on first use). Order matters:
+  ## the first driver is the default for paths matching no prefix ("/").
+  registerFatFs()   # /fat/ and default
+  registerRamFs()   # /ram/
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Stage 5: Syscall Gate
 # ═══════════════════════════════════════════════════════════════════════════
 
 proc initSyscallGate*() =
-  ## Wire ring-0 <-> ring-3 syscall dispatch.
+  ## Wire ring-0 <-> ring-3 syscall dispatch, and the user-fault policy that
+  ## comes with ring 3: a CPU fault in a user task kills that task (like exit)
+  ## instead of halting the machine — kernel state is intact.
+  syscallArgsCheck = kernelUserArgsOk            # ring-3 pointer arguments must stay in the caller's memory
   syscallGateInit()
+  ksInit()                                   # per-task address spaces (mm/addr_space) before any ring-3 task
+  kbufInit()
+  khInit()                                   # handle tables and channels (ipc/handles)
+  userFaultKill   = abiKillFaultingTask
+  userStackBounds = abiCurrentTaskBounds
   klog(llInfo, "[SERVICES] ✓ Syscall gate ready (ring 0<->3)")
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -232,8 +301,11 @@ proc initServices*() =
   # Stage 3
   klog(llInfo, "[SERVICES] Stage 3: Drivers + I/O")
   initBuiltinDrivers()
+  initVirtioDevices()   # devices first: modules (FatFs mount) use them
+  if fbConsoleInit():    # from here on, console output also shows on the display
+    klog(llInfo, "[SERVICES] ✓ framebuffer console (virtio-gpu)")
   initModules()
-  initVirtioDevices()
+  initFilesystems()
 
   # Stage 4
   klog(llInfo, "[SERVICES] Stage 4: IPC infrastructure")

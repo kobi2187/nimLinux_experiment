@@ -38,6 +38,11 @@ type
     width*:      uint32
     height*:     uint32
 
+  GpuResourceUnref* {.packed.} = object
+    hdr*:        GpuCtrlHdr
+    resourceId*: uint32
+    padding*:    uint32
+
   GpuSetScanout* {.packed.} = object
     hdr*:        GpuCtrlHdr
     r*:          GpuRect

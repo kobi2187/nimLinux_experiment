@@ -14,11 +14,12 @@
 ##
 ## MSR layout (AMD64 Vol 2 §6.1.1):
 ##   STAR[47:32] = KernelCS  → CS on syscall entry
-##   STAR[63:48] = UserDS-8  → CS/SS on sysret
+##   STAR[63:48] = KernelDS  → sysret: SS = +8 (UserDS), CS = +16 (UserCS)
 ##   LSTAR       = syscall_entry RIP
 ##   SFMASK      = clears IF on entry (bit 9)
 
 import ./cpu_primitives
+import ../../kernel/abi/user_args   # refusedResult
 import ./tss
 import ../../kernel/abi/nimix_abi as abiMod
 
@@ -59,8 +60,61 @@ type NimixSyscall* = enum
   scFreeAnon       = 25
   scSndPlay        = 26
   scSndDrain       = 27
+  scChanCreate     = 28
+  scCapRecv        = 29
+  scBufCreate      = 30
+  scBufMap         = 31
+  scBufClose       = 32
+  scBufSeal        = 33
+  scBufReturn      = 34
+  scBufMsgSend     = 35
+  scBufMsgRecv     = 36
+  scDisplayInfo    = 37
+  scDisplayPresent = 38
+  scDisplayModes   = 39
+  scDisplaySetMode = 40
+  scChanPair       = 41
+  scChanWrite      = 42
+  scChanRead       = 43
+  scHandleClose    = 44
+  scHandleDup      = 45
+  scChanStatus     = 46
+  scWait           = 47
+  scChanWriteBatch = 48
+  scChanReadBatch  = 49
+  scKernelCalls    = 50
 
-const NimixSyscallCount* = 28   ## total number of syscalls
+const NimixSyscallCount* = 51   ## total number of syscalls
+
+const NimixSyscallSymbol*: array[NimixSyscall, cstring] = [
+  ## App-side ABI symbol for each syscall — the ONE list the ELF loader patches
+  ## from. Names match the weak stubs in kernel/abi/nimix_abi_stub.c
+  ## (test_syscall_table cross-checks them).
+  scWrite: "nimixWrite", scExit: "nimixExit",
+  scAllocRegion: "nimixAllocRegion", scFreeRegion: "nimixFreeRegion",
+  scChanSend: "nimixChanSend", scChanRecv: "nimixChanRecv",
+  scEventPublish: "nimixEventPublish", scEventSubscribe: "nimixEventSubscribe",
+  scEventPoll: "nimixEventPoll", scGetArgs: "nimixGetArgs",
+  scProcList: "nimixProcList", scSchedStats: "nimixSchedStats",
+  scProcKillPid: "nimixProcKillPid", scFsReadDir: "nimixFsReadDir",
+  scFsRead: "nimixFsRead", scFsWrite: "nimixFsWrite",
+  scCapSend: "nimixCapSend", scChanCall: "nimixChanCall",
+  scSleep: "nimixSleep", scYield: "nimixYield",
+  scSysInfo: "nimixSysInfo", scGrantRegion: "nimixGrantRegion",
+  scUptimeSecs: "nimixUptimeSecs", scWallClock: "nimixWallClock",
+  scMapAnon: "nimixMapAnon", scFreeAnon: "nimixFreeAnon",
+  scSndPlay: "nimixSndPlay", scSndDrain: "nimixSndDrain",
+  scChanCreate: "nimixChanCreate", scCapRecv: "nimixCapRecv",
+  scBufCreate: "nimixBufCreate", scBufMap: "nimixBufMap",
+  scBufClose: "nimixBufClose", scBufSeal: "nimixBufSeal",
+  scBufReturn: "nimixBufReturn", scBufMsgSend: "nimixBufMsgSend",
+  scBufMsgRecv: "nimixBufMsgRecv",
+  scDisplayInfo: "nimixDisplayInfo", scDisplayPresent: "nimixDisplayPresent",
+  scDisplayModes: "nimixDisplayModes", scDisplaySetMode: "nimixDisplaySetMode",
+  scChanPair: "nimixChanPair", scChanWrite: "nimixChanWrite", scChanRead: "nimixChanRead",
+  scHandleClose: "nimixHandleClose", scHandleDup: "nimixHandleDup", scChanStatus: "nimixChanStatus",
+  scWait: "nimixWait", scChanWriteBatch: "nimixChanWriteBatch",
+  scChanReadBatch: "nimixChanReadBatch", scKernelCalls: "nimixKernelCalls"]
 
 # ── Dispatch table ────────────────────────────────────────────────────────────
 # Raw function pointers indexed by NimixSyscall ordinal.
@@ -99,13 +153,43 @@ proc syscallTableInit*() =
   syscallTable[25] = cast[uint64](v.freeAnon)
   syscallTable[26] = cast[uint64](v.sndPlay)
   syscallTable[27] = cast[uint64](v.sndDrain)
+  syscallTable[28] = cast[uint64](v.chanCreate)
+  syscallTable[29] = cast[uint64](v.capRecv)
+  syscallTable[30] = cast[uint64](v.bufCreate)
+  syscallTable[31] = cast[uint64](v.bufMap)
+  syscallTable[32] = cast[uint64](v.bufClose)
+  syscallTable[33] = cast[uint64](v.bufSeal)
+  syscallTable[34] = cast[uint64](v.bufReturn)
+  syscallTable[35] = cast[uint64](v.bufMsgSend)
+  syscallTable[36] = cast[uint64](v.bufMsgRecv)
+  syscallTable[37] = cast[uint64](v.displayInfo)
+  syscallTable[38] = cast[uint64](v.displayPresent)
+  syscallTable[39] = cast[uint64](v.displayModes)
+  syscallTable[40] = cast[uint64](v.displaySetMode)
+  syscallTable[41] = cast[uint64](v.chanPair)
+  syscallTable[42] = cast[uint64](v.chanWrite)
+  syscallTable[43] = cast[uint64](v.chanRead)
+  syscallTable[44] = cast[uint64](v.handleClose)
+  syscallTable[45] = cast[uint64](v.handleDup)
+  syscallTable[46] = cast[uint64](v.chanStatus)
+  syscallTable[47] = cast[uint64](v.wait)
+  syscallTable[48] = cast[uint64](v.chanWriteBatch)
+  syscallTable[49] = cast[uint64](v.chanReadBatch)
+  syscallTable[50] = cast[uint64](v.kernelCalls)
+
+var syscallArgsCheck*: proc(nr: uint64; a: array[4, uint64]): bool {.nimcall.}
+  ## Set at boot (kernel/abi/user_args_gate.nim): may the caller's pointer arguments be touched?
+  ## nil only in host tests, which have no caller memory to check against.
 
 proc syscallDispatch*(nr, a0, a1, a2, a3: uint64): uint64 {.exportc: "syscallDispatch", cdecl.} =
   ## Called from syscall_entry asm stub. Dispatches by nr through syscallTable.
   ## Returns result in RAX (Nim cdecl convention on x86-64).
+  ## A call whose pointer arguments leave the caller's own memory (kernel/abi/user_args.nim)
+  ## is refused here with -1, before any kernel code reads or writes through them.
   if nr >= NimixSyscallCount: return high(uint64)
   let fn = syscallTable[nr]
   if fn == 0: return high(uint64)
+  if syscallArgsCheck != nil and not syscallArgsCheck(nr, [a0, a1, a2, a3]): return refusedResult(nr)
   type Fn5 = proc(a0, a1, a2, a3, a4: uint64): uint64 {.cdecl.}
   cast[Fn5](fn)(a0, a1, a2, a3, 0)
 
@@ -118,8 +202,8 @@ proc syscallDispatch*(nr, a0, a1, a2, a3: uint64): uint64 {.exportc: "syscallDis
 #   [0] 0x00  Null
 #   [1] 0x08  64-bit code, ring 0   (kernel CS)
 #   [2] 0x10  64-bit data, ring 0   (kernel DS)
-#   [3] 0x18  64-bit code, ring 3   (user CS)
-#   [4] 0x20  64-bit data, ring 3   (user DS)
+#   [3] 0x18  64-bit data, ring 3   (user DS) — data before code: SYSRETQ
+#   [4] 0x20  64-bit code, ring 3   (user CS)   layout (SS=base+8, CS=base+16)
 #   [5] 0x28  TSS descriptor low    (16-byte, filled at runtime)
 #   [6] 0x30  TSS descriptor high   (upper 32 bits of base)
 
@@ -127,8 +211,8 @@ var gdtTable* {.exportc.}: array[7, uint64] = [
   0x0000000000000000'u64,   # [0] Null
   0x0020980000000000'u64,   # [1] 64-bit code, ring 0
   0x0000920000000000'u64,   # [2] 64-bit data, ring 0
-  0x0020F80000000000'u64,   # [3] 64-bit code, ring 3
-  0x0000F20000000000'u64,   # [4] 64-bit data, ring 3
+  0x0000F20000000000'u64,   # [3] 64-bit data, ring 3
+  0x0020F80000000000'u64,   # [4] 64-bit code, ring 3
   0x0000000000000000'u64,   # [5] TSS low   (filled by installTssDescriptor)
   0x0000000000000000'u64,   # [6] TSS high  (filled by installTssDescriptor)
 ]
@@ -194,8 +278,8 @@ proc syscallGateInit*() =
 
   # 5. Configure syscall MSRs
   #    STAR[47:32] = KernelCS  → on syscall: CS=KernelCS, SS=KernelCS+8 (=KernelDS)
-  #    STAR[63:48] = UserDS-8  → on sysret:  CS=base+16 (=UserCS), SS=base+8 (=UserDS)
-  let star = (uint64(UserDS - 8) shl 48) or (uint64(KernelCS) shl 32)
+  #    STAR[63:48] = KernelDS (0x10) → on sysret: SS=0x18|3 (=UserDS), CS=0x20|3 (=UserCS)
+  let star = (uint64(KernelDS) shl 48) or (uint64(KernelCS) shl 32)
   writeMsr(MSR_STAR,   star)
   writeMsr(MSR_LSTAR,  cast[uint64](syscall_entry))
   writeMsr(MSR_SFMASK, 0x200'u64)  # clear IF on syscall entry

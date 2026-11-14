@@ -342,16 +342,6 @@ proc initSasosModel*() =
   ipcTrait.ipc.close   = sasosClose
 
   # Wire app ABI vtable — SASOS: bump-allocate from the current task's SIP heap.
-  proc sasosAlloc(size: int): pointer {.nimcall.} =
-    let slot = int(ptMod.procTable.tasks[ptMod.procTable.current].regionSlot)
-    if slot < 0: return alloc(size)  # kernel task fallback
-    sipAlloc(slot, size)
-
-  proc sasosFree(p: pointer; size: int) {.nimcall.} =
-    ## No-op for bump allocator — region freed when app exits.
-    discard
   var av: abiModule.NimixAbiVTable
   wireSharedAbi(av)
-  av.allocRegion = sasosAlloc
-  av.freeRegion  = sasosFree
   abiModule.nimixAbi = av

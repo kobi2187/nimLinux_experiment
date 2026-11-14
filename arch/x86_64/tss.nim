@@ -9,8 +9,11 @@
 const
   KernelCS*    = 0x08'u16   ## Ring 0 code segment
   KernelDS*    = 0x10'u16   ## Ring 0 data segment
-  UserCS*      = 0x1B'u16   ## Ring 3 code segment (0x18 | RPL=3)
-  UserDS*      = 0x23'u16   ## Ring 3 data segment (0x20 | RPL=3)
+  UserDS*      = 0x1B'u16   ## Ring 3 data segment (0x18 | RPL=3)
+  UserCS*      = 0x23'u16   ## Ring 3 code segment (0x20 | RPL=3)
+  ## Data BEFORE code: SYSRETQ loads SS = STAR[63:48]+8 and CS = STAR[63:48]+16.
+  ## With code first, sysret produced CS=0x2B (the TSS slot) and the next
+  ## ring-3 interrupt's iretq raised #GP(0x28).
   TssSelector* = 0x28'u16   ## TSS descriptor (0x28, RPL=0)
 
 type
