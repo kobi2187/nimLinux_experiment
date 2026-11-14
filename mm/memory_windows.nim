@@ -56,6 +56,15 @@ proc initMemoryWindows*(pm: PhysicalMemManager): bool =
     klog(llError, "memory windows: no room for the time page (needs 226 MB of RAM)")
     return false
   gTimeWindow = true
+  # All remaining RAM (up to the 1 GB the boot tables span) is mapped for the kernel too. The frame
+  # allocator may hand out any free frame (page tables, DMA buffers); until now only the first 64 MB
+  # and the windows were mapped, so a kernel image that grew past the free space below the app regions
+  # sent allocations into unmapped memory and the next write faulted.
+  let ramEnd = min(pm.totalMemory() and not (HugePage - 1), 1024'u64 * 1024 * 1024)
+  let mapped = TimePageAddr + TimeWindowSize
+  if ramEnd > mapped and not mapIdentityHuge(pml4, mapped, ramEnd - mapped):
+    klog(llError, "memory windows: mapping the rest of RAM failed")
+    return false
   flushTlb()
   klogInt(llInfo, "memory windows: regions 32-96 MB reserved; arena blocks=", int64(gArenaBlocks))
   true
