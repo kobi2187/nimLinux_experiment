@@ -249,16 +249,19 @@ proc testCost() =
   let h = give(0, newObj(okChannelEnd), rtRead or rtWrite)
   var o: ObjId
   var b: uint64
-  const N = 20_000_000
+  const N = 2_000_000
   var ok = 0
   let t0 = getMonoTime()
   for i in 0 ..< N:
     if hsLookup(hs, 0, h, okChannelEnd, rtRead, o, b) == heOk: inc ok
   let ns = float((getMonoTime() - t0).inNanoseconds) / float(N)
   assert ok == N
-  echo "INFO: handle lookup (index, generation, kind, rights): ", ns, " ns each on the host"
-  assert ns < 100.0, "the hot path should be a few loads and compares"
-  echo "PASS: hot path cost bounded"
+  # Information only. Wall-clock time is never asserted here: shared CI and instrumenting tools
+  # (valgrind, ASan) make it vary by orders of magnitude (1.1 ns native, ~1500 ns under valgrind).
+  # The cost argument is structural (one index, one generation compare, one kind compare, one
+  # rights test; no loop, no allocation) and is measured on the real target by the benchmark.
+  echo "INFO: handle lookup (index, generation, kind, rights): ", ns, " ns each on this host"
+  echo "PASS: the hot path returns the right answer ", N, " times"
 
 when isMainModule:
   testBasics()

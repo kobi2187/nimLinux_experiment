@@ -2121,3 +2121,15 @@ channels).
   switch; neither is done. Not hidden.
 - Not yet: waking from interrupts (input, devices) needs the device-port layer (K3); the old event
   topics (scaffold) are unchanged.
+
+---
+
+## 2026-11-14 — No wall-clock assertions in host tests
+
+CI on PR #8 failed in `test-valgrind`: `test_handles` asserted a lookup takes under 100 ns, and under
+valgrind it measures about 1000-1500 ns (1.1 ns natively). The project already gates counts, not times,
+on shared CI (VISION, rendering budgets); that rule applies to unit tests too. The test now reports the
+time as information and asserts only correctness. The cost argument for the handle table is structural
+(one index, one generation compare, one kind compare, one rights test) and is measured on the real
+target by the benchmark, not by a host unit test. The new tests were also run locally under the CI's
+valgrind and ASan/UBSan configurations: clean.
