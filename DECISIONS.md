@@ -2081,3 +2081,25 @@ unread message belongs to its sender; when the sender dies the handles in its un
 released (bytes stay readable). A leak can outlive only the task that made it. Rejected: a cycle
 collector (cost, complexity), forbidding sending the peer end (does not remove cycles through two
 channels).
+
+---
+
+## 2026-11-14 — S2k-a: handles and channels in the kernel
+
+- One `HandleSpace` and one `ChannelStore` (`kernel/handles/khandles.nim`), tables indexed by process
+  slot, attached lazily; a fresh table starts at generation 1, so **a new task's first handle has a
+  fixed value** (`NIMIX_BOOTSTRAP_HANDLE`, 0x10001). The spawner moves the child's bootstrap channel
+  end into its table with interrupts off between creating the task and letting it run (no race).
+  Convention, not a secret: it is the child's own table.
+- Syscalls 41-46; their pointer arguments are in the argument table (`user_args`), and the reflection
+  test enforces that. Errors are `-ord(ChResult)`; 1 is "bad handle or argument" so the gate's generic
+  refusal (-1) means the same thing.
+- A task's death calls `khReleasePid` first in task cleanup: handles close, in-flight handles in its
+  unread messages are released (the sender-ownership rule), and peers see peer-closed.
+- **Not yet done, on purpose:** the buffers table keeps its own handles (its state machine is richer
+  than a rights mask: owner/borrower/reader/transit roles and the lend/seal rules). Folding it in
+  (S2k-b) means a buffer handle in the generic table references a buffer object while the buffers
+  store keeps the state machine; it changes the buffer syscalls' handle values and the page-rights
+  path, so it gets its own step and its own tests.
+- **Scaffolds untouched:** the old named `chanSend/chanRecv/capSend/chanCreate` and event topics still
+  exist; S3 removes them once spawn grants make them unnecessary.

@@ -4,6 +4,14 @@ Last updated: 2026-10-27 (session 9e, branch `ccr-56330414-wo65nx`, cloud contai
 
 
 
+## Session 9q — S2k-a: handles and channels in the kernel
+
+Syscalls 41-46 over `ipc/handles`; bootstrap grant at spawn (`khGrant`, interrupts off between task
+creation and grant); `khReleasePid` in task cleanup; shell `chantest` + `apps/c/chantest` prove it from
+ring 3. **Next in order:** S2k-b (fold the buffers table into the one handle table: a buffer handle becomes
+an `okBuffer` object handle; the buffers store keeps the state machine), then S3 (spawn syscall + policy,
+remove ambient chanSend/event topics/first-present display), S4 wait/wake, S5b rings.
+
 ## Session 9p — Roadmap v2, S1 and S2
 
 Recorded the human's structural understanding (VISION, ARCHITECTURE §0, BACKLOG Roadmap v2).
