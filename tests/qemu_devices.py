@@ -805,11 +805,12 @@ def test_isolation(tmp, iso, bios) -> list:
             assert done, "isotest did not finish: " + out[-700:]
             assert "isotest: own region and buffer ok" in out, "the control app could not use its own memory"
             contained = out.count(" contained")
-            assert contained == 7, f"{contained} of 7 attacks contained: " + out[-900:]
+            assert contained == 8, f"{contained} of 8 attacks contained: " + out[-900:]
+            assert "isotest: neighbor owns" in out and "(usable)" in out, "the neighbour never owned its own page: " + out[-900:]
             killed = out.count("=== killed pid")
-            assert killed >= 7, f"only {killed} attackers were killed by the hardware"
+            assert killed >= 8, f"only {killed} attackers were killed by the hardware"
             assert "victim: intact" in out, "the victim's secrets were not confirmed intact"
-            results.append(("isolation", True, f"{contained} attacks (read/write region, stack, buffer, kernel) each killed by a page fault; victim intact; control ok"))
+            results.append(("isolation", True, f"{contained} attacks (read/write region, stack, buffer, kernel) each killed by a page fault, incl. a neighbour owning the next page of the victim's 2 MB block; victim intact; control ok"))
         except Exception as e:                 # noqa: BLE001
             results.append(("isolation", False, str(e)))
         assert "NimixOS" in g.run("version"), "shell dead after isotest"

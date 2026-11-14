@@ -650,6 +650,8 @@ proc cmdIsotest() =
   attack("read of the victim's buffer", "read", ArenaBase)
   attack("write to the victim's buffer", "write", ArenaBase)
   attack("read of kernel memory", "read", 0x200000'u64)
+  # the sharpest case: the attacker owns the very next page of the victim's 2 MB block
+  attack("read of the victim's page from the next page of its block", "neighbor", ArenaBase)
   # the victim is untouched and finishes by itself
   if not waitGone(victim.slot, victim.pid, 800): fail("the victim did not finish")
   if bad == 0: kprint("isotest-kernel: ok\n")

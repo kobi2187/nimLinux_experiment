@@ -2250,3 +2250,31 @@ frozen buffers store and ends the separate ring queue (`ring.nim`), which depend
 that is the human's pending decision. Until then two handle namespaces exist (buffer handles and
 table handles), each unforgeable and per task. The foreign-flight mechanism stays useful after the
 fold for any object whose lifecycle lives elsewhere.
+
+
+## 2026-11-14 — S8b: ownership is per 4 KB page (small buffers get their own owner)
+
+**Need:** with 2 MB ownership blocks, a 4 KB buffer cost 2 MB of budget and arena, and two tasks could
+never own neighbouring small buffers, so a small-buffer lane (cursors, messages, fonts) was impossible.
+
+**Survey:** the per-task tables of S8 already allow any granularity; Zircon/seL4 map by page and keep
+huge pages only where uniform. **Adopted that shape; built the small parts ourselves** (a bitmap
+allocator and a split/merge page-table helper are ~100 lines; no library fits behind our boundaries).
+Rejected: a 64 KB granule compromise (still needs the split work, gives only part of the benefit).
+
+**Decision:**
+- `ipc/buffers/arena.nim`: bitmap, `MaxBlocks` = 32768 granules; the kernel's granule is 4 KB.
+- `ipc/buffers/state.nim`: `accessRuns` (sorted, disjoint, one run per buffer, strongest right) replaces
+  the per-block array, which would not fit the 16 KB kernel stack at this size. `MaxBufs` 256.
+- `mm/addr_space.nim`: `spaceSetPages`. A whole 2 MB step stays one huge entry (big buffers and
+  surfaces cost no extra TLB entries); a partial step gets the space's own page table (one per arena
+  step, inside `SpaceMem`, so no allocation can fail) and is merged back when its pages are alike.
+  The kernel keeps supervisor write on every page. `SpaceMem` grew from 12 KB to ~268 KB; the pool of
+  16 spaces is ~4 MB of bss.
+- `kernel/buffers/kbuffers.nim`: applies only the runs that changed, then one TLB flush if anything
+  did; `kbufAccessible` walks the applied runs, so pointer checks are exact to the page.
+
+**Consequences:** a buffer of any size costs `ceil(size/4096)` pages of budget; the 32 MB budget is
+unchanged in bytes. Stack/guard pages for regions use the same helper later (regions stay 2 MB steps
+for now). Syscall latency is unchanged: rights are written at buffer calls and switches, only for
+changed runs.

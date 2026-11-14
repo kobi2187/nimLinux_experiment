@@ -26,7 +26,9 @@ import ../../arch/x86_64/cpu_primitives
 import ../../core/log
 import ../abi/user_args
 
-const DefaultBudget = 16 * BlockSize      ## 32 MB of arena per task
+const
+  DefaultBudget = 32 * 1024 * 1024     ## bytes of arena per task
+  Page = 4096'u64                      ## arena granule: one page, the unit of ownership
 
 type
   BufMsgHandles* = object
@@ -42,34 +44,50 @@ static: doAssert sizeof(BufMsgHandles) == BufMsgHandlesBytes,
 
 var
   gStore: BufStore
-  gApplied: array[MaxRegions, array[MaxBlocks, Access]]   ## rights in each space's PD entries
+  gApplied: array[MaxRegions, array[MaxHandles, AccessRun]]   ## runs open in each space's tables
+  gAppliedN: array[MaxRegions, int]
   gReady: bool
-
-proc invlpg(va: uint64) {.inline.} =
-  {.emit: ["asm volatile(\"invlpg (%0)\" :: \"r\" (", va, ") : \"memory\");"].}
 
 var
   gAppliedSerial: array[MaxRegions, uint64]        ## which incarnation of a space gApplied describes
 
+proc runVa(r: AccessRun): uint64 = ArenaBase + uint64(r.first) * Page
+
 proc applyRights(t: int) =
   ## Make task t's OWN page tables say exactly what t may access in the arena. Tasks have separate
-  ## tables, so a block granted to one is simply closed in all the others: there is nothing shared to
+  ## tables, so memory granted to one is simply closed in all the others: there is nothing shared to
   ## rewrite at a context switch, and a task that is not running keeps its tables until it is.
+  ## Only what changed is touched: runs that stay the same are left alone.
   if not gReady: return
   let sp = ksOfTask(t)
   if sp == nil: return                              # a kernel task: it sees the arena as the kernel
   let r = int(procTable.tasks[t].regionSlot)
   if gAppliedSerial[r] != ksSerial(r):              # a new space starts closed: forget what the last one had
-    for i in 0 ..< MaxBlocks: gApplied[r][i] = acNone
+    gAppliedN[r] = 0
     gAppliedSerial[r] = ksSerial(r)
-  var acc: array[MaxBlocks, Access]
-  gStore.blockAccess(t, acc)
-  let live = readCr3() == spaceRoot(sp)
-  for i in 0 ..< gArenaBlocks:
-    if acc[i] != gApplied[r][i]:
-      let va = ArenaBase + uint64(i) * uint64(BlockSize)
-      if spaceSetBlock(sp, va, acc[i] != acNone, acc[i] == acReadWrite) and live: invlpg(va)
-      gApplied[r][i] = acc[i]
+  var want: array[MaxHandles, AccessRun]
+  let n = gStore.accessRuns(t, want)
+  var changed = false
+  for k in 0 ..< gAppliedN[r]:                      # close what is no longer wanted (before opening anything)
+    let old = gApplied[r][k]
+    var keep = false
+    for j in 0 ..< n:
+      if want[j].first == old.first and want[j].count == old.count and want[j].acc == old.acc: keep = true
+    if not keep:
+      discard spaceSetPages(sp, runVa(old), uint64(old.count) * Page, false, false)
+      changed = true
+  for j in 0 ..< n:                                 # open what is new
+    var have = false
+    for k in 0 ..< gAppliedN[r]:
+      let old = gApplied[r][k]
+      if want[j].first == old.first and want[j].count == old.count and want[j].acc == old.acc: have = true
+    if not have:
+      discard spaceSetPages(sp, runVa(want[j]), uint64(want[j].count) * Page, true, want[j].acc == acReadWrite)
+      changed = true
+  if not changed: return
+  gApplied[r] = want
+  gAppliedN[r] = n
+  if readCr3() == spaceRoot(sp): writeCr3(readCr3())   # flush: a split or merge changes more than one page
 
 proc onSwitch(next: int) {.nimcall.} = applyRights(next)
 
@@ -82,11 +100,11 @@ proc me(): int =
   if not gStore.isAttached(result): discard gStore.taskAttach(result, DefaultBudget)
 
 proc kbufInit*() =
-  gStore.initStore(ArenaBase, BlockSize, gArenaBlocks)
+  gStore.initStore(ArenaBase, int(Page), gArenaBlocks * int(BlockSize div Page))
   onTaskSwitch = onSwitch
   onMsgDropped = cancelFlights
   gReady = true
-  klogInt(llInfo, "buffers: arena ready, blocks=", int64(gArenaBlocks))
+  klogInt(llInfo, "buffers: arena ready, blocks=", int64(gArenaBlocks))   # 2 MB blocks; owned in 4 KB pages
 
 proc kbufReleasePid*(pid: uint32) =
   ## Task cleanup: close everything the task holds (lends return, moves in
@@ -127,21 +145,24 @@ proc kbufReadable*(h: uint32; base: var uint64; size: var int): bool =
   true
 
 proc kbufAccessible*(p, n: uint64; write: bool): bool =
-  ## May the RUNNING task read (write) arena bytes [p, p+n)? Per block, from the rights the
-  ## page tables currently carry for it. The kernel dereferences syscall arguments with supervisor
-  ## rights, which ignore those page rights, so the syscall gate asks here first.
+  ## May the RUNNING task read (write) arena bytes [p, p+n)? Walks the runs its page tables currently
+  ## carry. The kernel dereferences syscall arguments with supervisor rights, which ignore those page
+  ## rights, so the syscall gate asks here first.
   if n == 0: return true
   if not gReady or p < ArenaBase: return false
   let cur = int(procTable.current)
   if cur < 0 or procTable.tasks[cur].regionSlot < 0: return false
   let r = int(procTable.tasks[cur].regionSlot)
-  let first = int((p - ArenaBase) div uint64(BlockSize))
-  let last = int((p + n - 1 - ArenaBase) div uint64(BlockSize))
-  if last >= gArenaBlocks: return false
-  for i in first .. last:
-    if write:
-      if gApplied[r][i] != acReadWrite: return false
-    elif gApplied[r][i] == acNone: return false
+  var pg = int((p - ArenaBase) div Page)
+  let last = int((p + n - 1 - ArenaBase) div Page)
+  if last >= gArenaBlocks * int(BlockSize div Page): return false
+  while pg <= last:
+    var found = false
+    for k in 0 ..< gAppliedN[r]:
+      let run = gApplied[r][k]
+      if pg >= run.first and pg < run.first + run.count and (not write or run.acc == acReadWrite):
+        pg = run.first + run.count; found = true; break
+    if not found: return false
   true
 
 proc finish(e: BufError): int =

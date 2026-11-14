@@ -4,6 +4,12 @@ Last updated: 2026-10-27 (session 9e, branch `ccr-56330414-wo65nx`, cloud contai
 
 
 
+## Session 9v — S8b: page-granular buffer ownership
+
+Arena bitmap (4 KB pages), `accessRuns`, `spaceSetPages` (split/merge), run-diff apply and exact
+pointer checks in `kbuffers`, isolation attack 8. **Next in order:** S3 (spawn + launcher policy), K1
+contract/IDL, K2 dispatcher stage 2, K3 device ports, E1 event server; S2k-b2 waits on the ring decision.
+
 ## Session 9u — S2k-b1: buffers in channel messages
 
 Foreign flights in `channel.nim` (hooks: can-deliver, deliver, drop), `bufCanDeliver/bufCanSend/

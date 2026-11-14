@@ -1,5 +1,8 @@
 # STATE.md — Current Status
 
+## Latest (2026-11-14, session 9v): S8b done
+Buffer ownership is per 4 KB page; per-task page tables split a 2 MB step only where a buffer covers it in part and merge back; `isolation` has an 8th attack (neighbour page of the victim's block). See DECISIONS 2026-11-14 S8b.
+
 Last updated: 2026-10-27 (session 9e, branch `ccr-56330414-wo65nx`)
 
 ## Just landed — roadmap B step 1: graphics libs + framebuffer console (session 9e)

@@ -34,14 +34,22 @@ const
     ## ... and the buffer arena (exclusive). The time page just above is global; everything below
     ## OwnedPdLo and above OwnedPdHi is the kernel's, copied from the master.
 
+const
+  ArenaPdLo* = int(ArenaBase div HugePage)
+  ArenaPds* = int(uint64(ArenaSize) div HugePage)
+  PageSize* = 4096'u64
+  PtesPerPd = int(HugePage div PageSize)
+
 type
   SpaceMem* = object
-    ## The three pages of one task's tables. 4 KB aligned (the first field carries the alignment, so
-    ## the object does, and each table is exactly one page), because CR3 and table entries hold
-    ## page-aligned addresses.
+    ## One task's tables: the three pages of the chain plus one page table for each 2 MB step of the
+    ## arena, used only where that step is split into 4 KB pages (a buffer that does not fill whole
+    ## 2 MB blocks). 4 KB aligned (the first field carries the alignment, so the object does, and each
+    ## table is exactly one page), because CR3 and table entries hold page-aligned addresses.
     pml4* {.align(4096).}: PageTable
     pdpt*: PageTable
     pd*: PageTable
+    pts*: array[ArenaPds, PageTable]
 
   PageAccess* = tuple[present, user, writable: bool]
 
@@ -96,19 +104,73 @@ proc spaceGrantWindow*(m: ptr SpaceMem; base, len: uint64; user: bool): bool =
   ## Open (or close) a 2 MB-aligned window to ring 3 in THIS space only (an app's region).
   setUserWindow(addr m.pml4, base, len, user)
 
+proc leaf(pa: uint64; user, writable: bool; huge: bool): uint64 =
+  ## A leaf entry. Kernel access is always allowed (present, writable) unless a user may write less.
+  result = pa or PtePresent
+  if huge: result = result or PteHuge
+  if user: result = result or PteUser
+  if writable or not user: result = result or PteWritable
+
+proc spaceSetPages*(m: ptr SpaceMem; va, bytes: uint64; user, writable: bool): bool =
+  ## Rights of the arena pages [va, va+bytes) in THIS space (buffer ownership), 4 KB granular.
+  ## A 2 MB step that the range covers whole stays (or becomes again) one huge entry, so big buffers
+  ## cost no more than before; a step it covers in part is split into a page table and the pages set
+  ## one by one; a step whose pages end up all alike is merged back. False if the range is outside the
+  ## arena. The caller flushes the TLB afterwards (a split or merge changes more than one page).
+  if va mod PageSize != 0 or bytes mod PageSize != 0 or bytes == 0: return false
+  if va < ArenaBase or va + bytes > ArenaBase + uint64(ArenaSize): return false
+  if user:                                      # parents must let a user leaf through
+    m.pml4[0] = m.pml4[0] or PteUser
+    m.pdpt[0] = m.pdpt[0] or PteUser
+  var cur = va
+  let endAt = va + bytes
+  while cur < endAt:
+    let idx = int(cur div HugePage)
+    let stepBase = uint64(idx) * HugePage
+    let stepEnd = min(endAt, stepBase + HugePage)
+    let whole = cur == stepBase and stepEnd == stepBase + HugePage
+    let pt = addr m.pts[idx - ArenaPdLo]
+    if whole:
+      m.pd[idx] = leaf(stepBase, user, writable, true)
+    else:
+      if (m.pd[idx] and PteHuge) != 0:          # split: every page inherits the huge entry's rights
+        let was = m.pd[idx]
+        let u = (was and PteUser) != 0
+        let w = (was and PteWritable) != 0
+        for i in 0 ..< PtesPerPd:
+          pt[i] = leaf(stepBase + uint64(i) * PageSize, u, w, false)
+        m.pd[idx] = (phys(pt) and AddrMask) or PtePresent or PteWritable or PteUser
+      let first = int((cur - stepBase) div PageSize)
+      let last = int((stepEnd - stepBase) div PageSize)
+      for i in first ..< last:
+        pt[i] = leaf(stepBase + uint64(i) * PageSize, user, writable, false)
+      # merge back when all pages are alike
+      let e0 = pt[0] - stepBase
+      var alike = true
+      for i in 1 ..< PtesPerPd:
+        if pt[i] - (stepBase + uint64(i) * PageSize) != e0: (alike = false; break)
+      if alike:
+        m.pd[idx] = leaf(stepBase, (e0 and PteUser) != 0, (e0 and PteWritable) != 0, true)
+    cur = stepEnd
+  true
+
 proc spaceSetBlock*(m: ptr SpaceMem; va: uint64; user, writable: bool): bool =
-  ## Rights of one arena block in THIS space (buffer ownership). True if the entry changed.
-  setBlockRights(addr m.pml4, va, user, writable)
+  ## One whole 2 MB block (kept for the callers that still think in blocks).
+  spaceSetPages(m, va, HugePage, user, writable)
 
 proc spaceAccess*(pml4: ptr PageTable; va: uint64): PageAccess =
   ## What a ring-3 access to va would find: present, user-accessible at every level, writable at
-  ## every level. For huge (2 MB) leaves only (the layout used here).
+  ## every level. Walks 2 MB leaves and 4 KB page tables.
   let l4 = pml4[(va shr 39) and 511]
   if (l4 and PtePresent) == 0: return
   let l3 = tableOf(l4)[(va shr 30) and 511]
   if (l3 and PtePresent) == 0: return
   let pdE = tableOf(l3)[(va shr 21) and 511]
-  if (pdE and PtePresent) == 0 or (pdE and PteHuge) == 0: return
+  if (pdE and PtePresent) == 0: return
+  var leafE = pdE
+  if (pdE and PteHuge) == 0:                    # split into 4 KB pages: the page entry decides
+    leafE = tableOf(pdE)[(va shr 12) and 511]
+    if (leafE and PtePresent) == 0: return
   result.present = true
-  result.user = (l4 and l3 and pdE and PteUser) != 0
-  result.writable = (l4 and l3 and pdE and PteWritable) != 0
+  result.user = (l4 and l3 and pdE and leafE and PteUser) != 0
+  result.writable = (l4 and l3 and pdE and leafE and PteWritable) != 0

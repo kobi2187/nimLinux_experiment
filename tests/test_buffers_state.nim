@@ -257,3 +257,34 @@ suite "buffers state: property test":
       check s.liveBuffers == 0                         # nothing leaked
       check s.inFlight == 0
     checkpoint($steps & " random steps")
+
+
+suite "buffers state: what a task may touch (access runs)":
+  test "runs are sorted, disjoint, strongest right per buffer, and follow ownership":
+    fresh(3, 64 * KB)
+    var runs: array[MaxHandles, AccessRun]
+    check s.accessRuns(0, runs) == 0
+    let a = newBuf(0, 3 * KB)                         # 3 granules
+    let b = newBuf(0, KB)
+    let c = newBuf(1, 2 * KB)
+    check s.accessRuns(0, runs) == 2
+    check runs[0].first == 0 and runs[0].count == 3 and runs[0].acc == acReadWrite
+    check runs[1].first == 3 and runs[1].count == 1
+    check s.accessRuns(1, runs) == 1 and runs[0].first == 4
+    check s.bufSeal(0, a) == beOk                     # sealed: still held, now read-only
+    check s.accessRuns(0, runs) == 2 and runs[0].acc == acRead and runs[1].acc == acReadWrite
+    let f = send(0, b, tmMove)                        # in flight: nobody holds it
+    check s.accessRuns(0, runs) == 1 and runs[0].first == 0
+    let h = deliver(f, 2)
+    check s.accessRuns(2, runs) == 1 and runs[0].first == 3 and runs[0].acc == acReadWrite
+    check s.accessRuns(9, runs) == 0                  # not a task
+    discard c; discard h
+    ok()
+
+  test "a single page is its own owner: two tasks' one-page buffers are adjacent and disjoint":
+    fresh(2, 64 * KB)
+    var r0, r1: array[MaxHandles, AccessRun]
+    discard newBuf(0, 1); discard newBuf(1, 1)
+    check s.accessRuns(0, r0) == 1 and s.accessRuns(1, r1) == 1
+    check r0[0].count == 1 and r1[0].count == 1 and r0[0].first + 1 == r1[0].first
+    ok()
