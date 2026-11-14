@@ -4,6 +4,14 @@ Last updated: 2026-10-27 (session 9e, branch `ccr-56330414-wo65nx`, cloud contai
 
 
 
+## Session 9t — S8 done properly
+
+Per-task page tables (`mm/addr_space.nim` pure + `kernel/space/kspace.nim` pool/switch), spaces created
+before the task and destroyed with it, buffer rights written into the owner's tables, `isolation` test.
+Human's question on SASOS/performance answered in DECISIONS (S8c language domains PROPOSED, each model
+chooses its mix of domain kinds). **Next in order:** S8b (4 KB granularity -> small-buffer lane), S2k-b,
+then K1/K3/E1.
+
 ## Session 9s — S5b: batches, and the event server in view
 
 Batch syscalls 48-49 and `nimixKernelCalls` (50). Decision for the human: retire

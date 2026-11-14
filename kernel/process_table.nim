@@ -64,6 +64,7 @@ type
     cpuTicks*:   uint64         ## quanta consumed
     switches*:   uint64         ## times this task was scheduled
     wakeAt*:     uint64         ## pitTicks() value at which to wake (0 = not sleeping)
+    cr3*:        uint64         ## root of this task's own page tables (mm/addr_space); 0 = the kernel's
 
     # ── Capability token ──────────────────────────────────────────────────
     ipcCap*:     CapToken          ## IPC capability token (NullCap = no IPC access)
@@ -167,6 +168,7 @@ proc procTableInit*() =
     procTable.tasks[i].classPrev = -1
     procTable.tasks[i].ipcCap    = NullCap
     procTable.tasks[i].wakeAt    = 0
+    procTable.tasks[i].cr3       = 0
 
 # ── Spawn ─────────────────────────────────────────────────────────────────────
 
@@ -219,6 +221,7 @@ proc procSpawn*(name: cstring; entry: TaskProc;
       t.classPrev  = -1
       t.ipcCap     = NullCap
       t.wakeAt     = 0
+      t.cr3        = 0          # kernel tasks run on the kernel's tables
       # Build initial stack frame so contextSwitch can switch TO this task.
       # contextSwitch pops r15,r14,r13,r12,rbx,rbp then does ret.
       # We push: entry address (ret target) + 6 zero callee-saved regs.
@@ -278,7 +281,7 @@ proc procAdoptCurrent*(name: cstring; cls: TaskClass): int =
   -1
 
 proc procSpawnRing3*(name: cstring; appMain: uint64; userStackTop: uint64;
-                     regionSlot: int32): int =
+                     regionSlot: int32; cr3: uint64 = 0): int =
   ## Spawn a ring-3 app task. The kstack is built to look exactly like a task
   ## preempted inside the PIT handler: preemptiveSwitch `ret`s through slot 0
   ## into isr_restore, which pops the GPRs and iretq's into ring 3 at appMain.
@@ -314,6 +317,7 @@ proc procSpawnRing3*(name: cstring; appMain: uint64; userStackTop: uint64;
       t.classPrev  = -1
       t.ipcCap     = capGrant(procTable.nextPid, capIpc)
       t.wakeAt     = 0
+      t.cr3        = cr3        # its own address space: set before it can run
 
       let rsp = kstackTop(i) - 184
       let f = cast[ptr UncheckedArray[uint64]](rsp)
@@ -348,6 +352,9 @@ proc procSpawnRing3*(name: cstring; appMain: uint64; userStackTop: uint64;
 var onTaskSwitch*: proc(next: int) {.nimcall.}
   ## Called by the preemptive switch with the incoming slot (buffer
   ## enforcement re-applies that task's arena page rights).
+
+var onSpaceSwitch*: proc(next: int) {.nimcall.}
+  ## Called right after, with the incoming slot: load that task's address space (kernel/space/kspace.nim).
 
 # ── Kill / reclaim ────────────────────────────────────────────────────────────
 

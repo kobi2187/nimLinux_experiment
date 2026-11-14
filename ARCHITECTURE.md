@@ -27,7 +27,7 @@ imitate), **PARTIAL**, **TODO**, **DECISION** (waiting on the human).
 | `nimixFsRead/Write/ReadDir` with ambient paths, whole-file | first file access | V2 file server, directory-scope handles |
 | the kernel-resident shell, fb console, console input grab | first UI | V3 terminal client, console server |
 | servers and apps polling on the 10 ms tick | no blocking existed | S4 wait/wake |
-| per-switch arena page rights in one shared space | Stage A of buffers | S8 (decision on address spaces) |
+| ~~per-switch arena page rights in one shared space~~ | Stage A of buffers | **replaced 2026-11-14**: each task has its own tables (S8); buffer rights are written into the owner's tables |
 | `libnimix` whole-file and direct-syscall layer | first C programs | SDKs over contracts (K1) |
 | hand-written record codecs | first protocols | K1 one contract per service |
 

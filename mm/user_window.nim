@@ -78,25 +78,3 @@ proc setBlockRights*(pml4: ptr PageTable; va: uint64; user, writable: bool): boo
   if e == pd[]: return false
   pd[] = e
   true
-
-import region_allocator
-
-when defined(kernelFull):
-  import ../arch/x86_64/cpu_primitives
-
-  proc invlpg(va: uint64) {.inline.} =
-    {.emit: ["asm volatile(\"invlpg (%0)\" :: \"r\" (", va, ") : \"memory\");"].}
-
-  proc appRegionUserAccess*(slot: RegionHandle; user: bool): bool =
-    ## Grant (spawn) or revoke (exit) ring-3 access to an app's region.
-    let base = regionBase(slot)
-    result = setUserWindow(cast[ptr PageTable](readCr3() and AddrMask),
-                           base, RegionSize, user)
-    var va = base
-    while va < base + RegionSize:
-      invlpg(va)
-      va += HugePage
-else:
-  proc appRegionUserAccess*(slot: RegionHandle; user: bool): bool =
-    ## Host builds have no page tables to change.
-    true

@@ -124,7 +124,7 @@ nim-apps: build/apps/ping_server.elf \
 # stubs in build/nimix_abi_stub.o and finds `appMain` by name, so the image must
 # keep its symbol table (no strip).
 PICOLIBC_INSTALL = build/picolibc/install
-C_APPS = libctest fputest gfxtest rldemo rlkeys rlmouse abifuzz rlbench chantest
+C_APPS = libctest fputest gfxtest rldemo rlkeys rlmouse abifuzz rlbench chantest isotest syscbench
 CC_INC := $(shell gcc -print-file-name=include)
 LIBGCC := $(shell gcc -print-libgcc-file-name)
 C_FLAGS = -O2 -Wall -Wextra -fPIC -ffreestanding -fno-stack-protector -mno-red-zone \
@@ -407,6 +407,7 @@ HOST_TESTS_NOHW = \
   tests/test_syscall_table.nim \
   tests/test_user_args.nim \
   tests/test_handles.nim \
+  tests/test_addr_space.nim \
   tests/test_channels.nim \
   tests/test_elf_loader.nim \
   tests/test_vfs_btree.nim

@@ -2177,3 +2177,44 @@ milestone", so what is open is timing and the interim step):
   enables small buffers, guard pages, exact pointer checks; large kernel work; not for the SASOS model.
 - **C, type-system isolation only** (SASOS): infeasible for C programs (raylib, picolibc).
 **Recommendation:** B now, A as the milestone it was already planned to be.
+
+---
+
+## 2026-11-14 — S8 built properly: per-task address spaces; performance; SASOS
+
+**Built (human: "do the proper way instead of temporary workarounds"):** each ring-3 task runs on its
+own PML4/PDPT/PD, a copy of the kernel's tables in which only its own region, the arena blocks it holds
+and the time page are user-accessible. The kernel is in every space (supervisor-only), so a syscall or
+interrupt loads no new root. `mm/addr_space.nim` (pure, host-tested incl. mutations), `kernel/space/kspace.nim`
+(a static pool of 16 x 12 KB, so creation cannot fail; switch hook in the PIT handler; resync after the
+kernel changes its own mappings via `mm/map_generation.nim`). Spaces are created before the task exists
+and destroyed with its resources. Buffer rights (`kbuffers`) are written into the owning task's tables
+instead of rewriting shared ones at each switch. Virtual = physical is kept (the layout the loader, DMA
+translation and pointer checks assume); decoupling is a later step the structure allows.
+
+**Evidence:** `isolation` runs a victim and 7 attacks concurrently (read/write its region, region start,
+stack, buffer, and a kernel address): each attacker is killed by a page fault before printing, the victim's
+secrets are intact, a control app uses its own memory. With the old hole recreated (every space given every
+region) the same test fails: attackers read the secret, overwrote it, and read the victim's ELF header.
+
+**Performance (human's question), measured under QEMU TCG, identical procedure both ways:**
+syscall 742 / 741 / 747 ns with per-task spaces vs 744 (baseline, other runs noisy) ; one compute task
+2046 / 2049 / 2011 ms vs 2224 / 2141 / 2062 ms ; two at once 2873-2914 ms vs 2888-3028 ms. No measurable
+difference. Why that is expected on hardware too: syscalls do not switch roots; a switch happens at most
+every 10 ms tick (100 per second); the mapping is 2 MB pages, so a root reload refills a handful of TLB
+entries; PCID/global pages can remove even that later. Not done: the cost would show for a design with a
+root switch per message (synchronous IPC), which this one does not have: wakeups run at ticks.
+
+**SASOS (human: can Nim's static typing do it, or does each model mix its own choices?):** The mechanisms
+(handles, channels, badges, ownership) are the same in every model; what differs is how a *domain* is
+enforced. Hardware domains (this step) work for everything, including C and WASM, and are the default in
+all three models. A *language domain* (Singularity's software-isolated processes) is possible in principle
+for code written in Nim: tasks share one space with no root reload, a syscall is a call and a message is a
+move of an owned value. But Nim is not a verified-safe language: it has `ptr`, `cast`, `addr`, `emit`,
+`importc`, inline assembly, unchecked arrays. It would need (1) a checker that accepts only a safe subset
+(a compile-time macro that walks the typed AST and rejects those constructs and imports outside an SDK
+allow-list), (2) a trusted compiler and C backend (the guarantee is only as good as Nim's code
+generation), and (3) hardware domains for anything outside the subset (raylib, picolibc, WASM). So the
+honest answer is both: a SASOS model that mixes language domains for checked Nim tasks with hardware
+domains for foreign code, and microkernel/monolithic using hardware domains. Recorded as S8c (PROPOSED).
+The structure already allows it: a task's "domain" is an abstraction over how its memory is protected.

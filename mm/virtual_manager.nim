@@ -8,6 +8,7 @@ import ../core/types
 import ./physical_manager
 import ../sync/spinlock
 import ../core/serial
+import ./map_generation
 
 when defined(amd64) or defined(x86_64):
   import ../arch/x86_64/cpu_primitives
@@ -292,6 +293,7 @@ proc mapPage*(self: VirtualMemManager, space: AddressSpace,
   # Set the page table entry
   doAssert idx.pt >= 0 and idx.pt < PT_ENTRIES, "PT index validation after walk"
   pt[idx.pt] = uint64(phys) or flagsToEntry(flags)
+  kernelMapsChanged()           # every task's private copy of the kernel's mappings must catch up
 
   ok()
 
@@ -324,6 +326,7 @@ proc unmapPage*(self: VirtualMemManager, space: AddressSpace,
 
   let phys = PhysAddr(pt[idx.pt] and PTE_ADDR_MASK)
   pt[idx.pt] = 0
+  kernelMapsChanged()
 
   ok(phys)
 

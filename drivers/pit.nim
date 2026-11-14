@@ -87,6 +87,7 @@ when defined(kernelFull):
       klogInt(llError, "pit: kernel stack overflow in task slot=", int64(prev))
     procTable.current = next
     if onTaskSwitch != nil: onTaskSwitch(int(next))
+    if onSpaceSwitch != nil: onSpaceSwitch(int(next))     # the incoming task's own page tables
     procTable.tasks[next].state = ptsRunning
     inc procTable.tasks[next].switches
     inc procTable.stats.totalSwitches

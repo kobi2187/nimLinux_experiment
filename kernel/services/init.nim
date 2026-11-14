@@ -37,6 +37,7 @@ import ../../kernel/abi/nimix_abi_impl   # user-fault policy
 import ../../kernel/abi/task_cleanup
 import ../../kernel/abi/user_args_gate
 import ../../kernel/handles/khandles
+import ../../kernel/space/kspace
 import ../buffers/kbuffers
 import ../../fs/fatfs
 import ../../fs/fatfs_write   # registerFatFs
@@ -241,7 +242,7 @@ proc initSyscallGate*() =
   ## instead of halting the machine — kernel state is intact.
   syscallArgsCheck = kernelUserArgsOk            # ring-3 pointer arguments must stay in the caller's memory
   syscallGateInit()
-  installRegionReleaseHook()
+  ksInit()                                   # per-task address spaces (mm/addr_space) before any ring-3 task
   kbufInit()
   khInit()                                   # handle tables and channels (ipc/handles)
   userFaultKill   = abiKillFaultingTask

@@ -14,6 +14,7 @@ import ../../mm/user_window
 import ../buffers/kbuffers
 import ../display/display
 import ../handles/khandles
+import ../space/kspace
 
 proc releaseTaskResources*(pid: uint32; regionSlot: int) =
   for ch in ownedChannels():
@@ -26,15 +27,7 @@ proc releaseTaskResources*(pid: uint32; regionSlot: int) =
   kbufReleasePid(pid)                       # buffers: lends return, handles close
   displayRelease(pid)                       # the display goes back to the console
   cap.capRevokeAllOf(pid)
-  # Drop the owner's reference; the slot (and its user window) is released
-  # when the last capability on it goes too (regionOnRelease below).
+  # The task's address space dies with it (back to the kernel's tables first if it is the loaded one).
   if regionSlot >= 0:
-    regionFree(RegionHandle(regionSlot))
-
-proc revokeUserWindow(h: RegionHandle) {.nimcall.} =
-  discard appRegionUserAccess(h, false)
-
-proc installRegionReleaseHook*() =
-  ## A region's user window closes when its LAST reference goes, not when
-  ## its first owner exits — a task still holding a capability keeps access.
-  regionOnRelease = revokeUserWindow
+    ksDestroy(regionSlot)
+    regionFree(RegionHandle(regionSlot))        # the slot is recycled at its last reference

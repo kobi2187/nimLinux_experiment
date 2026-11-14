@@ -35,6 +35,7 @@ import ../arch/x86_64/cpu_primitives
 import ../ipc/handles/handle_table
 import ../ipc/handles/channel
 import ../kernel/handles/khandles
+import ../kernel/space/kspace
 
 const
   ShellPrompt = "nimixos> "
@@ -59,6 +60,7 @@ type
     scDmesg         ## dmesg — kernel log ring (boot + driver messages)
     scDevtest       ## devtest <gpu|snd|net|input> — exercise a virtio device
     scChantest      ## chantest — handles and channels between this shell and a ring-3 program
+    scIsotest       ## isotest — is one app's memory out of another running app's reach?
 
 # ── String helpers ─────────────────────────────────────────────────────────
 
@@ -103,6 +105,7 @@ proc parseCommand*(buf: openArray[char], len: int): ShellCommand =
   if last - first >= 7 and bufEq(buf, first, first + 7, "devtest "): return scDevtest
   if bufEq(buf, first, last, "devtest"): return scDevtest
   if bufEq(buf, first, last, "chantest"): return scChantest
+  if bufEq(buf, first, last, "isotest"): return scIsotest
   # "run <file>", "exec <file>", "kill <pid>" — prefix match
   if last - first >= 3 and buf[first] == 'r' and buf[first+1] == 'u' and
      buf[first+2] == 'n' and buf[first+3] == ' ':  return scRun
@@ -244,6 +247,10 @@ proc buildAbiPatches(): array[NimixSyscallCount, AbiPatch] =
   for sc in NimixSyscall:
     result[ord(sc)] = AbiPatch(name: NimixSyscallSymbol[sc], nr: ord(sc).uint64)
 
+var gLastSpawnSlot*: int = -1
+  ## The process slot and region slot of the program runPieElf started last (for the shell's tests).
+var gLastSpawnRegion*: int = -1
+
 var gSpawnGrant*: Handle
   ## A handle of THIS (the spawner's) task to give the next spawned program as its bootstrap handle.
   ## runPieElf moves it into the child's table before the child can run (a spawn-time grant).
@@ -274,17 +281,20 @@ proc runPieElf(filename: cstring; dataBuf: ptr byte; nbytes: int; appArgs: cstri
   # User stack: top 64 KB of the 4 MB region (above ELF + heap).
   let userStackTop = base + RegionSize - 16
   setAppArgs(int(slot), appArgs)
-  if not appRegionUserAccess(slot, true):
-    kprint("Region not user-mappable\n"); regionFree(slot); return
+  let cr3 = ksCreate(int(slot))                      # its own page tables: only its own region is user-accessible
+  if cr3 == 0:
+    kprint("No address space for the app\n"); regionFree(slot); return
   # The grant must land before the child can run: no preemption between creating it and granting.
   let irqState = disableInterrupts()
-  let procSlot = procSpawnRing3(filename, loaded.appMain, userStackTop, int32(slot))
+  let procSlot = procSpawnRing3(filename, loaded.appMain, userStackTop, int32(slot), cr3)
   if procSlot >= 0 and gSpawnGrant != NoHandle:
     if khGrant(khMe(), gSpawnGrant, procSlot, rtChannelDefault): gSpawnGrant = NoHandle
   restoreInterrupts(irqState)
   if procSlot < 0:
-    discard appRegionUserAccess(slot, false)
+    ksDestroy(int(slot))
     kprint("procSpawnRing3 failed\n"); regionFree(slot); return
+  gLastSpawnSlot = procSlot
+  gLastSpawnRegion = int(slot)
   kprint("App spawned in ring 3\n")
   # Shell returns immediately; app runs in parallel via the preemptive scheduler.
   # Region and task slot are freed by abiExit when the app calls nimixExit().
@@ -518,6 +528,78 @@ proc cmdChantest() =
   discard chClose(gHs, gCh, me, dB)
   if bad == 0: kprint("chan-kernel: ok\n")
 
+proc cmdIsotest() =
+  ## Keeps a victim alive and sends attackers at its memory, each running at the same time on its own
+  ## page tables. Prints "isotest-kernel: ..." for tests/qemu_devices.py. The victim's secrets are
+  ## read here too, from the kernel's tables (where every region is mapped), to prove they are intact.
+  const Offset = 0x300000'u64
+  const Magic = 0x4E494D4958495351'u64
+  var bad = 0
+  proc fail(what: string) =
+    inc bad
+    kprint("isotest-kernel: FAIL "); kprint(what); kprint("\n")
+  proc waitGone(slot: int; pid: uint32; maxTicks: uint64): bool =
+    let until = pitTicks() + maxTicks
+    while pitTicks() < until:
+      if not procTable.tasks[slot].used or procTable.tasks[slot].pid != pid: return true
+      sti(); hlt()
+    false
+  proc launch(name: cstring; args: cstring): tuple[slot: int, pid: uint32, region: int] =
+    let n = loadFile(name)
+    if n < 0: return (-1, 0'u32, -1)
+    launchLoaded(name, n, args)
+    (gLastSpawnSlot, procTable.tasks[gLastSpawnSlot].pid, gLastSpawnRegion)
+  proc hex(v: uint64): string =
+    const digits = "0123456789abcdef"
+    var started = false
+    for i in countdown(15, 0):
+      let d = int((v shr (uint64(i) * 4)) and 15)
+      if d != 0 or started or i == 0:
+        started = true
+        result.add digits[d]
+
+  let victim = launch("isotest.elf", "victim")
+  if victim.slot < 0: fail("isotest.elf not on disk"); return
+  let vbase = RegionBase + uint64(victim.region) * RegionSize
+  let secret = cast[ptr uint64](vbase + Offset)
+  # wait for the victim to plant its secret (read from the kernel's own tables)
+  var until = pitTicks() + 500
+  while secret[] != Magic and pitTicks() < until:
+    sti(); hlt()
+  if secret[] != Magic: fail("the victim never planted its secret"); return
+  kprint("isotest-kernel: victim alive, region at 0x"); kprint(hex(vbase)); kprint("\n")
+
+  # positive control: an app can use its OWN region and buffer while the victim is alive
+  block:
+    let a = launch("isotest.elf", "own")
+    if a.slot < 0 or not waitGone(a.slot, a.pid, 500): fail("the control app did not finish")
+    else: kprint("isotest-kernel: control finished\n")
+
+  # the attacks: each runs as its own app, concurrently with the victim
+  proc attack(label: string; mode: cstring; target: uint64) =
+    var args: array[40, char]
+    var k = 0
+    for c in $mode: args[k] = c; inc k
+    args[k] = ' '; inc k
+    for c in hex(target): args[k] = c; inc k
+    args[k] = '\0'
+    let a = launch("isotest.elf", cast[cstring](addr args[0]))
+    if a.slot < 0: fail("could not start the attacker " & label); return
+    if not waitGone(a.slot, a.pid, 500): fail("the attacker " & label & " is still running")
+    elif secret[] != Magic: fail("the secret changed after " & label)
+    else:
+      kprint("isotest-kernel: "); kprint(label); kprint(" contained\n")
+  attack("read of the victim's region", "read", vbase + Offset)
+  attack("write to the victim's region", "write", vbase + Offset)
+  attack("read of the victim's region start", "read", vbase)
+  attack("read of the victim's stack", "read", vbase + RegionSize - 64)
+  attack("read of the victim's buffer", "read", ArenaBase)
+  attack("write to the victim's buffer", "write", ArenaBase)
+  attack("read of kernel memory", "read", 0x200000'u64)
+  # the victim is untouched and finishes by itself
+  if not waitGone(victim.slot, victim.pid, 800): fail("the victim did not finish")
+  if bad == 0: kprint("isotest-kernel: ok\n")
+
 proc dispatchCmd(cmd: ShellCommand; buf: openArray[char];
                  first, last: int; physMgr: PhysicalMemManager) =
   case cmd
@@ -534,6 +616,7 @@ proc dispatchCmd(cmd: ShellCommand; buf: openArray[char];
     runWasmWithCaps("pingpong", cast[ptr byte](unsafeAddr pingpongWasm[0]), pingpongWasm.len)
   of scLspci:  cmdLspci()
   of scChantest: cmdChantest()
+  of scIsotest: cmdIsotest()
   of scNetinfo: cmdNetinfo()
   of scDevtest:
     var dev: array[16, char]

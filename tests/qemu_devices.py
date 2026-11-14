@@ -780,6 +780,42 @@ def test_channels(tmp, iso, bios) -> list:
     return results
 
 
+def test_isolation(tmp, iso, bios) -> list:
+    """S8: per-task address spaces. A victim app plants secrets in its own region and in an owned
+    buffer and stays alive; attacker apps, running at the same time on their own page tables, try to
+    read and write them (and the kernel). Every attacker must be killed by the hardware before it can
+    print a word about what it found; the victim's secrets must be intact; and a control app must be
+    able to use its own memory, so a broken attacker cannot pass as a contained one."""
+    results = []
+    g = boot(tmp, iso=iso, bios=bios, devices=("blk",))
+    try:
+        try:
+            mark = len(g.out)
+            g.type("isotest")
+            done = g.wait("isotest-kernel: ok", 120, mark) or g.wait("isotest-kernel: FAIL", 1, mark)
+            time.sleep(1.5)
+            out = g.text(mark)
+            assert "KERNEL PANIC" not in out, "the kernel died: " + out[-600:]
+            leaks = [l for l in out.splitlines() if "LEAK" in l or "CORRUPTED" in l]
+            assert not leaks, "isolation broken:\n" + "\n".join(leaks)
+            fails = [l for l in out.splitlines() if "isotest-kernel: FAIL" in l]
+            assert not fails, "\n".join(fails)
+            assert done, "isotest did not finish: " + out[-700:]
+            assert "isotest: own region and buffer ok" in out, "the control app could not use its own memory"
+            contained = out.count(" contained")
+            assert contained == 7, f"{contained} of 7 attacks contained: " + out[-900:]
+            killed = out.count("=== killed pid")
+            assert killed >= 7, f"only {killed} attackers were killed by the hardware"
+            assert "victim: intact" in out, "the victim's secrets were not confirmed intact"
+            results.append(("isolation", True, f"{contained} attacks (read/write region, stack, buffer, kernel) each killed by a page fault; victim intact; control ok"))
+        except Exception as e:                 # noqa: BLE001
+            results.append(("isolation", False, str(e)))
+        assert "NimixOS" in g.run("version"), "shell dead after isotest"
+    finally:
+        g.close()
+    return results
+
+
 def test_user_faults(tmp, iso, bios, kernel) -> list:
     """Ring-3 faults kill only the faulting task: one boot survives them all."""
     results = []
@@ -833,6 +869,7 @@ def main():
             results += test_raylib_mouse(tmp, a.iso, a.bios)
             results += test_abi_hostile(tmp, a.iso, a.bios)
             results += test_channels(tmp, a.iso, a.bios)
+            results += test_isolation(tmp, a.iso, a.bios)
             results += test_crashes(tmp, a.iso, a.bios, a.kernel)
     for name, ok, msg in results:
         print(f"{'PASS' if ok else 'FAIL'}: {name:12} {msg}")

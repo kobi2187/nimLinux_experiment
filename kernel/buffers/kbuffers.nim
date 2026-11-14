@@ -18,6 +18,8 @@ import ../../ipc/server_chan
 import ../../mm/region_allocator
 import ../../mm/memory_windows
 import ../../mm/user_window
+import ../../mm/addr_space
+import ../space/kspace
 import ../../kernel/process_table
 import ../../kernel/cap/capability as cap
 import ../../arch/x86_64/cpu_primitives
@@ -40,23 +42,34 @@ static: doAssert sizeof(BufMsgHandles) == BufMsgHandlesBytes,
 
 var
   gStore: BufStore
-  gApplied: array[MaxBlocks, Access]      ## rights currently in the PD entries
+  gApplied: array[MaxRegions, array[MaxBlocks, Access]]   ## rights in each space's PD entries
   gReady: bool
 
 proc invlpg(va: uint64) {.inline.} =
   {.emit: ["asm volatile(\"invlpg (%0)\" :: \"r\" (", va, ") : \"memory\");"].}
 
+var
+  gAppliedSerial: array[MaxRegions, uint64]        ## which incarnation of a space gApplied describes
+
 proc applyRights(t: int) =
-  ## Make the arena's page rights say exactly what task t may access.
+  ## Make task t's OWN page tables say exactly what t may access in the arena. Tasks have separate
+  ## tables, so a block granted to one is simply closed in all the others: there is nothing shared to
+  ## rewrite at a context switch, and a task that is not running keeps its tables until it is.
   if not gReady: return
+  let sp = ksOfTask(t)
+  if sp == nil: return                              # a kernel task: it sees the arena as the kernel
+  let r = int(procTable.tasks[t].regionSlot)
+  if gAppliedSerial[r] != ksSerial(r):              # a new space starts closed: forget what the last one had
+    for i in 0 ..< MaxBlocks: gApplied[r][i] = acNone
+    gAppliedSerial[r] = ksSerial(r)
   var acc: array[MaxBlocks, Access]
   gStore.blockAccess(t, acc)
-  let pml4 = cast[ptr PageTable](readCr3() and AddrMask)
+  let live = readCr3() == spaceRoot(sp)
   for i in 0 ..< gArenaBlocks:
-    if acc[i] != gApplied[i]:
+    if acc[i] != gApplied[r][i]:
       let va = ArenaBase + uint64(i) * uint64(BlockSize)
-      if setBlockRights(pml4, va, acc[i] != acNone, acc[i] == acReadWrite): invlpg(va)
-      gApplied[i] = acc[i]
+      if spaceSetBlock(sp, va, acc[i] != acNone, acc[i] == acReadWrite) and live: invlpg(va)
+      gApplied[r][i] = acc[i]
 
 proc onSwitch(next: int) {.nimcall.} = applyRights(next)
 
@@ -119,13 +132,16 @@ proc kbufAccessible*(p, n: uint64; write: bool): bool =
   ## rights, which ignore those page rights, so the syscall gate asks here first.
   if n == 0: return true
   if not gReady or p < ArenaBase: return false
+  let cur = int(procTable.current)
+  if cur < 0 or procTable.tasks[cur].regionSlot < 0: return false
+  let r = int(procTable.tasks[cur].regionSlot)
   let first = int((p - ArenaBase) div uint64(BlockSize))
   let last = int((p + n - 1 - ArenaBase) div uint64(BlockSize))
   if last >= gArenaBlocks: return false
   for i in first .. last:
     if write:
-      if gApplied[i] != acReadWrite: return false
-    elif gApplied[i] == acNone: return false
+      if gApplied[r][i] != acReadWrite: return false
+    elif gApplied[r][i] == acNone: return false
   true
 
 proc finish(e: BufError): int =

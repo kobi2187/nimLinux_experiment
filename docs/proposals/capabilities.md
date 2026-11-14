@@ -136,7 +136,8 @@ isolation underneath (this mechanism assumes it).
    an app's region gets the User bit at spawn and loses it at exit, and nothing switches it, so while two
    apps run each can address the other's region. The handle tables stop a program from *naming* another
    app's objects; they do not stop it *addressing* its memory. Options and a recommendation are in
-   DECISIONS (2026-11-14, S8).
+   DECISIONS (2026-11-14, S8). **Fixed the same day:** every ring-3 task now runs on its own page
+   tables (S8); an `isolation` test sends attackers at a running victim and each is killed by a page fault.
 4. **What the shell is**: the shell is a kernel task holding every right today. Until it is a
    userspace program (R6), it is the one ambient authority; keep that, accepted and listed?
 
