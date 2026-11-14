@@ -136,11 +136,63 @@ int main(void) {
     chk(r == 0 && !strcmp(buf, "via y"), "the shell wrote to us through the end we sent");
     chk(r == 0 && info.badge == 5, "stamped with the badge we gave y");
 
+    /* 3a. batches: a burst crosses in ONE kernel call. The shell queued 10 records for us in one
+     *     batch, then a message that carries a handle (which a batch read must stop in front of). */
+    {
+        static char recs[600];
+        NimixBatchInfo bi = { 0, 0, 0xdead };
+        chk(wait_readable(boot) == 1, "the shell's batch arrives");
+        int c0 = nimixKernelCalls();
+        r = nimixChanReadBatch(boot, recs, sizeof recs, &bi);
+        int c1 = nimixKernelCalls();
+        chk(r == 10 && bi.nMsgs == 10, "ten queued messages unpacked by one read");
+        chk(c1 - c0 == 2, "and that cost ONE kernel call (the second count is the call that asked)");
+        chk(bi.badge == 0, "badge of the shell's end");
+        int ok = 1, pos = 0;
+        for (int i = 0; i < 10 && ok; i++) {
+            unsigned n = (unsigned char)recs[pos] | ((unsigned char)recs[pos + 1] << 8);
+            char want[8]; int wl = snprintf(want, sizeof want, "r%d", i);
+            if ((int)n != wl || memcmp(recs + pos + 2, want, wl)) ok = 0;
+            pos += 2 + (int)n;
+        }
+        chk(ok && pos == (int)bi.used, "in order, nothing lost, exactly the bytes reported");
+        chk(wait_readable(boot) == 1, "the message that carries a handle arrives");
+        chk(nimixChanReadBatch(boot, recs, sizeof recs, &bi) == -14, "a message with handles is not swallowed by a batch");
+        r = nimixChanRead(boot, buf, sizeof buf, &info);          /* take it alone: it is "closer" */
+        chk(r == 0 && info.nGot == 1 && info.n == 6, "and is read alone, with its handle");
+        /* send a burst of 12 the other way: one call */
+        static char out[400];
+        int len = 0;
+        for (int i = 0; i < 12; i++) {
+            char t[8]; int tl = snprintf(t, sizeof t, "b%d", i);
+            out[len++] = (char)tl; out[len++] = 0;
+            memcpy(out + len, t, tl); len += tl;
+        }
+        c0 = nimixKernelCalls();
+        r = nimixChanWriteBatch(boot, out, len, 12);
+        c1 = nimixKernelCalls();
+        chk(r == 12, "twelve records queued");
+        chk(c1 - c0 == 2, "by ONE kernel call");
+        /* hostile batches */
+        chk(nimixChanWriteBatch(boot, out, len, 0) < 0, "a batch of zero");
+        chk(nimixChanWriteBatch(boot, out, len, 17) < 0, "a batch above the queue depth");
+        chk(nimixChanWriteBatch(boot, out, len, 13) < 0, "more records than the buffer holds");
+        chk(nimixChanWriteBatch(boot, out, -1, 1) < 0, "negative length");
+        chk(nimixChanWriteBatch(boot, out, 1, 1) < 0, "a buffer that ends inside a length");
+        char big[320]; big[0] = (char)(300 & 0xFF); big[1] = (char)(300 >> 8);
+        chk(nimixChanWriteBatch(boot, big, 302, 1) == -8, "a record above the message size");
+        chk(nimixChanWriteBatch(boot, NULL, 8, 1) < 0, "NULL records");
+        chk(nimixChanWriteBatch(boot, (void *)0x1000, 8, 1) < 0, "records in kernel memory");
+        chk(nimixChanWriteBatch(0x7777u, out, len, 1) < 0, "a handle we do not hold");
+        chk(nimixChanReadBatch(boot, recs, 1, &bi) < 0, "nothing queued, or too small: refused");
+        chk(nimixChanReadBatch(boot, (void *)0x1000, 64, &bi) < 0, "buffer in kernel memory");
+        chk(nimixChanReadBatch(boot, recs, 64, (NimixBatchInfo *)0x1000) < 0, "info in kernel memory");
+        chk(nimixChanReadBatch(0x7777u, recs, 64, &bi) < 0, "a handle we do not hold");
+    }
+
     /* 3b. a peer that closes wakes a waiter: the shell sent us one end of a channel and will close
      *     the other after a moment */
-    r = recv_msg(boot, buf, sizeof buf - 1, &info);
-    chk(r == 0 && info.n == 6 && !memcmp(buf, "closer", 6) && info.nGot == 1, "receive the closer end");
-    if (r == 0 && info.nGot == 1) {
+    if (info.nGot == 1) {
         NimixWaitItem cw = { info.got[0], 0 };
         t0 = now_ms();
         nw = nimixWait(&cw, 1, 800);

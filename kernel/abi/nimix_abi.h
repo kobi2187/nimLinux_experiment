@@ -98,7 +98,7 @@ int nimixDisplaySetMode(unsigned width, unsigned height);
  * Errors are negative: -1 bad handle or argument, -2 wrong kind of object, -3 missing right,
  * -4 would widen rights, -5 peer closed, -6 queue full, -7 empty, -8 too big (info.n = needed),
  * -9 too many handles, -10 a channel end cannot ride its own channel, -11 handle table full,
- * -12 no channel left, -13 no object left. */
+ * -12 no channel left, -13 no object left, -14 next message carries handles. */
 typedef unsigned NimixHandle;                       /* 0 = none */
 #define NIMIX_BOOTSTRAP_HANDLE 0x10001u             /* the first handle your spawner gave you */
 #define NIMIX_RIGHT_READ      1u
@@ -130,3 +130,18 @@ int nimixChanStatus(NimixHandle h);                    /* bit 0 readable, bit 1 
  * channel write or close wakes it, and it runs at the next scheduling tick. */
 typedef struct { NimixHandle handle; unsigned ready; } NimixWaitItem;
 int nimixWait(NimixWaitItem* items, int n, unsigned ticks);
+
+/* Batches: a stream crosses as one call per burst. Records are packed back to back, each a 16-bit
+ * little-endian length then that many bytes (<= 256). A channel is the session ring: there is no
+ * second queue type. A batch carries bytes only; a message with handles goes alone (nimixChanWrite).
+ * nimixChanWriteBatch returns how many records were queued (fewer than `count` if the queue filled),
+ * or < 0 (nothing queued). nimixChanReadBatch returns how many messages it unpacked (>= 1) or < 0;
+ * -14 means the next message carries handles (use nimixChanRead), -8 that it does not fit (info.used
+ * = bytes needed). It stops before a message with handles. Up to 16 records per batch. */
+typedef struct { unsigned used, nMsgs; unsigned long long badge; } NimixBatchInfo;
+int nimixChanWriteBatch(NimixHandle h, const void* records, int len, int count);
+int nimixChanReadBatch(NimixHandle h, void* records, int cap, NimixBatchInfo* info);
+
+/* How many syscalls this task has made so far, including this one: the number the cost model
+ * ("about one kernel call per frame") is stated in. */
+int nimixKernelCalls(void);

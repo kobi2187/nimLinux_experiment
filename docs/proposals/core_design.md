@@ -86,10 +86,27 @@ Each: what it fixes, the invariant, how it is tested, and where we are.
 - *Today:* ownership and the host-side ring are built and tested; the ring syscalls and a small-buffer
   lane (every buffer costs a 2 MB block) are not.
 
+### M3 update (2026-11-14): the channel is the session ring
+A stream crosses as a **batch** on an ordinary channel: up to 16 records in one call each way
+(`nimixChanWriteBatch/ReadBatch`), one wake per batch. Built and measured from ring 3: ten queued
+messages read in one kernel call, twelve written in one. So a small frame needs no buffer, and the
+"about one kernel call per frame" budget is met without a second queue type. `ipc/buffers/ring.nim`
+(the separate ring queue of the frozen buffers API) is redundant under this and is proposed for
+retirement; large data still moves as owned buffers whose handles ride in messages. The count is
+visible to tests: `nimixKernelCalls()`. **Open (S8):** a small buffer needs its own owner, which at 2 MB
+blocks it cannot have; that waits on the address-space/granule decision.
+
 ### M4. Time: waiting and waking
 - A task can block until a source is ready or a deadline passes; IRQs wake by delivering to a handle;
   sub-tick timers exist. Responsiveness is a property of this layer, not of each server.
-- *Invariant:* no server polls on a timer to find work. *Today:* everything polls on the 10 ms tick.
+- *Invariant:* no server polls on a timer to find work. *Today:* `nimixWait` blocks on channel ends
+  (S4a); the device and event sources are still the old scaffolds.
+- **The event server (planned, human, 2026-11-14).** Waking and polling for programs becomes a
+  service: events are messages on channels, a subscription is a handle (so seeing an event needs the
+  handle), and a program either blocks in `nimixWait` or polls with `nimixChanStatus`. The kernel
+  keeps only the mechanism: a wait object that an interrupt or a device module signals, held by the
+  event server. ELF programs and servers use it exactly like apps. It replaces the string-named event
+  topics (including the `input` topic) and is the natural home of the wake-from-IRQ half of S4.
 
 ### M5. Resources: charged to an owner
 - Every byte, handle, buffer and session is charged to a budget; **charges follow ownership**; a server

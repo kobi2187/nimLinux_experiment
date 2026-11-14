@@ -70,6 +70,12 @@ app ──MsgPack request + handles[]──▶ dispatcher ──(QoS, cap check,
   dispatcher out of the 60 fps path without violating "all I/O goes
   through dispatcher" (decision 2).
 
+> **Update 2026-11-14 (PROPOSED, needs the human):** the batching this section designs now exists on
+> ordinary channels (`nimixChanWriteBatch/ReadBatch`: up to 16 records per call, one wake, measured at
+> one kernel call per burst), with owned-buffer handles riding in messages. A channel is the session
+> ring, so the separate ring queue below is redundant and can be retired; the ownership flip at submit
+> is the existing handle transfer. Kept here as the original design until agreed.
+
 ## 5. Rings: batched ownership, actor wakeups
 
 A **session ring** is built from `ipc/mpsc_ring` (Vyukov, lock-free,

@@ -32,7 +32,8 @@ type
     ## The numbers are the syscall error codes (negated). 1 is "bad argument/handle" so the syscall
     ## gate's generic refusal (-1) means the same thing.
     crOk, crBadHandle, crWrongType, crNoRight, crWidens, crPeerClosed, crFull, crEmpty,
-    crTooBig, crTooManyHandles, crSelfTransfer, crTableFull, crNoChannels, crObjsFull, crBadTask
+    crTooBig, crTooManyHandles, crSelfTransfer, crTableFull, crNoChannels, crObjsFull, crHasHandles,
+    crBadTask
 
   SendHandle* = object
     ## A handle to move with a message, and the rights the receiver will get (a subset).
@@ -234,6 +235,84 @@ proc chRead*(s: var HandleSpace; c: var ChannelStore; t: TaskId; h: Handle;
   nGot = int(m.nFlights)
   c.ends[i].head = (c.ends[i].head + 1) mod ChQueueDepth
   dec c.ends[i].count
+  crOk
+
+# ── batches: many messages, one call ─────────────────────────────────────────
+# A stream (frames, events, audio) crosses as a BATCH: records packed back to back, each
+# `u16 length (little endian)` then that many bytes, so one kernel call moves a whole burst and one
+# wake tells the receiver. Batches carry bytes only; a message with handles goes alone (chWrite).
+# The channel is the session ring: there is no second queue type.
+
+proc recLen(b: openArray[byte]; at: int): int {.inline.} = int(b[at]) or (int(b[at + 1]) shl 8)
+
+proc chWriteBatch*(s: var HandleSpace; c: var ChannelStore; t: TaskId; h: Handle;
+                   buf: openArray[byte]; count: int; written: var int): ChResult =
+  ## Queue up to `count` records from buf. The whole buffer is validated first (a bad record queues
+  ## nothing). If the queue fills part way, the records that fit are queued and `written` says how
+  ## many; crFull only if none fit. One ready signal for the batch.
+  written = 0
+  var i: int
+  var badge: uint64
+  var self: ObjId
+  let r = endOf(s, t, h, rtWrite, i, badge, self)
+  if r != crOk: return r
+  if count < 1 or count > ChQueueDepth: return crTooBig
+  var pos = 0
+  var starts: array[ChQueueDepth, int]
+  for k in 0 ..< count:                                  # validate everything before queuing anything
+    if pos + 2 > buf.len: return crBadHandle
+    let n = recLen(buf, pos)
+    if n > ChMsgBytes or pos + 2 + n > buf.len: return crTooBig
+    starts[k] = pos
+    pos += 2 + n
+  let p = int(c.ends[i].peer)
+  if c.ends[p].closed: return crPeerClosed
+  let room = ChQueueDepth - c.ends[p].count
+  if room <= 0: return crFull
+  let take = min(room, count)
+  for k in 0 ..< take:
+    let n = recLen(buf, starts[k])
+    let slot = (c.ends[p].head + c.ends[p].count) mod ChQueueDepth
+    let m = addr c.ends[p].q[slot]
+    m.len = uint16(n); m.nFlights = 0; m.sender = int16(t); m.badge = badge
+    for b in 0 ..< n: m.data[b] = buf[starts[k] + 2 + b]
+    inc c.ends[p].count
+  written = take
+  if gReadyHook != nil: gReadyHook(p)
+  crOk
+
+proc chReadBatch*(s: var HandleSpace; c: var ChannelStore; t: TaskId; h: Handle;
+                  buf: var openArray[byte]; maxMsgs: int; used: var int; nMsgs: var int;
+                  badge: var uint64): ChResult =
+  ## Take consecutive queued messages that carry no handles, packed as records, while they fit in
+  ## buf and nMsgs < maxMsgs. A message with handles ends the batch (read it with chRead). If the very
+  ## first message has handles: crHasHandles; if it alone does not fit buf: crTooBig (used = needed).
+  used = 0; nMsgs = 0
+  var i: int
+  var wb: uint64
+  var self: ObjId
+  let r = endOf(s, t, h, rtRead, i, wb, self)
+  if r != crOk: return r
+  if c.ends[i].count == 0:
+    return (if c.ends[int(c.ends[i].peer)].closed: crPeerClosed else: crEmpty)
+  while nMsgs < maxMsgs and c.ends[i].count > 0:
+    let m = addr c.ends[i].q[c.ends[i].head]
+    if m.nFlights > 0:
+      if nMsgs == 0: return crHasHandles
+      break
+    let need = 2 + int(m.len)
+    if used + need > buf.len:
+      if nMsgs == 0:
+        used = need
+        return crTooBig
+      break
+    buf[used] = byte(m.len and 0xFF); buf[used + 1] = byte(m.len shr 8)
+    for b in 0 ..< int(m.len): buf[used + 2 + b] = m.data[b]
+    used += need
+    badge = m.badge
+    inc nMsgs
+    c.ends[i].head = (c.ends[i].head + 1) mod ChQueueDepth
+    dec c.ends[i].count
   crOk
 
 proc chReadable*(s: HandleSpace; c: ChannelStore; t: TaskId; h: Handle): bool =

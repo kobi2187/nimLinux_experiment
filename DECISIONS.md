@@ -2133,3 +2133,26 @@ time as information and asserts only correctness. The cost argument for the hand
 (one index, one generation compare, one kind compare, one rights test) and is measured on the real
 target by the benchmark, not by a host unit test. The new tests were also run locally under the CI's
 valgrind and ASan/UBSan configurations: clean.
+
+---
+
+## 2026-11-14 — S5b: batches on channels; the channel is the session ring; event server in view
+
+- **Batches** (`nimixChanWriteBatch/ReadBatch`, syscalls 48-49): records packed as a 16-bit length plus
+  bytes, up to 16 per call, bytes only (a message with handles goes alone; a batch read stops in front
+  of it). The whole buffer is validated before anything is queued; if the queue fills, what fits is
+  queued and the count says how many. One ready signal for the batch.
+- **`nimixKernelCalls` (50):** the kernel counts each task's syscalls, so the cost model is stated and
+  tested in numbers: from ring 3, ten messages read = 1 call, twelve written = 1 call.
+- **Decision proposed (human to agree):** a channel with batches IS the session ring. The separate ring
+  queue of the frozen buffers API (`ipc/buffers/ring.nim`) is redundant; the ownership flip at submit is
+  the handle transfer that already exists. This changes the frozen API (cross-cutting): not done, only
+  the additive batch operations are. Logged here and in `bulk_data.md`.
+- **Not built, with the reason:** the small-buffer lane. A small buffer needs its own owner, and rights
+  are enforced per 2 MB block, so two small buffers in one block cannot belong to different tasks.
+  The cure is finer granularity (per-task address spaces, S8), which is the human's decision.
+- **Event server (human, 2026-11-14):** in the long run wake-up and polling become a service: events
+  are channel messages, a subscription is a handle, programs block with `nimixWait` or poll with
+  `nimixChanStatus`, and interrupts are wait objects the server holds. ELF programs and servers use it
+  like any client. Recorded as E1 in the roadmap and in `core_design.md` M4. Nothing here builds on the
+  old string-named event topics.

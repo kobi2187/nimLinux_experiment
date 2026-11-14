@@ -19,6 +19,7 @@ const WaitMax* = 8                  ## handles one wait can cover
 var
   gHs*: HandleSpace
   gCh*: ChannelStore
+  gCalls: array[HsMaxTasks, uint64]                 ## syscalls each task has made (the cost model's count)
   gWaitN: array[HsMaxTasks, int]                    ## handles each blocked task is waiting on
   gWaitEnds: array[HsMaxTasks, array[WaitMax, int32]]
 
@@ -37,6 +38,11 @@ proc khInit*() =
   chInit(gCh)
   chSetReadyHook(onEndReady)
 
+proc khCountCall*() =
+  ## One more syscall by the running task (called by the gate's check for every call).
+  let t = int(procTable.current)
+  if t >= 0 and t < HsMaxTasks: inc gCalls[t]
+
 proc khMe*(): int =
   ## The calling task's slot (its table), attached on first use; -1 when no task is current.
   let t = int(procTable.current)
@@ -49,6 +55,7 @@ proc khReleasePid*(pid: uint32) =
   for slot in 0 ..< process_table.MaxTasks:
     if procTable.tasks[slot].used and procTable.tasks[slot].pid == pid:
       gWaitN[slot] = 0
+      gCalls[slot] = 0
       chCloseAll(gHs, gCh, slot)
 
 proc khGrant*(fromTask: int; h: Handle; childSlot: int; rights: Rights): bool =
@@ -137,6 +144,46 @@ proc abiChanRead*(h: uint32; buf: pointer; cap: int; info: pointer): int {.nimca
     o.n = int32(n); o.nGot = uint32(nGot); o.badge = badge
     for i in 0 ..< nGot: o.got[i] = uint32(got[i])
   code(r)
+
+type BatchInfo {.packed.} = object
+  used, nMsgs: uint32
+  badge: uint64
+
+proc abiChanWriteBatch*(h: uint32; buf: pointer; len: int; count: int): int {.nimcall.} =
+  ## Queue `count` records (u16 little-endian length, then the bytes) in ONE call. Returns how many
+  ## were queued (fewer than `count` if the queue filled), or a negative error. Bytes only.
+  let t = khMe()
+  if t < 0: return code(crBadTask)
+  if len < 0: return code(crTooBig)
+  let bytes = cast[ptr UncheckedArray[byte]](buf)
+  var written: int
+  let r = chWriteBatch(gHs, gCh, t, Handle(h), toOpenArray(bytes, 0, len - 1), count, written)
+  if r != crOk: return code(r)
+  written
+
+proc abiChanReadBatch*(h: uint32; buf: pointer; cap: int; info: pointer): int {.nimcall.} =
+  ## Take the queued messages that carry no handles, packed as records, in ONE call. Returns the
+  ## number of messages (>= 1) or a negative error; info gets the bytes used and the sender's badge.
+  let t = khMe()
+  if t < 0: return code(crBadTask)
+  if cap < 0: return code(crTooBig)
+  let bytes = cast[ptr UncheckedArray[byte]](buf)
+  var used, nMsgs: int
+  var badge: uint64
+  let r = chReadBatch(gHs, gCh, t, Handle(h), toOpenArray(bytes, 0, cap - 1), ChQueueDepth,
+                      used, nMsgs, badge)
+  if info != nil:
+    let o = cast[ptr BatchInfo](info)
+    o.used = uint32(used); o.nMsgs = uint32(nMsgs); o.badge = badge
+  if r != crOk: return code(r)
+  nMsgs
+
+proc abiKernelCalls*(): int {.nimcall.} =
+  ## How many syscalls the caller has made so far, including this one: the count the cost model
+  ## ("about one kernel call per frame") is stated in.
+  let t = khMe()
+  if t < 0: return 0
+  int(gCalls[t])
 
 proc abiHandleClose*(h: uint32): int {.nimcall.} =
   let t = khMe()

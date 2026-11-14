@@ -152,6 +152,12 @@ type
     wait*:         proc(items: pointer; n: int; ticks: uint32): int {.nimcall.}
       ## Block until one of up to 8 channel ends is readable or peer-closed, or the timeout (PIT ticks,
       ## 0xFFFFFFFF = forever) passes. Returns how many are ready; 0 = timeout; < 0 = error.
+    chanWriteBatch*: proc(h: uint32; buf: pointer; len: int; count: int): int {.nimcall.}
+      ## `count` records (u16 length + bytes) in one call; returns how many were queued.
+    chanReadBatch*:  proc(h: uint32; buf: pointer; cap: int; info: pointer): int {.nimcall.}
+      ## The queued handle-free messages as records, in one call; returns how many.
+    kernelCalls*:    proc(): int {.nimcall.}
+      ## Syscalls the caller has made so far, including this one.
 
 var nimixAbi*: NimixAbiVTable
   ## Global ABI vtable. Set once at boot by the chosen kernel model init.

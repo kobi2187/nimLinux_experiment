@@ -263,6 +263,88 @@ proc testReadyHook() =
   chSetReadyHook(nil)
   echo "PASS: the ready hook fires on a queued message and on peer-close, not on a failed write"
 
+proc pack(parts: openArray[string]): seq[byte] =
+  for p in parts:
+    result.add byte(p.len and 0xFF); result.add byte(p.len shr 8)
+    for c in p: result.add byte(c)
+
+proc unpack(b: openArray[byte]; used: int): seq[string] =
+  var pos = 0
+  while pos < used:
+    let n = int(b[pos]) or (int(b[pos + 1]) shl 8)
+    var str = ""
+    for k in 0 ..< n: str.add char(b[pos + 2 + k])
+    result.add str
+    pos += 2 + n
+
+proc testBatches() =
+  fresh()
+  gReadyLog = @[]
+  chSetReadyHook(proc(endIdx: int) {.nimcall.} = gReadyLog.add endIdx)
+  let (a, b) = pair(0, 0, 9)
+  var written, used, nMsgs: int
+  var badge: uint64
+  var big: array[1024, byte]
+  # a batch queues in order, signals ONCE, and the badge is the writer's
+  assert chWriteBatch(hs, ch, 0, a, pack(["one", "two", "three", "", "five"]), 5, written) == crOk and written == 5
+  assert gReadyLog.len == 1, "one wake for the whole batch, not one per message"
+  assert chQueued(hs, ch, 0, b) == 5
+  assert chReadBatch(hs, ch, 0, b, big, 16, used, nMsgs, badge) == crOk
+  assert nMsgs == 5 and badge == 0 and unpack(big, used) == @["one", "two", "three", "", "five"], "order and empty records survive"
+  # mixing singles and batches keeps FIFO
+  assert chWrite(hs, ch, 0, a, msg("s1")) == crOk
+  assert chWriteBatch(hs, ch, 0, a, pack(["b1", "b2"]), 2, written) == crOk
+  assert chWrite(hs, ch, 0, a, msg("s2")) == crOk
+  assert chReadBatch(hs, ch, 0, b, big, 16, used, nMsgs, badge) == crOk
+  assert unpack(big, used) == @["s1", "b1", "b2", "s2"]
+  assert chReadBatch(hs, ch, 0, b, big, 16, used, nMsgs, badge) == crEmpty
+  # the reverse direction stamps the other badge
+  assert chWriteBatch(hs, ch, 0, b, pack(["back"]), 1, written) == crOk
+  assert chReadBatch(hs, ch, 0, a, big, 16, used, nMsgs, badge) == crOk and badge == 9, "badge of the handle written through"
+  # maxMsgs limits one read
+  assert chWriteBatch(hs, ch, 0, a, pack(["1", "2", "3", "4"]), 4, written) == crOk
+  assert chReadBatch(hs, ch, 0, b, big, 3, used, nMsgs, badge) == crOk and unpack(big, used) == @["1", "2", "3"]
+  assert chReadBatch(hs, ch, 0, b, big, 3, used, nMsgs, badge) == crOk and unpack(big, used) == @["4"]
+  # a bad batch queues nothing: too-long record, truncated buffer, silly counts
+  var bad = pack(["ok"])
+  bad.add 0xFF; bad.add 0xFF                           # a record claiming 65535 bytes
+  assert chWriteBatch(hs, ch, 0, a, bad, 2, written) == crTooBig and written == 0
+  assert chWriteBatch(hs, ch, 0, a, pack(["abc"])[0 .. 3], 1, written) == crTooBig, "buffer ends inside a record"
+  assert chWriteBatch(hs, ch, 0, a, pack(["a"]), 3, written) != crOk, "count larger than the records present"
+  assert chWriteBatch(hs, ch, 0, a, pack(["a"]), 0, written) == crTooBig
+  assert chWriteBatch(hs, ch, 0, a, pack(["a"]), ChQueueDepth + 1, written) == crTooBig
+  assert chQueued(hs, ch, 0, b) == 0, "none of that queued anything"
+  # a full queue takes what fits
+  for i in 0 ..< ChQueueDepth - 2: assert chWrite(hs, ch, 0, a, msg("f")) == crOk
+  assert chWriteBatch(hs, ch, 0, a, pack(["x", "y", "z", "w", "v"]), 5, written) == crOk and written == 2
+  assert chWriteBatch(hs, ch, 0, a, pack(["q"]), 1, written) == crFull and written == 0
+  for i in 0 ..< ChQueueDepth: discard recv(0, b)
+  # a message with handles ends a batch and is read alone
+  let (x, y) = pair(0)
+  assert chWrite(hs, ch, 0, a, msg("m1")) == crOk
+  assert chWrite(hs, ch, 0, a, msg("m2")) == crOk
+  assert chWrite(hs, ch, 0, a, msg("h"), [SendHandle(h: y, rights: rtChannelDefault)]) == crOk
+  assert chWrite(hs, ch, 0, a, msg("m3")) == crOk
+  assert chReadBatch(hs, ch, 0, b, big, 16, used, nMsgs, badge) == crOk and unpack(big, used) == @["m1", "m2"], "stops before the handle"
+  assert chReadBatch(hs, ch, 0, b, big, 16, used, nMsgs, badge) == crHasHandles, "and refuses to swallow it"
+  let hr = recv(0, b)
+  assert hr.s == "h" and hr.got.len == 1
+  assert chReadBatch(hs, ch, 0, b, big, 16, used, nMsgs, badge) == crOk and unpack(big, used) == @["m3"]
+  # buffer too small: the first message that cannot fit reports the size; later ones just wait
+  assert chWriteBatch(hs, ch, 0, a, pack(["0123456789", "ab", "cd"]), 3, written) == crOk
+  var small: array[6, byte]
+  assert chReadBatch(hs, ch, 0, b, small, 16, used, nMsgs, badge) == crTooBig and used == 12 and nMsgs == 0
+  var mid: array[16, byte]
+  assert chReadBatch(hs, ch, 0, b, mid, 16, used, nMsgs, badge) == crOk and nMsgs == 2 and used == 16, "12 + 4 bytes fill the buffer exactly"
+  assert unpack(mid, used) == @["0123456789", "ab"]
+  assert chReadBatch(hs, ch, 0, b, mid, 16, used, nMsgs, badge) == crOk and unpack(mid, used) == @["cd"], "the one that did not fit waited"
+  # peer closed
+  assert chClose(hs, ch, 0, b) == crOk
+  assert chWriteBatch(hs, ch, 0, a, pack(["x"]), 1, written) == crPeerClosed
+  assert chReadBatch(hs, ch, 0, a, big, 16, used, nMsgs, badge) == crPeerClosed
+  chSetReadyHook(nil)
+  echo "PASS: batches keep order and badges, validate before queuing, fit what fits, one wake per batch"
+
 proc testDeath() =
   fresh(5)
   var ends: seq[Handle]
@@ -346,6 +428,7 @@ when isMainModule:
   testCascade()
   testCycleLeakIsBoundedBySender()
   testReadyHook()
+  testBatches()
   testDeath()
   testStress()
   echo "All channel tests passed."

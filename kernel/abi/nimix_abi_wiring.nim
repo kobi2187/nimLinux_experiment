@@ -62,3 +62,6 @@ proc wireSharedAbi*(av: var NimixAbiVTable) =
   av.handleDup      = abiHandleDup
   av.chanStatus     = abiChanStatus
   av.wait           = abiWait
+  av.chanWriteBatch = abiChanWriteBatch
+  av.chanReadBatch  = abiChanReadBatch
+  av.kernelCalls    = abiKernelCalls

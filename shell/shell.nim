@@ -480,11 +480,28 @@ proc cmdChantest() =
     if chPeerClosed(gHs, gCh, me, dA) or chPeerClosed(gHs, gCh, me, dB): fail("the child closed our decoys")
     if chWrite(gHs, gCh, me, yh, bytesOf("via y")) != crOk: fail("write through y")
     else: kprint("chan-kernel: handle received and used ok\n")
+    # a burst for the child in ONE call, then a message that carries a handle: the child's batch
+    # read must take the burst and stop in front of the handle
+    var burst: seq[byte]
+    for i in 0 ..< 10:
+      let t = "r" & $i
+      burst.add byte(t.len); burst.add 0'u8
+      for c in t: burst.add byte(c)
+    var written: int
+    if chWriteBatch(gHs, gCh, me, hA, burst, 10, written) != crOk or written != 10: fail("write the burst")
     # give the child one end of a channel and close the other after a moment: its wait must end
     if chWrite(gHs, gCh, me, hA, bytesOf("closer"), [SendHandle(h: eB, rights: rtChannelDefault)]) != crOk:
       fail("send the closer end")
     sleepTicks(40)
     discard chClose(gHs, gCh, me, eA)
+    # the child's burst of 12 (one batch call there): they arrive in order, stamped with badge 77
+    var ordered = true
+    for i in 0 ..< 12:
+      if pollRead(hA, m, len, badge, got, nGot) != crOk or asStr(m, len) != "b" & $i or badge != 77:
+        ordered = false
+        break
+    if not ordered: fail("the child's burst did not arrive in order with badge 77")
+    else: kprint("chan-kernel: burst of 12 in order ok\n")
     if pollRead(hA, m, len, badge, got, nGot) != crOk: fail("read the child's report")
     else:
       let rep = asStr(m, len)

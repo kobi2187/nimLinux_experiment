@@ -4,6 +4,13 @@ Last updated: 2026-10-27 (session 9e, branch `ccr-56330414-wo65nx`, cloud contai
 
 
 
+## Session 9s — S5b: batches, and the event server in view
+
+Batch syscalls 48-49 and `nimixKernelCalls` (50). Decision for the human: retire
+`ipc/buffers/ring.nim`'s separate queue (a channel is the session ring). Event server recorded as E1
+(events = channel messages, subscription = handle, wait objects for IRQs). **Next in order:** S8 decision
+(address spaces/granule) unblocks the small-buffer lane; S2k-b (fold buffers); K1/K3; then E1.
+
 ## Session 9r — S4a: blocking wait
 
 `nimixWait` over channel ends (wake hook in `channel.nim`, `procWake`, per-task wait sets in
