@@ -1,5 +1,36 @@
 # ARCHITECTURE.md — Living Module Map
 
+## 0. Stability layers and scaffolding (2026-11-14)
+
+Components are ordered by how fixed they must be. Work proceeds from the top (must work exactly this
+way; everything depends on it) to the bottom (flexible, may be composed differently per model).
+
+| layer | what | how fixed |
+|-------|------|-----------|
+| **L1 Structure** | handles/capabilities, channels and badges, spawn-with-handles, wait/wake, ownership buffers and rings, resource charging, death cleanup, the syscall gate | **fixed**: other layers assume it |
+| **L2 Contracts** | protocol description and SDK generation, the dispatcher (sessions, discovery, QoS), the device-port interface | fixed interfaces; implementations free |
+| **L3 Device modules** | display, input, block, net, sound (each: driver + device-local intelligence, behind a port) | placement per model, measured |
+| **L4 Domain servers** | render/window, file, console/terminal, audio, network stack | free inside their contract |
+| **L5 Clients** | SDKs, WASM host, the raylib bridge, apps, desktop | most flexible |
+
+Status vocabulary: **DONE** (as designed), **SCAFFOLD** (works, but a stub to stand on: replace, never
+imitate), **PARTIAL**, **TODO**, **DECISION** (waiting on the human).
+
+**Known scaffolding** (each is superseded by an L1/L2 item in BACKLOG "Roadmap v2"):
+
+| scaffold | why it exists | replaced by |
+|----------|---------------|-------------|
+| `kernel/cap/capability.nim` global bearer tokens (64 entries, guessable, no owner check) | first gate for IPC | S1 handle tables |
+| named `ServerChan` with ungated `chanSend`, `capSend` by token | first server IPC | S2 channel endpoints with badges |
+| event topics by string (`input` readable by anyone) | first pub/sub | S2/K3 device-port clients and wait objects |
+| display ABI as direct syscalls, first-present ownership | first pixels | K3 display port, single client |
+| `nimixFsRead/Write/ReadDir` with ambient paths, whole-file | first file access | V2 file server, directory-scope handles |
+| the kernel-resident shell, fb console, console input grab | first UI | V3 terminal client, console server |
+| servers and apps polling on the 10 ms tick | no blocking existed | S4 wait/wake |
+| per-switch arena page rights in one shared space | Stage A of buffers | S8 (decision on address spaces) |
+| `libnimix` whole-file and direct-syscall layer | first C programs | SDKs over contracts (K1) |
+| hand-written record codecs | first protocols | K1 one contract per service |
+
 ## 1. Module tree
 
 ### Core / CPU / Hardware primitives
@@ -324,3 +355,4 @@ monolithic model may still link a server in.
 | 2026-11-12 | Syscall pointer arguments are checked at the gate from one table (`kernel/abi/user_args.nim`, kernel half `user_args_gate.nim`, arena rights `kbufAccessible`); two kernel panics a ring-3 program could cause fixed | DECISIONS.md §V14 |
 | 2026-11-12 | virtio-input drives every input device (up to 4) into the one `input` event stream; mouse/tablet events reach raylib via the generated platform (`libnimix/nimix_pointer.h`) | DECISIONS.md §V5e |
 | 2026-11-10 | Input follows display ownership: while a program owns the display the console drains and ignores key events; raylib gets keys from the `input` topic via a generated platform change | DECISIONS.md §V5c |
+| 2026-11-14 | Stability layers L1-L5 and a named list of scaffolding; structure-first order of work (Roadmap v2); capabilities model (per-task handle tables, badges, static separation) and core design proposed; dispatcher stands as the convergence point; placement of device modules is a measured choice | DECISIONS.md §Roadmap v2 |

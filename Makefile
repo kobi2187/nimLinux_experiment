@@ -406,6 +406,8 @@ HOST_TESTS_NOHW = \
   tests/test_rtc.nim \
   tests/test_syscall_table.nim \
   tests/test_user_args.nim \
+  tests/test_handles.nim \
+  tests/test_channels.nim \
   tests/test_elf_loader.nim \
   tests/test_vfs_btree.nim
 

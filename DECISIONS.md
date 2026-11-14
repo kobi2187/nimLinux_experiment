@@ -2055,3 +2055,29 @@ index and a rights test).
 The human's policy questions (where policy lives, file scoping, how far memory isolation must go, the
 shell as the one ambient authority) are in §6 of the proposal.
 
+---
+
+## 2026-11-14 — Roadmap v2: structure first; scaffolding is not precedent; S1 and S2 built
+
+**Human:** pieces built early were stubs to stand on, not the idealized implementation; do not use them
+as a model for later decisions. Record the understanding, show the roadmap and dependency tree with
+done versus left, then work from the parts that must work one way down to the flexible ones.
+
+**Recorded:** VISION "Structural principles"; ARCHITECTURE §0 (layers L1-L5 and a named list of ten
+scaffolds with what replaces each); BACKLOG "ROADMAP v2" (dependency tree, status table, libraries that
+stand on their own). Where v2 disagrees with older BACKLOG sections, v2 wins.
+
+**Built (libraries, host-tested, also compile under the kernel's flags):**
+- `ipc/handles/handle_table.nim` (S1): per-task handle tables, index plus generation, rights that only
+  narrow, badges, move between tables, last-close destruction. Verified against an independent model
+  over 60,000 random operations, an exhaustive forgery sweep (900,000 guessed values: only the 12
+  issued handles resolve), three deliberate breakages each caught, hot path about 1 ns on the host.
+- `ipc/handles/channel.nim` (S2): channel endpoint pairs, handles that move with messages, badges
+  stamped from the writing handle, peer-closed, atomic failure, release of in-flight handles.
+
+**Found by the stress test:** two channels can each hold the other's end in an unread message and
+leak forever (a reference cycle), which a hostile task could use to exhaust the tables. Decision: an
+unread message belongs to its sender; when the sender dies the handles in its unread messages are
+released (bytes stay readable). A leak can outlive only the task that made it. Rejected: a cycle
+collector (cost, complexity), forbidding sending the peer end (does not remove cycles through two
+channels).

@@ -4,6 +4,14 @@ Last updated: 2026-10-27 (session 9e, branch `ccr-56330414-wo65nx`, cloud contai
 
 
 
+## Session 9p — Roadmap v2, S1 and S2
+
+Recorded the human's structural understanding (VISION, ARCHITECTURE §0, BACKLOG Roadmap v2).
+Built `ipc/handles/` (handle table + channels). **Next in order:** S2k (kernel integration: syscalls over
+handles, buffers table folded in), then S3 (spawn with handles, remove ambient), S4 (wait/wake), S5b
+(rings), K-layer. Capabilities proposal §6 questions still open: assumptions in use are manifest policy at
+the launcher, directory scopes, shell stays the one ambient authority until R6.
+
 ## Session 9o — capabilities proposal
 
 Human: use Zircon/seL4 model, no dynamic revocation, static separation. Wrote
