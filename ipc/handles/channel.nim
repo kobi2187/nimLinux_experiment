@@ -29,8 +29,10 @@ const
 
 type
   ChResult* = enum
-    crOk, crBadTask, crBadHandle, crWrongType, crNoRight, crWidens, crPeerClosed, crFull,
-    crEmpty, crTooBig, crTooManyHandles, crSelfTransfer, crTableFull, crNoChannels, crObjsFull
+    ## The numbers are the syscall error codes (negated). 1 is "bad argument/handle" so the syscall
+    ## gate's generic refusal (-1) means the same thing.
+    crOk, crBadHandle, crWrongType, crNoRight, crWidens, crPeerClosed, crFull, crEmpty,
+    crTooBig, crTooManyHandles, crSelfTransfer, crTableFull, crNoChannels, crObjsFull, crBadTask
 
   SendHandle* = object
     ## A handle to move with a message, and the rights the receiver will get (a subset).

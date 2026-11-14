@@ -8,6 +8,7 @@ import nimix_abi
 import nimix_abi_impl
 import ../buffers/kbuffers
 import ../display/display
+import ../handles/khandles
 
 proc wireSharedAbi*(av: var NimixAbiVTable) =
   ## Wire all shared ABI procs into av.
@@ -54,3 +55,9 @@ proc wireSharedAbi*(av: var NimixAbiVTable) =
   av.displayPresent = abiDisplayPresent
   av.displayModes   = abiDisplayModes
   av.displaySetMode = abiDisplaySetMode
+  av.chanPair       = abiChanPair
+  av.chanWrite      = abiChanWrite
+  av.chanRead       = abiChanRead
+  av.handleClose    = abiHandleClose
+  av.handleDup      = abiHandleDup
+  av.chanStatus     = abiChanStatus

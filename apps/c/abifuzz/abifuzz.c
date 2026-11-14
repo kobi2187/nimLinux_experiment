@@ -87,6 +87,11 @@ int main(void) {
         NEG(nimixDisplayInfo((NimixDisplayInfo *)p), "displayInfo");
         NEG(nimixDisplayPresent((const NimixPresent *)p), "displayPresent");
         NEG(nimixDisplayModes((NimixDisplayMode *)p, 4), "displayModes");
+        NEG(nimixChanPair((NimixChanPair *)p), "chanPair request");
+        NEG(nimixChanWrite(NIMIX_BOOTSTRAP_HANDLE, p, 8, NULL), "chanWrite data");
+        NEG(nimixChanWrite(NIMIX_BOOTSTRAP_HANDLE, "x", 1, (const NimixSendList *)p), "chanWrite handle list");
+        NEG(nimixChanRead(NIMIX_BOOTSTRAP_HANDLE, p, 8, NULL), "chanRead buffer");
+        NEG(nimixChanRead(NIMIX_BOOTSTRAP_HANDLE, buf, 8, (NimixChanInfo *)p), "chanRead info");
         nimixFreeRegion(p, 16);                                            /* a value, never dereferenced */
         nimixFreeAnon(p, 16);
     }
@@ -138,6 +143,11 @@ int main(void) {
     NEG(nimixCapSend("abifuzz", 0xDEADBEEFDEADBEEFull, "x", 1), "capSend(forged token)");
     NEG(nimixDisplaySetMode(0, 0), "setMode(0,0)");
     NEG(nimixDisplaySetMode(0xFFFFFFFFu, 0xFFFFFFFFu), "setMode(huge)");
+    /* handles: this program was started by the shell with none, so every value is foreign */
+    NEG(nimixChanWrite(NIMIX_BOOTSTRAP_HANDLE, "x", 1, NULL), "chanWrite with no handle held");
+    NEG(nimixChanStatus(0xFFFFFFFFu), "chanStatus(forged)");
+    NEG(nimixHandleClose(0), "handleClose(0)");
+    NEG(nimixHandleDup(0x10001u, 1), "handleDup(not held)");
     nimixSleep(0);
     nimixYield();
 

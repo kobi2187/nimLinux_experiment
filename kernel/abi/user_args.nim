@@ -74,7 +74,10 @@ const ArgSpecs* = [
   b(36, 1, 2, wr = true), st(36, 3, BufMsgHandlesBytes, optional = true, wr = true),          # bufMsgRecv(tok, buf, len, hs)
   st(37, 0, 20, wr = true),                               # displayInfo(out): 5 x u32
   st(38, 0, 36),                               # displayPresent(req): 9 x u32
-  b(39, 0, 1, elem = 8, wr = true)]                       # displayModes(out, max): max x (w, h)
+  b(39, 0, 1, elem = 8, wr = true),
+  st(41, 0, 40, wr = true),                    # chanPair(req): rights and badges in, two handles out
+  b(42, 1, 2), st(42, 3, 36, optional = true), # chanWrite(h, data, len, sendList): data read; list read
+  b(43, 1, 2, wr = true), st(43, 3, 32, optional = true, wr = true)]  # chanRead(h, buf, cap, info)                       # displayModes(out, max): max x (w, h)
 
 func refusedResult*(nr: uint64): uint64 =
   ## What a refused call returns: -1, except where the syscall's failure value is 0 (those that

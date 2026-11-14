@@ -62,3 +62,10 @@ __attribute__((weak)) int  nimixDisplayInfo(void* out) { STUB_PAD; (void)out; re
 __attribute__((weak)) int  nimixDisplayPresent(const void* req) { STUB_PAD; (void)req; return -3; }
 __attribute__((weak)) int  nimixDisplayModes(void* out, int max) { STUB_PAD; (void)out; (void)max; return -3; }
 __attribute__((weak)) int  nimixDisplaySetMode(unsigned w, unsigned h) { STUB_PAD; (void)w; (void)h; return -3; }
+/* handles and channels */
+__attribute__((weak)) int  nimixChanPair(void* req) { STUB_PAD; (void)req; return -1; }
+__attribute__((weak)) int  nimixChanWrite(unsigned h, const void* data, int len, const void* send) { STUB_PAD; (void)h; (void)data; (void)len; (void)send; return -1; }
+__attribute__((weak)) int  nimixChanRead(unsigned h, void* buf, int cap, void* info) { STUB_PAD; (void)h; (void)buf; (void)cap; (void)info; return -1; }
+__attribute__((weak)) int  nimixHandleClose(unsigned h) { STUB_PAD; (void)h; return -1; }
+__attribute__((weak)) int  nimixHandleDup(unsigned h, unsigned rights) { STUB_PAD; (void)h; (void)rights; return -1; }
+__attribute__((weak)) int  nimixChanStatus(unsigned h) { STUB_PAD; (void)h; return -1; }

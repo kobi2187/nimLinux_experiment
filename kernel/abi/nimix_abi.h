@@ -88,3 +88,38 @@ int nimixDisplayPresent(const NimixPresent* req);
 typedef struct { unsigned width, height; } NimixDisplayMode;
 int nimixDisplayModes(NimixDisplayMode* out, int max);
 int nimixDisplaySetMode(unsigned width, unsigned height);
+
+/* ── Handles and channels (docs/proposals/capabilities.md) ─────────────────────
+ * A handle is an entry in YOUR OWN table; its value means nothing to any other task. You hold
+ * only what you were given at spawn or received in a message; there is no way to name anything
+ * else. Rights can only be narrowed. A message carries bytes (<= 256) and up to 4 handles, which
+ * MOVE. The receiver sees the BADGE of the handle the message was written through, set by whoever
+ * issued that handle: it identifies the session and cannot be forged by the sender.
+ * Errors are negative: -1 bad handle or argument, -2 wrong kind of object, -3 missing right,
+ * -4 would widen rights, -5 peer closed, -6 queue full, -7 empty, -8 too big (info.n = needed),
+ * -9 too many handles, -10 a channel end cannot ride its own channel, -11 handle table full,
+ * -12 no channel left, -13 no object left. */
+typedef unsigned NimixHandle;                       /* 0 = none */
+#define NIMIX_BOOTSTRAP_HANDLE 0x10001u             /* the first handle your spawner gave you */
+#define NIMIX_RIGHT_READ      1u
+#define NIMIX_RIGHT_WRITE     2u
+#define NIMIX_RIGHT_TRANSFER  8u                    /* may be sent in a message */
+#define NIMIX_RIGHT_DUPLICATE 16u
+#define NIMIX_RIGHT_WAIT      32u
+#define NIMIX_RIGHTS_CHANNEL  (1u | 2u | 8u | 16u | 32u)
+
+typedef struct {
+    unsigned size, rights0, rights1, pad;           /* rights 0 = the channel default */
+    unsigned long long badge0, badge1;              /* what the OTHER side sees through h0 / h1 */
+    NimixHandle h0, h1;                             /* out */
+} NimixChanPair;
+typedef struct { NimixHandle handle; unsigned rights; } NimixSendEnt;
+typedef struct { unsigned n; NimixSendEnt ent[4]; } NimixSendList;
+typedef struct { int n; unsigned nGot; unsigned long long badge; NimixHandle got[4]; } NimixChanInfo;
+
+int nimixChanPair(NimixChanPair* req);
+int nimixChanWrite(NimixHandle h, const void* data, int len, const NimixSendList* send);
+int nimixChanRead(NimixHandle h, void* buf, int cap, NimixChanInfo* info);
+int nimixHandleClose(NimixHandle h);
+int nimixHandleDup(NimixHandle h, unsigned rights);    /* the new handle, or < 0 */
+int nimixChanStatus(NimixHandle h);                    /* bit 0 readable, bit 1 peer closed */

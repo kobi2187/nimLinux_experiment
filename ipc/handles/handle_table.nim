@@ -117,9 +117,19 @@ proc hsInit*(s: var HandleSpace) =
   for o in 0 ..< HsMaxObjs: s.objs[o] = KObj()
   s.liveObjs = 0
 
+const BootstrapHandle* = Handle((1'u32 shl 16) or 1'u32)
+  ## The first handle installed in a fresh table: slot 0, generation 1. By convention it is the
+  ## bootstrap channel end a spawner gives its child (a program's whole world arrives through it).
+
 proc hsAttach*(s: var HandleSpace; t: TaskId): HsError =
+  ## Make t's table usable. A table that was not attached (never used, or its task died) starts
+  ## fresh at generation 1, so a new task's first handle always has the bootstrap value. Old values
+  ## from a dead task are meaningless to the new one, which never held them.
   if t notin 0 ..< HsMaxTasks: return heBadTask
-  s.tasks[t].attached = true
+  if not s.tasks[t].attached:
+    s.tasks[t].used = 0
+    for i in 0 ..< HsMaxHandles: s.tasks[t].entries[i] = Entry(obj: -1, gen: 1)
+    s.tasks[t].attached = true
   heOk
 
 proc hsNewObject*(s: var HandleSpace; kind: ObjKind; payload: int32; obj: var ObjId): HsError =

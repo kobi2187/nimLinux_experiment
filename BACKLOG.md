@@ -47,8 +47,8 @@ L5 CLIENTS
 |----|------|-------|--------|---------|-----------|
 | S1 | per-task handle tables, rights, duplicate (narrow only), move, close-all (`ipc/handles/handle_table.nim`) | L1 | **DONE (library, host-tested; kernel integration TODO)** | — | property tests; no forged handle succeeds; lookup benchmark |
 | S2 | channel endpoint pairs, handle transfer, badges, peer-closed (`ipc/handles/channel.nim`) | L1 | **DONE (library, host-tested; kernel integration TODO)** | S1 | badge = sending handle's badge; transfer moves; no leaks |
-| S2k | kernel integration of S1+S2: syscalls over handles, buffers table folded in | L1 | TODO | S1 S2 | hostile-handle fuzz (abifuzz extended); QEMU round trip |
-| S3 | `spawn(image, handles[])`, launcher policy file; remove ambient chanSend/topics/display race | L1 | TODO | S2k | a program given nothing can do nothing; a keylogger test gets nothing |
+| S2k | kernel integration of S1+S2: syscalls over handles (41-46), spawn-time bootstrap grant, task-death release | L1 | **PARTIAL: channels and handles live in the kernel and are tested from ring 3 (`chan-handles`, `abi-hostile`); the buffers table is NOT yet folded in** | S1 S2 | fold buffers (S2k-b): one table for every object kind |
+| S3 | `spawn(image, handles[])`, launcher policy file; remove ambient chanSend/topics/display race | L1 | PARTIAL: a spawner can give a child its bootstrap handle (shell `chantest`); no spawn syscall or policy file yet, ambient calls still present | S2k | a program given nothing can do nothing; a keylogger test gets nothing |
 | S4 | block-on-wake, wake from IRQ, sub-tick timer (V2c) | L1 | TODO | S2k | idle server uses no wakeups; latency probe |
 | S5 | buffers (arena, owned/sealed/move/lend, per-block rights) | L1 | **DONE** | — | `make test-devices` buffers-* |
 | S5b | ring syscalls + small-buffer lane (every buffer costs a 2 MB block today) | L1 | TODO (host ring DONE) | S2k | 1 kernel call per batch; command buffers stop costing 2 MB |
