@@ -345,6 +345,97 @@ proc testBatches() =
   chSetReadyHook(nil)
   echo "PASS: batches keep order and badges, validate before queuing, fit what fits, one wake per batch"
 
+# A mock owner of foreign flights (stands in for the buffers store).
+var fgPending: seq[int32]
+var fgDelivered: seq[(int32, TaskId)]
+var fgDropped: seq[int32]
+var fgRefuse = false
+
+proc installForeignMock() =
+  fgPending = @[]; fgDelivered = @[]; fgDropped = @[]; fgRefuse = false
+  chSetForeignHooks(
+    proc(kind: uint8; id: int32; t: TaskId): bool {.nimcall.} = (not fgRefuse) and id in fgPending,
+    proc(kind: uint8; id: int32; t: TaskId; handle: var uint32): bool {.nimcall.} =
+      if id notin fgPending: return false
+      fgPending.del fgPending.find(id)
+      fgDelivered.add (id, t)
+      handle = uint32(1000 + id)
+      true,
+    proc(kind: uint8; id: int32) {.nimcall.} =
+      fgPending.del fgPending.find(id)
+      fgDropped.add id)
+
+proc recvEx(t: TaskId; h: Handle): tuple[r: ChResult, s: string, got: seq[Handle], gotF: seq[ForeignGot]] =
+  var buf: array[ChMsgBytes, byte]
+  var n, nGot, nGotF: int
+  var badge: uint64
+  var got: array[ChMaxFlights, Handle]
+  var gotF: array[ChMaxFlights, ForeignGot]
+  result.r = chReadEx(hs, ch, t, h, buf, n, badge, got, nGot, gotF, nGotF)
+  if result.r == crOk:
+    result.s = str(buf, n)
+    for k in 0 ..< nGot: result.got.add got[k]
+    for k in 0 ..< nGotF: result.gotF.add gotF[k]
+
+proc testForeignFlights() =
+  fresh()
+  installForeignMock()
+  let (a, b) = pair(0)
+  # a message carries a generic handle AND a foreign flight; the reader gets both
+  let (x, y) = pair(0)
+  fgPending = @[7'i32]
+  assert chWriteCheck(hs, ch, 0, a, 3) == crOk
+  assert chWrite(hs, ch, 0, a, msg("mix"), [SendHandle(h: y, rights: rtChannelDefault)], [ForeignFlight(kind: 1, id: 7)]) == crOk
+  let r = recvEx(0, b)
+  assert r.r == crOk and r.s == "mix" and r.got.len == 1 and r.gotF == @[(1'u8, 1007'u32)], "both kinds delivered, foreign through the owner's hook"
+  assert fgDelivered == @[(7'i32, 0)] and fgDropped.len == 0
+  # plain chRead and batches leave a foreign message alone
+  fgPending = @[8'i32]
+  assert chWrite(hs, ch, 0, a, msg("f"), [], [ForeignFlight(kind: 1, id: 8)]) == crOk
+  assert chWrite(hs, ch, 0, a, msg("after")) == crOk
+  assert recv(0, b).r == crHasHandles, "a caller that cannot take foreign flights is refused, nothing consumed"
+  var big: array[256, byte]
+  var used, nMsgs: int
+  var badge: uint64
+  assert chReadBatch(hs, ch, 0, b, big, 16, used, nMsgs, badge) == crHasHandles
+  assert chQueued(hs, ch, 0, b) == 2
+  # an owner that cannot deliver leaves the message queued (nothing delivered, nothing lost)
+  fgRefuse = true
+  assert recvEx(0, b).r == crTableFull and chQueued(hs, ch, 0, b) == 2 and fgDelivered.len == 1
+  fgRefuse = false
+  assert recvEx(0, b).r == crOk and fgDelivered.len == 2
+  assert recv(0, b).s == "after"
+  # a message dropped unread cancels its foreign flights
+  fgPending = @[9'i32, 10'i32]
+  assert chWrite(hs, ch, 0, a, msg("drop"), [], [ForeignFlight(kind: 1, id: 9), ForeignFlight(kind: 1, id: 10)]) == crOk
+  assert chClose(hs, ch, 0, b) == crOk
+  assert fgDropped == @[9'i32, 10'i32] and fgPending.len == 0, "the receiver died: the owner is told to cancel both"
+  # a sender's death does NOT cancel a buffer it left unread: "send a result and exit" must work
+  fresh()
+  installForeignMock()
+  let (a2, b2) = pair(0)
+  let cb = grant(0, 1, b2)
+  fgPending = @[11'i32]
+  assert chWrite(hs, ch, 1, cb, msg("last"), [], [ForeignFlight(kind: 1, id: 11)]) == crOk
+  chCloseAll(hs, ch, 1)
+  assert fgDropped.len == 0, "a buffer holds no queue, so it cannot form a cycle: it stays in its message"
+  let lr = recvEx(0, a2)
+  assert lr.r == crOk and lr.s == "last" and lr.gotF == @[(1'u8, 1011'u32)], "and the receiver still gets it after the sender is gone"
+  # too many, and no hooks installed
+  fresh()
+  chSetForeignHooks(nil, nil, nil)
+  let (a3, b3) = pair(0)
+  assert chWrite(hs, ch, 0, a3, msg("x"), [], [ForeignFlight(kind: 1, id: 1)]) == crHasHandles, "no owner registered: refused"
+  installForeignMock()
+  var five: seq[ForeignFlight]
+  for k in 0 .. ChMaxFlights: five.add ForeignFlight(kind: 1, id: int32(k))
+  assert chWrite(hs, ch, 0, a3, msg("x"), [], five) == crTooManyHandles
+  assert chWriteCheck(hs, ch, 0, a3, ChMsgBytes + 1) == crTooBig
+  for k in 0 ..< ChQueueDepth: assert chWrite(hs, ch, 0, a3, msg("q")) == crOk
+  assert chWriteCheck(hs, ch, 0, a3, 1) == crFull
+  chSetForeignHooks(nil, nil, nil)
+  echo "PASS: foreign flights (buffers) ride in messages, deliver through their owner, cancel when discarded"
+
 proc testDeath() =
   fresh(5)
   var ends: seq[Handle]
@@ -429,6 +520,7 @@ when isMainModule:
   testCycleLeakIsBoundedBySender()
   testReadyHook()
   testBatches()
+  testForeignFlights()
   testDeath()
   testStress()
   echo "All channel tests passed."

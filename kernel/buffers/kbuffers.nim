@@ -153,6 +153,75 @@ proc abiBufClose*(h: uint32): int {.nimcall.} = finish(gStore.bufClose(me(), Buf
 proc abiBufSeal*(h: uint32): int {.nimcall.} = finish(gStore.bufSeal(me(), BufHandle(h)))
 proc abiBufReturn*(h: uint32): int {.nimcall.} = finish(gStore.bufReturn(me(), BufHandle(h)))
 
+# ── buffers inside channel messages (ipc/handles/channel foreign flights) ───────
+# A buffer handle sent through a channel becomes a transfer in flight inside the store; the message
+# carries only its id. Error codes of this layer are -(20 + ord(BufError)) so they never collide with
+# the channel's (-1 .. -15).
+
+const
+  BufKindMove* = 1'u32
+  BufKindLend* = 2'u32
+  BufKindShare* = 3'u32
+
+template bufErr(e: BufError): int = -(20 + ord(e))
+
+proc kindMode(kind: uint32; mode: var TransferMode): bool =
+  case kind
+  of BufKindMove: mode = tmMove
+  of BufKindLend: mode = tmLend
+  of BufKindShare: mode = tmShare
+  else: return false
+  true
+
+proc kbufFlightRoom*(): int = gStore.bufFlightRoom()
+
+proc kbufCanSend*(h: uint32; kind: uint32): int =
+  ## 0 if the caller could send buffer handle h this way right now, else the (negative) error.
+  var mode: TransferMode
+  if not kindMode(kind, mode): return bufErr(beBadHandle)
+  let e = gStore.bufCanSend(me(), BufHandle(h), mode)
+  if e == beOk: 0 else: bufErr(e)
+
+proc kbufSendFlight*(h: uint32; kind: uint32; id: var int32): int =
+  ## Take buffer handle h out of the caller's hands as a transfer in flight. The sender's access
+  ## ends now (a lent buffer is not usable by its lender while lent), so its page rights are
+  ## re-applied at once.
+  id = -1
+  var mode: TransferMode
+  if not kindMode(kind, mode): return bufErr(beBadHandle)
+  let t = me()
+  var f: InFlightId
+  let e = gStore.bufSend(t, BufHandle(h), mode, f)
+  if e != beOk: return bufErr(e)
+  id = int32(f)
+  applyRights(t)
+  0
+
+proc kbufCancelFlight*(id: int32) =
+  ## The message was discarded: a move is lost, a lend returns to the lender, a share is released.
+  discard gStore.bufCancel(InFlightId(id))
+  if procTable.current >= 0: applyRights(int(procTable.current))   # the lender may be running
+
+proc ensureAttached(t: int) =
+  if not gStore.isAttached(t): discard gStore.taskAttach(t, DefaultBudget)
+
+proc kbufForeignCanDeliver*(kind: uint8; id: int32; t: int): bool {.nimcall.} =
+  if kind != 1: return false
+  ensureAttached(t)
+  gStore.bufCanDeliver(InFlightId(id), t) == beOk
+
+proc kbufForeignDeliver*(kind: uint8; id: int32; t: int; handle: var uint32): bool {.nimcall.} =
+  if kind != 1: return false
+  ensureAttached(t)
+  var h: BufHandle
+  if gStore.bufDeliver(InFlightId(id), t, false, h) != beOk: return false
+  handle = uint32(h)
+  applyRights(t)                                    # the receiver's own tables now open the block
+  true
+
+proc kbufForeignDrop*(kind: uint8; id: int32) {.nimcall.} =
+  if kind == 1: kbufCancelFlight(id)
+
 proc abiBufMsgSend*(name: cstring; data: pointer; dataLen: int;
                     hs: ptr BufMsgHandles): int {.nimcall.} =
   ## Post a message to channel `name` carrying n handles. Each handle leaves

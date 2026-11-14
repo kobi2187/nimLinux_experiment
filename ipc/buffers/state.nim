@@ -259,6 +259,19 @@ proc applySend(s: var BufStore; t: TaskId; slot: int; mode: TransferMode) =
     inc s.bufs[b].refs
   of tmTransit: discard
 
+proc bufCanSend*(s: BufStore; t: TaskId; h: BufHandle; mode: TransferMode): BufError =
+  ## Would bufSend of h in this mode succeed (handle, right, state)? Changes nothing. A caller that
+  ## sends several buffers in one message checks all of them first, because a send that is later
+  ## cancelled is not undone for a move (the buffer is lost).
+  let slot = s.lookup(t, h)
+  if slot < 0: return beBadHandle
+  s.sendCheck(s.tasks[t].handles[slot], t, mode)
+
+proc bufFlightRoom*(s: BufStore): int =
+  ## How many more transfers can be in flight at once.
+  for f in s.flights:
+    if not f.used: inc result
+
 proc bufSend*(s: var BufStore; t: TaskId; h: BufHandle; mode: TransferMode;
               flight: var InFlightId): BufError =
   ## Put handle h into a message. Like Zircon, the handle leaves the sender
@@ -313,6 +326,18 @@ proc bufDeliver*(s: var BufStore; flight: InFlightId; t: TaskId; asTransit: bool
        s.budgetLeft(t) < s.cost(f.buf): return beNoBudget
     h = s.settle(f, t)
   s.flights[flight].used = false              # its reference is now h's
+  beOk
+
+proc bufCanDeliver*(s: BufStore; flight: InFlightId; t: TaskId): BufError =
+  ## Would bufDeliver (not as transit) to task t succeed right now? The same checks, changing
+  ## nothing: a receiver that reads a message with a buffer in it must find out BEFORE it takes
+  ## anything, so a refused delivery leaves the whole message queued.
+  if flight notin 0 ..< MaxInFlight or not s.flights[flight].used: return beBadHandle
+  if t notin 0 ..< MaxTasks or not s.tasks[t].attached: return beBadHandle
+  if not s.hasFreeHandle(t): return beTooManyHandles
+  let f = s.flights[flight]
+  if f.mode == tmMove and s.bufs[f.buf].state == bsOwned and
+     s.budgetLeft(t) < s.cost(f.buf): return beNoBudget
   beOk
 
 proc dropFlightRef(s: var BufStore; b: int; mode: TransferMode) =

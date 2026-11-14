@@ -35,6 +35,7 @@ import ../arch/x86_64/cpu_primitives
 import ../ipc/handles/handle_table
 import ../ipc/handles/channel
 import ../kernel/handles/khandles
+import ../kernel/buffers/kbuffers
 import ../kernel/space/kspace
 
 const
@@ -512,6 +513,59 @@ proc cmdChantest() =
         break
     if not ordered: fail("the child's burst did not arrive in order with badge 77")
     else: kprint("chan-kernel: burst of 12 in order ok\n")
+    # buffers in messages: LEND one to the child (we must not be able to use it meanwhile), get it
+    # back with the child's reply in it; then the child MOVES one to us
+    block:
+      type
+        SE {.packed.} = object
+          h, rights, kind: uint32
+        SL {.packed.} = object
+          n: uint32
+          ent: array[4, SE]
+      let bi = abiBufCreate(4096)
+      var base: uint64
+      var size: int
+      if bi <= 0 or not kbufReadable(uint32(bi), base, size): fail("create a buffer")
+      else:
+        let p = cast[ptr UncheckedArray[byte]](base)
+        for k, c in "LEND-ME": p[k] = byte(c)
+        var sl = SL(n: 1)
+        sl.ent[0] = SE(h: uint32(bi), rights: 0, kind: 2)
+        let lendMsg = "lend"
+        if abiChanWrite(uint32(hA), unsafeAddr lendMsg[0], 4, addr sl) != 0: fail("send the lend")
+        elif kbufReadable(uint32(bi), base, size): fail("a lent buffer was still usable by its lender")
+        else: kprint("chan-kernel: lent buffer not usable by the lender ok\n")
+        if pollRead(hA, m, len, badge, got, nGot) != crOk or asStr(m, len) != "returned":
+          fail("the child did not return the lend")
+        elif not kbufReadable(uint32(bi), base, size): fail("the lender did not get the buffer back")
+        else:
+          let q = cast[ptr UncheckedArray[byte]](base)
+          var same = true
+          for k, c in "REPLIED":
+            if q[k] != byte(c): same = false
+          if same: kprint("chan-kernel: lend returned with the child's reply ok\n")
+          else: fail("the reply is not in the returned buffer")
+      # the child's move: a message that carries a buffer handle, read with the buffer-aware read
+      var gotF: array[ChMaxFlights, ForeignGot]
+      var nGotF = 0
+      var rr = crEmpty
+      let waitUntil = pitTicks() + 600
+      while pitTicks() < waitUntil:
+        rr = chReadEx(gHs, gCh, me, hA, m, len, badge, got, nGot, gotF, nGotF)
+        if rr != crEmpty: break
+        sti(); hlt()
+      if rr != crOk or asStr(m, len) != "move" or nGotF != 1 or gotF[0].kind != 1:
+        fail("read the moved buffer: result " & $ord(rr) & ", message '" & asStr(m, len) & "', buffers " & $nGotF)
+      elif not kbufReadable(gotF[0].h, base, size): fail("the moved buffer is not ours to read")
+      else:
+        let q = cast[ptr UncheckedArray[byte]](base)
+        var same = true
+        for k, c in "MOVED-TO-YOU":
+          if q[k] != byte(c): same = false
+        if same: kprint("chan-kernel: buffer moved to us ok\n")
+        else: fail("the moved buffer holds the wrong bytes")
+        discard abiBufClose(gotF[0].h)
+      if bi > 0: discard abiBufClose(uint32(bi))
     if pollRead(hA, m, len, badge, got, nGot) != crOk: fail("read the child's report")
     else:
       let rep = asStr(m, len)

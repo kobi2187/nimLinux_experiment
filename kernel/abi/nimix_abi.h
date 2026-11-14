@@ -113,9 +113,15 @@ typedef struct {
     unsigned long long badge0, badge1;              /* what the OTHER side sees through h0 / h1 */
     NimixHandle h0, h1;                             /* out */
 } NimixChanPair;
-typedef struct { NimixHandle handle; unsigned rights; } NimixSendEnt;
+/* kind 0: a handle of your own table (it moves). kind 1/2/3: a BUFFER handle, sent by MOVE (the
+ * receiver owns it; you do not), LEND (the receiver borrows it, you get it back when it returns it or
+ * exits; you cannot use it meanwhile) or SHARE (a sealed buffer, read-only). At most 4 handles of any
+ * kind per message. Buffer errors are -20 - BufError (-23 no such handle, -24 no right, -25 not the
+ * owner, -29 transfer table full); the receiver reads a buffer's handle from info.got[i] with
+ * info.kind[i] == 1 and uses it with nimixBufMap / nimixBufReturn / nimixBufClose. */
+typedef struct { NimixHandle handle; unsigned rights; unsigned kind; } NimixSendEnt;
 typedef struct { unsigned n; NimixSendEnt ent[4]; } NimixSendList;
-typedef struct { int n; unsigned nGot; unsigned long long badge; NimixHandle got[4]; } NimixChanInfo;
+typedef struct { int n; unsigned nGot; unsigned long long badge; NimixHandle got[4]; unsigned kind[4]; } NimixChanInfo;
 
 int nimixChanPair(NimixChanPair* req);
 int nimixChanWrite(NimixHandle h, const void* data, int len, const NimixSendList* send);

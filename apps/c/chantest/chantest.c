@@ -202,6 +202,48 @@ int main(void) {
         printf("chantest: close wait took %lld ms\n", dt);
     }
 
+    /* 3c. buffers in messages: the shell LENDS us a buffer (we may fill it, the shell may not use it
+     *     meanwhile, it comes back when we return it), then we MOVE a buffer to the shell */
+    {
+        static char tmp[64];
+        chk(wait_readable(boot) == 1, "the lend message arrives");
+        r = nimixChanRead(boot, tmp, sizeof tmp, &info);
+        chk(r == 0 && info.n == 4 && !memcmp(tmp, "lend", 4), "read the lend message");
+        chk(info.nGot == 1 && info.kind[0] == 1, "it carries a BUFFER handle (kind 1)");
+        if (r == 0 && info.nGot == 1 && info.kind[0] == 1) {
+            char *lp = nimixBufMap(info.got[0]);
+            chk(lp != NULL, "the lent buffer can be mapped");
+            chk(lp && !memcmp(lp, "LEND-ME", 7), "it holds what the lender wrote");
+            if (lp) memcpy(lp, "REPLIED", 7);
+            chk(nimixBufReturn(info.got[0]) == 0, "return the lend");
+            chk(nimixBufMap(info.got[0]) == NULL, "after returning, the handle is dead");
+            chk(nimixChanWrite(boot, "returned", 8, NULL) == 0, "tell the shell it is back");
+        }
+        int mb = nimixBufCreate(4096);
+        char *mp = mb > 0 ? nimixBufMap((unsigned)mb) : NULL;
+        chk(mp != NULL, "make a buffer to give away");
+        if (mp) memcpy(mp, "MOVED-TO-YOU", 12);
+        NimixSendList mv = { 1, { { (unsigned)mb, 0, 1 /* move */ } } };
+        chk(nimixChanWrite(boot, "move", 4, &mv) == 0, "send it by move");
+        chk(nimixBufMap((unsigned)mb) == NULL, "after a move the buffer is no longer ours");
+        chk(nimixBufClose((unsigned)mb) < 0, "and neither is its handle");
+        /* misuse: a buffer handle we do not hold, an unknown kind, the same buffer twice, a share of an owned buffer */
+        NimixSendList nobuf = { 1, { { 0x7777u, 0, 1 } } };
+        chk(nimixChanWrite(boot, "x", 1, &nobuf) < 0, "a buffer handle we do not hold");
+        NimixSendList badkind = { 1, { { boot, 0, 9 } } };
+        chk(nimixChanWrite(boot, "x", 1, &badkind) < 0, "an unknown handle kind");
+        int ob = nimixBufCreate(4096);
+        NimixSendList twice = { 2, { { (unsigned)ob, 0, 1 }, { (unsigned)ob, 0, 1 } } };
+        chk(nimixChanWrite(boot, "x", 1, &twice) < 0, "the same buffer twice");
+        chk(nimixBufMap((unsigned)ob) != NULL, "a refused send leaves the buffer ours");
+        NimixSendList shareOwned = { 1, { { (unsigned)ob, 0, 3 /* share */ } } };
+        chk(nimixChanWrite(boot, "x", 1, &shareOwned) < 0, "an owned (not sealed) buffer cannot be shared");
+        chk(nimixBufMap((unsigned)ob) != NULL, "and is still ours");
+        NimixSendList five = { 5, { { (unsigned)ob, 0, 1 } } };
+        chk(nimixChanWrite(boot, "x", 1, &five) == -9, "more than 4 handles");
+        chk(nimixBufClose((unsigned)ob) == 0, "close it");
+    }
+
     /* 4. report */
     char rep[40];
     int len = snprintf(rep, sizeof rep, "hostile:%d/%d", fails, checks);

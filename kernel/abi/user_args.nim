@@ -76,8 +76,8 @@ const ArgSpecs* = [
   st(38, 0, 36),                               # displayPresent(req): 9 x u32
   b(39, 0, 1, elem = 8, wr = true),
   st(41, 0, 40, wr = true),                    # chanPair(req): rights and badges in, two handles out
-  b(42, 1, 2), st(42, 3, 36, optional = true), # chanWrite(h, data, len, sendList): data read; list read
-  b(43, 1, 2, wr = true), st(43, 3, 32, optional = true, wr = true),  # chanRead(h, buf, cap, info)
+  b(42, 1, 2), st(42, 3, 52, optional = true), # chanWrite(h, data, len, sendList): data read; list read
+  b(43, 1, 2, wr = true), st(43, 3, 48, optional = true, wr = true),  # chanRead(h, buf, cap, info)
   b(47, 0, 1, elem = 8, wr = true),            # wait(items, n, ticks): n x (handle, ready)
   b(48, 1, 2),                                 # chanWriteBatch(h, buf, len, count): records read
   b(49, 1, 2, wr = true), st(49, 3, 16, optional = true, wr = true)]  # chanReadBatch(h, buf, cap, info)                       # displayModes(out, max): max x (w, h)

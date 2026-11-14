@@ -767,7 +767,9 @@ def test_channels(tmp, iso, bios) -> list:
             bad = [l for l in out.splitlines() if "FAIL" in l]
             assert not bad, "failures:\n" + "\n".join(bad)[:800]
             for want in ("chan-kernel: ping badge=77 ok", "chan-kernel: handle received and used ok",
-                         "chan-kernel: burst of 12 in order ok", "chan-kernel: peer closed after exit ok",
+                         "chan-kernel: burst of 12 in order ok", "chan-kernel: lent buffer not usable by the lender ok",
+                         "chan-kernel: lend returned with the child's reply ok", "chan-kernel: buffer moved to us ok",
+                         "chan-kernel: peer closed after exit ok",
                          "chan-kernel: ok", "chantest: ok"):
                 assert want in out, f"missing '{want}': {out[-500:]}"
             m = re.search(r"chantest: (\d+) checks, (\d+) failed", out)

@@ -26,6 +26,44 @@ proc deliver(f: InFlightId; t: TaskId; transit = false): BufHandle =
 
 template ok() = check s.checkInvariants() == ""
 
+suite "buffers state: can a delivery succeed?":
+  test "bufCanDeliver says exactly what bufDeliver will do, and changes nothing":
+    fresh(3, 64 * KB)
+    let h = newBuf(0, 8 * KB)
+    let f = send(0, h, tmMove)
+    check s.bufCanDeliver(f, 1) == beOk
+    check s.bufCanDeliver(f, 1) == beOk                  # asking again changes nothing
+    check s.bufCanDeliver(-1, 1) == beBadHandle
+    check s.bufCanDeliver(f, 9) == beBadHandle           # not a task
+    var got: BufHandle
+    check s.bufDeliver(f, 1, false, got) == beOk
+    check s.bufCanDeliver(f, 1) == beBadHandle           # delivered: the flight is gone
+    ok()
+
+  test "a receiver without budget is refused by both, and the flight stays pending":
+    fresh(3, 64 * KB)
+    check s.taskAttach(5, 4 * KB) == beOk                # too small for the 8 KB buffer
+    let h = newBuf(0, 8 * KB)
+    let f = send(0, h, tmMove)
+    check s.bufCanDeliver(f, 5) == beNoBudget
+    var got: BufHandle
+    check s.bufDeliver(f, 5, false, got) == beNoBudget
+    check s.bufCanDeliver(f, 1) == beOk                  # another receiver can still have it
+    check s.bufDeliver(f, 1, false, got) == beOk
+    ok()
+
+  test "a receiver with a full handle table is refused by both":
+    fresh(3, 1024 * KB)
+    var filler: seq[BufHandle]
+    for i in 0 ..< MaxHandles: filler.add newBuf(1, 1 * KB)
+    let h = newBuf(0, 1 * KB)
+    let f = send(0, h, tmLend)
+    check s.bufCanDeliver(f, 1) == beTooManyHandles
+    var got: BufHandle
+    check s.bufDeliver(f, 1, false, got) == beTooManyHandles
+    check s.bufCancel(f) == beOk                         # the lend returns to the lender
+    ok()
+
 suite "buffers state: scenarios":
   test "create: owner has read-write; budget charged; others have nothing":
     fresh()

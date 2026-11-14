@@ -2218,3 +2218,35 @@ generation), and (3) hardware domains for anything outside the subset (raylib, p
 honest answer is both: a SASOS model that mixes language domains for checked Nim tasks with hardware
 domains for foreign code, and microkernel/monolithic using hardware domains. Recorded as S8c (PROPOSED).
 The structure already allows it: a task's "domain" is an abstraction over how its memory is protected.
+
+---
+
+## 2026-11-14 — S2k-b1: buffers ride in channel messages (and why not the full fold yet)
+
+**Need:** the new channels could not carry a buffer, so no bulk transfer (a file read into a lent
+buffer, a surface, a font) could use them. The old named channels could (`bufMsgSend`).
+
+**Decision:** a channel message may carry *foreign flights*: typed ids of transfers that another
+store owns. The buffers store keeps the real state (its in-flight table, budgets, lend/return); the
+channel carries the id and calls three hooks of the owner: can-deliver (a dry run), deliver, drop.
+Library: `ipc/handles/channel.nim`. Kernel: `kbufSendFlight/CancelFlight` and the three hooks in
+`kernel/buffers/kbuffers.nim`, installed by `khandles`. ABI: a send-list entry has a kind (0 = a
+handle of the caller's table, 1/2/3 = a buffer handle sent by move/lend/share); a read reports a kind
+per handle. Buffer errors are -(20 + BufError) so they never collide with the channel's.
+
+**Atomicity (found while designing it):** a buffer sent by move and then "cancelled" is gone, so a
+write that carries buffers may not fail after the first buffer left its sender. The syscall checks the
+channel, every generic handle, every buffer (`bufCanSend`), the transfer-table room and duplicates
+first, and only then performs the sends; a read that cannot deliver (no handle room, no budget) leaves
+the whole message queued (`bufCanDeliver`).
+
+**A rule I had to relax:** the "unread message belongs to its sender" rule (cycle protection) dropped a
+moved buffer when the sender exited before the receiver read, which the ring-3 test caught ("send a
+result and exit" lost the buffer). Buffers hold no queue, so they cannot form a cycle: foreign flights
+now survive their sender; the rule still applies to handles of the table.
+
+**Not done on purpose (S2k-b2):** folding the buffers table into the one handle table. It rewrites the
+frozen buffers store and ends the separate ring queue (`ring.nim`), which depend on the in-flight API;
+that is the human's pending decision. Until then two handle namespaces exist (buffer handles and
+table handles), each unforgeable and per task. The foreign-flight mechanism stays useful after the
+fold for any object whose lifecycle lives elsewhere.
