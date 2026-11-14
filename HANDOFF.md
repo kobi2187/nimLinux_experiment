@@ -4,6 +4,13 @@ Last updated: 2026-10-27 (session 9e, branch `ccr-56330414-wo65nx`, cloud contai
 
 
 
+## Session 9o — capabilities proposal
+
+Human: use Zircon/seL4 model, no dynamic revocation, static separation. Wrote
+`docs/proposals/capabilities.md` (handle tables, rights, badges, spawn-time grants, scopes, slices C1-C6).
+**Awaiting the human on its §6** (policy source, file scoping, memory isolation depth, the shell as the
+last ambient authority). Next after approval: C1 (pure handle table + benchmark), then dispatcher Stage 2.
+
 ## Session 9n — core design draft
 
 Human gave the structural principles (client-server layers; libraries; placement by measured

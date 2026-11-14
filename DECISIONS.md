@@ -2027,3 +2027,31 @@ were already decided. Result: most agree. Corrections to my own recent work:
 
 Open, awaiting the human: whether the "hardware-related server" is the device module fronted by each
 domain server; whether V6's first clients are ELF test clients until the WASM host exists.
+
+---
+
+## 2026-11-14 — Capabilities: the Zircon/seL4 model, static separation, no revocation tree
+
+**Human:** use the proper capabilities model from Zircon and seL4 with performance hints from
+Singularity-type systems; avoid hurting performance; capabilities are an isolation and separation
+mechanism deciding what apps may access (so they cannot take data from other apps, and keylogging,
+viruses and the like are restricted); there is nobody to revoke dynamically; the details are mine.
+
+**What was found first:** the existing token table (`kernel/cap/capability.nim`) is a 64-entry kernel
+table of *bearer* tokens: `capCheck` never compares the caller with the owner, serials are a counter
+(guessable), one right per token, and plain `chanSend`, event topics and first-present display skip it.
+
+**Decision (proposed in `docs/proposals/capabilities.md`):** per-task handle tables (index plus
+generation, rights bitmask, badge, refcounted object) as the only authority; conservation (authority is
+passed and narrowed, never created); everything a program has is what it was spawned with, decided by a
+static manifest policy at the launcher; the dispatcher endpoint is given at spawn, badged with the
+app's identity; seL4-style badges identify callers without a pid; file access by directory scope
+(Zircon namespaces); close/death/kill as the only revocation (a server cuts a client by closing its end:
+peer-closed). **Rejected:** seL4's derivation tree and `Revoke`, Zircon jobs and policies, untyped
+memory, a separate capability process (the check is inherent and must be in the kernel: one array
+index and a rights test).
+
+**Slices C1-C6** in the proposal, starting with the pure handle table and a before/after benchmark.
+The human's policy questions (where policy lives, file scoping, how far memory isolation must go, the
+shell as the one ambient authority) are in §6 of the proposal.
+
