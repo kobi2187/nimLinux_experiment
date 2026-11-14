@@ -2156,3 +2156,24 @@ valgrind and ASan/UBSan configurations: clean.
   `nimixChanStatus`, and interrupts are wait objects the server holds. ELF programs and servers use it
   like any client. Recorded as E1 in the roadmap and in `core_design.md` M4. Nothing here builds on the
   old string-named event topics.
+
+---
+
+## 2026-11-14 — S8 explained; a correction about region isolation
+
+**Found while explaining S8:** `mm/user_window.nim` sets the User bit on an app's 4 MB region at spawn
+and clears it at exit; only arena blocks are re-applied per context switch (`onTaskSwitch` is used by
+the buffers store alone). So **regions are not isolated from each other today**: while two apps run,
+each can address the other's region with a raw pointer. The file's own header says the shared space is an
+interim step. My statement in `capabilities.md` that regions were enforced per task was wrong and is
+corrected there. Not yet demonstrated by a test: a "snoop" program that reads another app's region (it
+should fault and be killed; today it presumably succeeds) is the first thing to write.
+
+**S8 options** (recorded for the human; VISION Q6 already resolved "per-app CR3 is the next kernel
+milestone", so what is open is timing and the interim step):
+- **B, switch the region's User bit per context switch** (like arena blocks): two page-directory writes
+  per switch; closes the region hole now; keeps 2 MB granularity. Small and reversible.
+- **A, per-task address spaces** (own page tables, 4 KB pages, shared kernel half): the real boundary;
+  enables small buffers, guard pages, exact pointer checks; large kernel work; not for the SASOS model.
+- **C, type-system isolation only** (SASOS): infeasible for C programs (raylib, picolibc).
+**Recommendation:** B now, A as the milestone it was already planned to be.

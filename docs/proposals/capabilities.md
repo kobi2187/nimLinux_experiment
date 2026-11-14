@@ -95,7 +95,7 @@ never as a name the server resolves with its own privileges.
 | threat | how it is stopped |
 |--------|-------------------|
 | **keylogging** | input is a device port with one client (the input path); no other task can obtain a handle to it, and there is no topic to subscribe to. An app receives only the events the focused-window server forwards on its own endpoint. |
-| **reading another app's data** | there is no shared mutable memory (buffers: owned, moved, lent, sealed); another app's buffers are not in your table; other tasks' regions are not mapped for you (per-task address spaces strengthen this; see §6). |
+| **reading another app's data** | there is no shared mutable memory (buffers: owned, moved, lent, sealed); another app's buffers are not in your table. **Not yet true for an app's own region memory:** all running apps' regions are user-accessible at once (see S8 / §6.3), so a program that dereferences a raw address inside another app's region can read it today. Closing that is the memory-isolation work, not this mechanism. |
 | **a virus spawning or spreading** | spawning is a right (a handle), not ambient; a program that was not given it cannot start another. Even if it can, the child gets only a subset of the parent's handles. |
 | **reading or writing files it should not** | the app holds a directory scope, not the filesystem; paths cannot escape the scope. |
 | **network** | only with a network handle; an app without one has no way to name the network server. |
@@ -130,9 +130,13 @@ isolation underneath (this mechanism assumes it).
    narrow it. Is that the right place, and in what form (a file per app, a system file)?
 2. **File scoping**: each app sees a directory scope (a private home plus shared read-only areas), not
    the whole disk. This changes how `ls`, `cat` and the shell behave for apps.
-3. **Memory isolation underneath**: "cannot take data from other apps" also needs per-task address
-   spaces (or the type system in SASOS). Regions and buffers are enforced per task today; the rest of
-   the address space is shared. How far must this go before the capability story is believable?
+3. **Memory isolation underneath (S8)**: "cannot take data from other apps" needs hardware isolation of
+   each app's memory. **Correction (2026-11-14):** I wrote here that regions and buffers are enforced per
+   task today. Buffers are (arena page rights are rewritten at every context switch); **regions are not**:
+   an app's region gets the User bit at spawn and loses it at exit, and nothing switches it, so while two
+   apps run each can address the other's region. The handle tables stop a program from *naming* another
+   app's objects; they do not stop it *addressing* its memory. Options and a recommendation are in
+   DECISIONS (2026-11-14, S8).
 4. **What the shell is**: the shell is a kernel task holding every right today. Until it is a
    userspace program (R6), it is the one ambient authority; keep that, accepted and listed?
 
