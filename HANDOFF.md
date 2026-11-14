@@ -4,6 +4,13 @@ Last updated: 2026-10-27 (session 9e, branch `ccr-56330414-wo65nx`, cloud contai
 
 
 
+## Session 9n — core design draft
+
+Human gave the structural principles (client-server layers; libraries; placement by measured
+performance; soft library path). Drafted `docs/proposals/core_design.md`. **Awaiting the human on §6**
+(Stage B address spaces, device-port rules, first-handles/service directory, order skeleton before
+render server, SMP in/out). The V6 proposal's D1-D4, D7, D10 fold into it.
+
 ## Session 9m — V6 proposal (awaiting the human)
 
 PR #7 merged. Wrote `docs/proposals/render_server_v6.md`: 12 decisions, consequences, 7 slices.

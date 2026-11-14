@@ -1978,3 +1978,25 @@ cheap by comparison; TCG times are an emulator's, so frame-rate budgets can only
 arena block (64 blocks in total), a channel message carries 256 bytes, the `input` topic and display
 ownership are ambient authority, the dispatcher has no session code, and nothing can block (servers poll
 on the 10 ms tick).
+
+---
+
+## 2026-11-14 — Core design principles stated by the human; first draft of `core_design.md`
+
+**Principles (human, in dialogue):** the design dictates what is possible, fast, where things happen
+and who has authority; crucial decisions are mechanisms, the rest is fill-in that must not change the
+structure. Client-server by layers; servers isolated, each the single client of the hardware-facing
+part it fronts, with no driver code; clients link a library that defines the protocol, a softer path
+than a boundary (it hardens: ids, sequence); mechanisms are composable library code; drivers run in
+userspace if it performs the same, otherwise as kernel modules, conceptually separated, with no
+physical separation mechanism required; all code is useful in every model.
+
+**Corrections I made on the way, recorded:** I first placed drivers in userspace processes as the
+design, then overcorrected to "drivers stay in the kernel". The human's rule is a performance one:
+placement is a measured choice per module, structure is fixed. I also over-claimed that the library
+is the only path to a server and that driver fault containment is an invariant; neither holds.
+
+**Draft:** `docs/proposals/core_design.md`: seven mechanisms (authority by handles, modules and
+placement via device ports with two transports, ownership-based data movement, wait/wake, resource
+charging, failure cleanup, one protocol description per service), a placement matrix, eight forbidden
+things (each to become a failing test), and five questions for the human. Nothing frozen.
