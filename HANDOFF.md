@@ -4,6 +4,13 @@ Last updated: 2026-10-27 (session 9e, branch `ccr-56330414-wo65nx`, cloud contai
 
 
 
+## Session 9r — S4a: blocking wait
+
+`nimixWait` over channel ends (wake hook in `channel.nim`, `procWake`, per-task wait sets in
+`khandles`). Remaining for S4: wake from IRQ/device ports (needs device ports, K3), sub-tick timer
+(V2c), immediate reschedule on wake. **Next in order:** S5b (ring syscalls + small-buffer lane) or S2k-b
+(fold buffers); K1/K2/K3 depend on the L1 pieces now in place.
+
 ## Session 9q — S2k-a: handles and channels in the kernel
 
 Syscalls 41-46 over `ipc/handles`; bootstrap grant at spawn (`khGrant`, interrupts off between task

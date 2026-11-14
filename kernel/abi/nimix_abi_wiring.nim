@@ -61,3 +61,4 @@ proc wireSharedAbi*(av: var NimixAbiVTable) =
   av.handleClose    = abiHandleClose
   av.handleDup      = abiHandleDup
   av.chanStatus     = abiChanStatus
+  av.wait           = abiWait

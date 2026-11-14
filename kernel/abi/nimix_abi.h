@@ -123,3 +123,10 @@ int nimixChanRead(NimixHandle h, void* buf, int cap, NimixChanInfo* info);
 int nimixHandleClose(NimixHandle h);
 int nimixHandleDup(NimixHandle h, unsigned rights);    /* the new handle, or < 0 */
 int nimixChanStatus(NimixHandle h);                    /* bit 0 readable, bit 1 peer closed */
+
+/* Block until one of up to 8 channel ends is readable or its peer has closed, or `ticks` (PIT
+ * ticks, 10 ms; 0xFFFFFFFF = forever) pass. `ready` is set per item (bit 0 readable, bit 1 peer
+ * closed). Returns how many items are ready, 0 on timeout, or < 0. A waiting task uses no CPU: a
+ * channel write or close wakes it, and it runs at the next scheduling tick. */
+typedef struct { NimixHandle handle; unsigned ready; } NimixWaitItem;
+int nimixWait(NimixWaitItem* items, int n, unsigned ticks);

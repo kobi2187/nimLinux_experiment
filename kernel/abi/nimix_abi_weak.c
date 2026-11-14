@@ -69,3 +69,4 @@ __attribute__((weak)) int  nimixChanRead(unsigned h, void* buf, int cap, void* i
 __attribute__((weak)) int  nimixHandleClose(unsigned h) { STUB_PAD; (void)h; return -1; }
 __attribute__((weak)) int  nimixHandleDup(unsigned h, unsigned rights) { STUB_PAD; (void)h; (void)rights; return -1; }
 __attribute__((weak)) int  nimixChanStatus(unsigned h) { STUB_PAD; (void)h; return -1; }
+__attribute__((weak)) int  nimixWait(void* items, int n, unsigned ticks) { STUB_PAD; (void)items; (void)n; (void)ticks; return -1; }

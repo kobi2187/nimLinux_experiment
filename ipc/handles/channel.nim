@@ -57,10 +57,18 @@ type
   ChannelStore* = object
     ends: array[ChMaxChans * 2, End]
 
+type ReadyHook* = proc(endIdx: int) {.nimcall.}
+
 var
+  gReadyHook: ReadyHook                    ## told when an end becomes readable or its peer closes
   gPending: array[ChMaxChans * 2, int32]   ## ends whose objects were destroyed, still to process
   gNPending: int
   gOther: DestroyCb                        ## told about destroyed objects that are not channel ends
+
+proc chSetReadyHook*(cb: ReadyHook) =
+  ## Called with an end index when a message is queued for it or its peer closes: a task blocked
+  ## waiting on that end can be woken (the kernel's wait, S4).
+  gReadyHook = cb
 
 proc chSetDestroyHook*(cb: DestroyCb) =
   ## Called for every destroyed object that is not a channel end (e.g. a buffer to be freed).
@@ -108,6 +116,7 @@ proc settle(s: var HandleSpace; c: var ChannelStore) =
       c.ends[i].head = (c.ends[i].head + 1) mod ChQueueDepth
       dec c.ends[i].count
     let p = int(c.ends[i].peer)
+    if not c.ends[p].closed and gReadyHook != nil: gReadyHook(p)     # the peer now reads "closed"
     if c.ends[p].closed:               # both ends gone: the pair is free again
       c.ends[i] = End()
       c.ends[p] = End()
@@ -194,6 +203,7 @@ proc chWrite*(s: var HandleSpace; c: var ChannelStore; t: TaskId; h: Handle;
     doAssert te == heOk, "validated above"
     m.flights[k] = f
   inc c.ends[p].count
+  if gReadyHook != nil: gReadyHook(p)
   crOk
 
 proc chRead*(s: var HandleSpace; c: var ChannelStore; t: TaskId; h: Handle;

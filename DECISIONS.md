@@ -2103,3 +2103,21 @@ channels).
   path, so it gets its own step and its own tests.
 - **Scaffolds untouched:** the old named `chanSend/chanRecv/capSend/chanCreate` and event topics still
   exist; S3 removes them once spawn grants make them unnecessary.
+
+---
+
+## 2026-11-14 — S4a: a wait that blocks on a set of handles
+
+- `nimixWait(items, n, ticks)` waits on up to 8 channel ends (each needs the wait right) for readable or
+  peer-closed, with a timeout in PIT ticks. Chosen shape: one call over a SET of handles, because a
+  server must wait on all its sessions at once; a per-handle wait would force polling.
+- Wake source: `channel.nim` gained a ready hook (a message queued for an end, or its peer closing);
+  the kernel hook wakes tasks whose wait set contains that end. No lost wakeup: syscalls run with
+  interrupts off, so a writer cannot slip between the check and the block on one CPU.
+- A blocked task is not scheduled. Measured on NimixOS (TCG): timeout accurate to the tick, a
+  write-wake after 799 ms of an 8 s wait, a close-wake after 400 ms.
+- **Stated limit:** a woken task runs at the next scheduling point, which is still the 10 ms PIT
+  tick. The latency budget (33 ms key-to-pixel) needs the sub-tick timer (V2c) or a software-triggered
+  switch; neither is done. Not hidden.
+- Not yet: waking from interrupts (input, devices) needs the device-port layer (K3); the old event
+  topics (scaffold) are unchanged.

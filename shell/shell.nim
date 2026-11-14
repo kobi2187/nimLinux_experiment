@@ -434,6 +434,9 @@ proc cmdChantest() =
   if chCreate(gHs, gCh, me, rtChannelDefault, rtChannelDefault, 0, 0, dA, dB) != crOk:
     fail("create decoys"); return
   gSpawnGrant = hB
+  var eA, eB: Handle
+  if chCreate(gHs, gCh, me, rtChannelDefault, rtChannelDefault, 0, 0, eA, eB) != crOk:
+    fail("create closer channel"); return
   let n = loadFile("chantest.elf")
   if n < 0: fail("chantest.elf not on disk"); gSpawnGrant = NoHandle; return
   launchLoaded("chantest.elf", n, nil)
@@ -456,6 +459,11 @@ proc cmdChantest() =
   var len, nGot: int
   var badge: uint64
   var got: array[ChMaxFlights, Handle]
+  proc sleepTicks(n: uint64) =
+    let until = pitTicks() + n
+    while pitTicks() < until:
+      sti(); hlt()
+  sleepTicks(100)                       # the child is blocked in its wait for about a second
   if chWrite(gHs, gCh, me, hA, bytesOf("hello")) != crOk: fail("write hello")
   if pollRead(hA, m, len, badge, got, nGot) != crOk or asStr(m, len) != "ping": fail("read ping")
   elif badge != 77: fail("badge of the child's handle is not 77")
@@ -472,6 +480,11 @@ proc cmdChantest() =
     if chPeerClosed(gHs, gCh, me, dA) or chPeerClosed(gHs, gCh, me, dB): fail("the child closed our decoys")
     if chWrite(gHs, gCh, me, yh, bytesOf("via y")) != crOk: fail("write through y")
     else: kprint("chan-kernel: handle received and used ok\n")
+    # give the child one end of a channel and close the other after a moment: its wait must end
+    if chWrite(gHs, gCh, me, hA, bytesOf("closer"), [SendHandle(h: eB, rights: rtChannelDefault)]) != crOk:
+      fail("send the closer end")
+    sleepTicks(40)
+    discard chClose(gHs, gCh, me, eA)
     if pollRead(hA, m, len, badge, got, nGot) != crOk: fail("read the child's report")
     else:
       let rep = asStr(m, len)

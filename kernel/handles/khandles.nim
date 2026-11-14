@@ -11,14 +11,31 @@ import ../../ipc/handles/handle_table
 import ../../ipc/handles/channel
 import ../process_table
 import ../../core/log
+import ../../drivers/pit
+import ../../arch/x86_64/cpu_primitives
+
+const WaitMax* = 8                  ## handles one wait can cover
 
 var
   gHs*: HandleSpace
   gCh*: ChannelStore
+  gWaitN: array[HsMaxTasks, int]                    ## handles each blocked task is waiting on
+  gWaitEnds: array[HsMaxTasks, array[WaitMax, int32]]
+
+proc onEndReady(endIdx: int) {.nimcall.} =
+  ## A message was queued for an end, or its peer closed: wake the tasks waiting on it.
+  let fl = disableInterrupts()
+  for t in 0 ..< HsMaxTasks:
+    for k in 0 ..< gWaitN[t]:
+      if gWaitEnds[t][k] == int32(endIdx):
+        procWake(t)
+        break
+  restoreInterrupts(fl)
 
 proc khInit*() =
   hsInit(gHs)
   chInit(gCh)
+  chSetReadyHook(onEndReady)
 
 proc khMe*(): int =
   ## The calling task's slot (its table), attached on first use; -1 when no task is current.
@@ -31,6 +48,7 @@ proc khReleasePid*(pid: uint32) =
   ## Task exit, kill or fault: close every handle the task holds and release what that frees.
   for slot in 0 ..< process_table.MaxTasks:
     if procTable.tasks[slot].used and procTable.tasks[slot].pid == pid:
+      gWaitN[slot] = 0
       chCloseAll(gHs, gCh, slot)
 
 proc khGrant*(fromTask: int; h: Handle; childSlot: int; rights: Rights): bool =
@@ -145,3 +163,45 @@ proc abiChanStatus*(h: uint32): int {.nimcall.} =
   var b: uint64
   if hsLookup(gHs, t, Handle(h), okChannelEnd, rtNone, o, b) != heOk: return code(crBadHandle)
   (if chReadable(gHs, gCh, t, Handle(h)): 1 else: 0) or (if chPeerClosed(gHs, gCh, t, Handle(h)): 2 else: 0)
+
+# ── wait (mechanism S4) ───────────────────────────────────────────────────────
+
+type WaitItem {.packed.} = object
+  h, ready: uint32
+
+proc abiWait*(items: pointer; n: int; ticks: uint32): int {.nimcall.} =
+  ## Block until one of up to WaitMax channel ends is readable or its peer has closed, or the
+  ## timeout (PIT ticks; 0xFFFFFFFF = forever) passes. Each item's `ready` gets bit 0 (readable) and
+  ## bit 1 (peer closed). Returns how many items are ready (0 = timed out) or a negative error.
+  ## A blocked task is not scheduled and costs nothing; a channel write or close wakes it. It then
+  ## runs at the next scheduling point (a tick, today): sub-tick wake latency needs a finer timer.
+  let t = khMe()
+  if t < 0: return code(crBadTask)
+  if n < 1 or n > WaitMax: return code(crBadHandle)
+  let it = cast[ptr UncheckedArray[WaitItem]](items)
+  let forever = ticks == 0xFFFFFFFF'u32
+  let deadline = pitTicks() + uint64(ticks)
+  var ends: array[WaitMax, int32]
+  for i in 0 ..< n:
+    var o: ObjId
+    var b: uint64
+    let h = it[i].h                          # the caller's memory: read it once
+    if hsLookup(gHs, t, Handle(h), okChannelEnd, rtWait, o, b) != heOk: return code(crBadHandle)
+    ends[i] = hsObjPayload(gHs, o)
+  while true:
+    var ready = 0
+    for i in 0 ..< n:
+      let h = Handle(it[i].h)
+      var bits = 0'u32
+      if chReadable(gHs, gCh, t, h): bits = bits or 1
+      if chPeerClosed(gHs, gCh, t, h): bits = bits or 2
+      it[i].ready = bits
+      if bits != 0: inc ready
+    if ready > 0: return ready
+    if not forever and pitTicks() >= deadline: return 0
+    gWaitN[t] = n
+    for i in 0 ..< n: gWaitEnds[t][i] = ends[i]
+    procSleepUntil(t, if forever: 0'u64 else: deadline)   # wakeAt = 0: blocked until woken
+    while procTable.tasks[t].state == ptsBlocked:
+      sti(); hlt(); cli()                    # syscalls run with IF=0: let the tick switch us away
+    gWaitN[t] = 0

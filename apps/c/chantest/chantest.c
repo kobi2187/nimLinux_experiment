@@ -12,12 +12,19 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <time.h>
 #include "nimix_abi.h"
 
 static int fails, checks;
 static void chk(int ok, const char *what) {
     checks++;
     if (!ok) { fails++; printf("chantest: FAIL %s\n", what); }
+}
+
+static long long now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
 static int wait_readable(NimixHandle h) {                /* 1 readable, 0 timeout, -1 peer closed */
@@ -41,6 +48,37 @@ int main(void) {
     NimixChanInfo info;
     printf("chantest: start\n");
     const NimixHandle boot = NIMIX_BOOTSTRAP_HANDLE;
+
+    /* 0. blocking wait: nothing has been written yet, so a short wait must time out, and a long one
+     *    must be ended by the shell's write (about a second later), not by its own timeout */
+    NimixWaitItem w = { boot, 0xdead };
+    long long t0 = now_ms();
+    int nw = nimixWait(&w, 1, 20);
+    long long dt = now_ms() - t0;
+    chk(nw == 0 && w.ready == 0, "a wait with nothing to read times out and reports 0");
+    chk(dt >= 150 && dt <= 600, "and takes about the timeout (20 ticks = 200 ms)");
+    printf("chantest: timeout wait took %lld ms\n", dt);
+    t0 = now_ms();
+    nw = nimixWait(&w, 1, 800);                          /* 8 s: only a write ends it early */
+    dt = now_ms() - t0;
+    chk(nw == 1 && (w.ready & 1) && !(w.ready & 2), "a write wakes the waiter with the end readable");
+    chk(dt < 5000, "woken by the write, not by the timeout");
+    printf("chantest: blocking wait took %lld ms\n", dt);
+    /* misuse of wait */
+    NimixWaitItem bad[9];
+    for (int i = 0; i < 9; i++) { bad[i].handle = boot; bad[i].ready = 0; }
+    chk(nimixWait(bad, 0, 5) < 0, "wait on no handles");
+    chk(nimixWait(bad, 9, 5) < 0, "wait on too many handles");
+    chk(nimixWait(NULL, 1, 5) < 0, "wait through a NULL list");
+    chk(nimixWait((NimixWaitItem *)0x1000, 1, 5) < 0, "wait through a kernel pointer");
+    NimixWaitItem forged = { 0x7777u, 0 };
+    chk(nimixWait(&forged, 1, 5) < 0, "wait on a handle we do not hold");
+    NimixWaitItem mixed[2] = { { boot, 0 }, { 0x7777u, 0 } };
+    chk(nimixWait(mixed, 2, 5) < 0, "one bad handle refuses the whole wait");
+    int rd = nimixHandleDup(boot, NIMIX_RIGHT_READ);     /* no wait right */
+    NimixWaitItem nowait = { (unsigned)rd, 0 };
+    chk(rd > 0 && nimixWait(&nowait, 1, 5) < 0, "waiting needs the wait right");
+    nimixHandleClose((unsigned)rd);
 
     /* 1. hello / ping */
     int r = recv_msg(boot, buf, sizeof buf, &info);
@@ -97,6 +135,20 @@ int main(void) {
     buf[r == 0 ? info.n : 0] = 0;
     chk(r == 0 && !strcmp(buf, "via y"), "the shell wrote to us through the end we sent");
     chk(r == 0 && info.badge == 5, "stamped with the badge we gave y");
+
+    /* 3b. a peer that closes wakes a waiter: the shell sent us one end of a channel and will close
+     *     the other after a moment */
+    r = recv_msg(boot, buf, sizeof buf - 1, &info);
+    chk(r == 0 && info.n == 6 && !memcmp(buf, "closer", 6) && info.nGot == 1, "receive the closer end");
+    if (r == 0 && info.nGot == 1) {
+        NimixWaitItem cw = { info.got[0], 0 };
+        t0 = now_ms();
+        nw = nimixWait(&cw, 1, 800);
+        dt = now_ms() - t0;
+        chk(nw == 1 && (cw.ready & 2), "the peer's close wakes the waiter with bit 1 (peer closed)");
+        chk(dt < 5000, "woken by the close, not the timeout");
+        printf("chantest: close wait took %lld ms\n", dt);
+    }
 
     /* 4. report */
     char rep[40];

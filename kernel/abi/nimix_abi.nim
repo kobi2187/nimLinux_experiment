@@ -149,6 +149,9 @@ type
       ## Duplicate with the same or fewer rights; returns the new handle or an error.
     chanStatus*:   proc(h: uint32): int {.nimcall.}
       ## bit 0: readable now; bit 1: peer closed.
+    wait*:         proc(items: pointer; n: int; ticks: uint32): int {.nimcall.}
+      ## Block until one of up to 8 channel ends is readable or peer-closed, or the timeout (PIT ticks,
+      ## 0xFFFFFFFF = forever) passes. Returns how many are ready; 0 = timeout; < 0 = error.
 
 var nimixAbi*: NimixAbiVTable
   ## Global ABI vtable. Set once at boot by the chosen kernel model init.

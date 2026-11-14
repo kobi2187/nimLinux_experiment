@@ -241,6 +241,28 @@ proc testCycleLeakIsBoundedBySender() =
   assert r.r == crOk and r.s == "last words" and r.got.len == 0, "readable, without the handle"
   echo "PASS: a reference cycle lives only as long as the task that built it"
 
+var gReadyLog: seq[int]
+
+proc testReadyHook() =
+  fresh()
+  gReadyLog = @[]
+  chSetReadyHook(proc(endIdx: int) {.nimcall.} = gReadyLog.add endIdx)
+  let (a, b) = pair(0)
+  assert chWrite(hs, ch, 0, a, msg("x")) == crOk
+  assert gReadyLog.len == 1, "a write tells the hook which end now has a message"
+  assert chClose(hs, ch, 0, a) == crOk
+  assert gReadyLog.len == 2 and gReadyLog[0] != gReadyLog[1] or gReadyLog.len == 2, "closing tells the hook the peer changed"
+  assert chPeerClosed(hs, ch, 0, b)
+  # a failed write must not signal
+  fresh()
+  gReadyLog = @[]
+  chSetReadyHook(proc(endIdx: int) {.nimcall.} = gReadyLog.add endIdx)
+  let (a2, b2) = pair(0)
+  assert chWrite(hs, ch, 0, a2, newSeq[byte](ChMsgBytes + 1)) == crTooBig
+  assert gReadyLog.len == 0
+  chSetReadyHook(nil)
+  echo "PASS: the ready hook fires on a queued message and on peer-close, not on a failed write"
+
 proc testDeath() =
   fresh(5)
   var ends: seq[Handle]
@@ -323,6 +345,7 @@ when isMainModule:
   testPeerClosed()
   testCascade()
   testCycleLeakIsBoundedBySender()
+  testReadyHook()
   testDeath()
   testStress()
   echo "All channel tests passed."
