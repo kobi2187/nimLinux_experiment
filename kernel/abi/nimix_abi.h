@@ -88,3 +88,60 @@ int nimixDisplayPresent(const NimixPresent* req);
 typedef struct { unsigned width, height; } NimixDisplayMode;
 int nimixDisplayModes(NimixDisplayMode* out, int max);
 int nimixDisplaySetMode(unsigned width, unsigned height);
+
+/* ── Handles and channels (docs/proposals/capabilities.md) ─────────────────────
+ * A handle is an entry in YOUR OWN table; its value means nothing to any other task. You hold
+ * only what you were given at spawn or received in a message; there is no way to name anything
+ * else. Rights can only be narrowed. A message carries bytes (<= 256) and up to 4 handles, which
+ * MOVE. The receiver sees the BADGE of the handle the message was written through, set by whoever
+ * issued that handle: it identifies the session and cannot be forged by the sender.
+ * Errors are negative: -1 bad handle or argument, -2 wrong kind of object, -3 missing right,
+ * -4 would widen rights, -5 peer closed, -6 queue full, -7 empty, -8 too big (info.n = needed),
+ * -9 too many handles, -10 a channel end cannot ride its own channel, -11 handle table full,
+ * -12 no channel left, -13 no object left, -14 next message carries handles. */
+typedef unsigned NimixHandle;                       /* 0 = none */
+#define NIMIX_BOOTSTRAP_HANDLE 0x10001u             /* the first handle your spawner gave you */
+#define NIMIX_RIGHT_READ      1u
+#define NIMIX_RIGHT_WRITE     2u
+#define NIMIX_RIGHT_TRANSFER  8u                    /* may be sent in a message */
+#define NIMIX_RIGHT_DUPLICATE 16u
+#define NIMIX_RIGHT_WAIT      32u
+#define NIMIX_RIGHTS_CHANNEL  (1u | 2u | 8u | 16u | 32u)
+
+typedef struct {
+    unsigned size, rights0, rights1, pad;           /* rights 0 = the channel default */
+    unsigned long long badge0, badge1;              /* what the OTHER side sees through h0 / h1 */
+    NimixHandle h0, h1;                             /* out */
+} NimixChanPair;
+typedef struct { NimixHandle handle; unsigned rights; } NimixSendEnt;
+typedef struct { unsigned n; NimixSendEnt ent[4]; } NimixSendList;
+typedef struct { int n; unsigned nGot; unsigned long long badge; NimixHandle got[4]; } NimixChanInfo;
+
+int nimixChanPair(NimixChanPair* req);
+int nimixChanWrite(NimixHandle h, const void* data, int len, const NimixSendList* send);
+int nimixChanRead(NimixHandle h, void* buf, int cap, NimixChanInfo* info);
+int nimixHandleClose(NimixHandle h);
+int nimixHandleDup(NimixHandle h, unsigned rights);    /* the new handle, or < 0 */
+int nimixChanStatus(NimixHandle h);                    /* bit 0 readable, bit 1 peer closed */
+
+/* Block until one of up to 8 channel ends is readable or its peer has closed, or `ticks` (PIT
+ * ticks, 10 ms; 0xFFFFFFFF = forever) pass. `ready` is set per item (bit 0 readable, bit 1 peer
+ * closed). Returns how many items are ready, 0 on timeout, or < 0. A waiting task uses no CPU: a
+ * channel write or close wakes it, and it runs at the next scheduling tick. */
+typedef struct { NimixHandle handle; unsigned ready; } NimixWaitItem;
+int nimixWait(NimixWaitItem* items, int n, unsigned ticks);
+
+/* Batches: a stream crosses as one call per burst. Records are packed back to back, each a 16-bit
+ * little-endian length then that many bytes (<= 256). A channel is the session ring: there is no
+ * second queue type. A batch carries bytes only; a message with handles goes alone (nimixChanWrite).
+ * nimixChanWriteBatch returns how many records were queued (fewer than `count` if the queue filled),
+ * or < 0 (nothing queued). nimixChanReadBatch returns how many messages it unpacked (>= 1) or < 0;
+ * -14 means the next message carries handles (use nimixChanRead), -8 that it does not fit (info.used
+ * = bytes needed). It stops before a message with handles. Up to 16 records per batch. */
+typedef struct { unsigned used, nMsgs; unsigned long long badge; } NimixBatchInfo;
+int nimixChanWriteBatch(NimixHandle h, const void* records, int len, int count);
+int nimixChanReadBatch(NimixHandle h, void* records, int cap, NimixBatchInfo* info);
+
+/* How many syscalls this task has made so far, including this one: the number the cost model
+ * ("about one kernel call per frame") is stated in. */
+int nimixKernelCalls(void);

@@ -3,6 +3,7 @@
 ## (The rules and the table are in user_args.nim, host-tested.)
 import user_args
 import ../buffers/kbuffers
+import ../handles/khandles
 import ../process_table
 import ../../mm/region_allocator
 import ../../ipc/buffers/types
@@ -11,6 +12,7 @@ import ../../core/log
 var gRefused: int                                 ## how many calls were refused (log the first few)
 
 proc kernelUserArgsOk*(nr: uint64; a: array[4, uint64]): bool {.nimcall.} =
+  khCountCall()                                   # every syscall passes through here exactly once
   let slot = procTable.tasks[procTable.current].regionSlot
   var rlo, rhi: uint64                            # a task with no region owns only buffers
   if slot >= 0:

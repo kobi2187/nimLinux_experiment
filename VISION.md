@@ -67,6 +67,33 @@ OS with game-engine-quality graphics and a dispatcher-based concurrency engine.
   budget, ahead-of-time compilation that keeps WASM's isolation (wasm2c,
   RLBox-style) is the measured exception.
 
+## Structural principles (human, 2026-11-14)
+
+The structure is decided by a few essential mechanisms; everything else is filled in over time
+without changing it. Details: `docs/proposals/core_design.md`, `capabilities.md`.
+
+- **The design dictates** what is possible, what is fast, where things physically happen, who has
+  authority and how the system works. Crucial decisions are mechanisms, not conventions.
+- **Client-server by layers.** Servers are isolated, each providing the abilities of its own domain.
+  Clients (apps) link an SDK that implements the protocol. **The contract is the API** (like REST):
+  a client may bypass the SDK, never the contract, which servers enforce.
+- **The dispatcher is the convergence point** (goal 3): a global service, like a gateway, where QoS,
+  authorization, discovery and session brokering happen once for every service. Streams are brokered
+  and then flow directly.
+- **Device modules** are the hardware-facing tier and carry device-local intelligence (batching,
+  ordering, priorities); domain servers hold no hardware code and are each the single client of their
+  device module. Placement is a **measured** choice: userspace if as fast, else a kernel module, always
+  separated as modules in the code; no physical separation mechanism is required between kernel-space
+  modules.
+- **Capabilities are static separation**, not dynamic policy: per-task handle tables (the Zircon/seL4
+  model), authority fixed at spawn by a policy, no revocation tree. This is what stops cross-app data
+  theft, keylogging and malware.
+- **Libraries stand on their own.** Every module is useful whichever of the three kernel models
+  results; a model is a composition.
+- **Scaffolding is not precedent.** Many pieces were built as stubs to stand on (global tokens, named
+  channels used without tokens, direct display/file syscalls, the kernel-resident shell). They are
+  marked SCAFFOLD in ARCHITECTURE.md and must never be used as a model for a later decision.
+
 ## Rendering model and budgets (human, 2026-11-03)
 
 **The server-provides model is the default and the experiment; exceptions are

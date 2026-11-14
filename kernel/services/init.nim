@@ -36,6 +36,7 @@ import ../../arch/x86_64/syscall_gate
 import ../../kernel/abi/nimix_abi_impl   # user-fault policy
 import ../../kernel/abi/task_cleanup
 import ../../kernel/abi/user_args_gate
+import ../../kernel/handles/khandles
 import ../buffers/kbuffers
 import ../../fs/fatfs
 import ../../fs/fatfs_write   # registerFatFs
@@ -242,6 +243,7 @@ proc initSyscallGate*() =
   syscallGateInit()
   installRegionReleaseHook()
   kbufInit()
+  khInit()                                   # handle tables and channels (ipc/handles)
   userFaultKill   = abiKillFaultingTask
   userStackBounds = abiCurrentTaskBounds
   klog(llInfo, "[SERVICES] ✓ Syscall gate ready (ring 0<->3)")

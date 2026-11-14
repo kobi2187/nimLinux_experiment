@@ -4,6 +4,58 @@ Last updated: 2026-10-27 (session 9e, branch `ccr-56330414-wo65nx`, cloud contai
 
 
 
+## Session 9s — S5b: batches, and the event server in view
+
+Batch syscalls 48-49 and `nimixKernelCalls` (50). Decision for the human: retire
+`ipc/buffers/ring.nim`'s separate queue (a channel is the session ring). Event server recorded as E1
+(events = channel messages, subscription = handle, wait objects for IRQs). **Next in order:** S8 decision
+(address spaces/granule) unblocks the small-buffer lane; S2k-b (fold buffers); K1/K3; then E1.
+
+## Session 9r — S4a: blocking wait
+
+`nimixWait` over channel ends (wake hook in `channel.nim`, `procWake`, per-task wait sets in
+`khandles`). Remaining for S4: wake from IRQ/device ports (needs device ports, K3), sub-tick timer
+(V2c), immediate reschedule on wake. **Next in order:** S5b (ring syscalls + small-buffer lane) or S2k-b
+(fold buffers); K1/K2/K3 depend on the L1 pieces now in place.
+
+## Session 9q — S2k-a: handles and channels in the kernel
+
+Syscalls 41-46 over `ipc/handles`; bootstrap grant at spawn (`khGrant`, interrupts off between task
+creation and grant); `khReleasePid` in task cleanup; shell `chantest` + `apps/c/chantest` prove it from
+ring 3. **Next in order:** S2k-b (fold the buffers table into the one handle table: a buffer handle becomes
+an `okBuffer` object handle; the buffers store keeps the state machine), then S3 (spawn syscall + policy,
+remove ambient chanSend/event topics/first-present display), S4 wait/wake, S5b rings.
+
+## Session 9p — Roadmap v2, S1 and S2
+
+Recorded the human's structural understanding (VISION, ARCHITECTURE §0, BACKLOG Roadmap v2).
+Built `ipc/handles/` (handle table + channels). **Next in order:** S2k (kernel integration: syscalls over
+handles, buffers table folded in), then S3 (spawn with handles, remove ambient), S4 (wait/wake), S5b
+(rings), K-layer. Capabilities proposal §6 questions still open: assumptions in use are manifest policy at
+the launcher, directory scopes, shell stays the one ambient authority until R6.
+
+## Session 9o — capabilities proposal
+
+Human: use Zircon/seL4 model, no dynamic revocation, static separation. Wrote
+`docs/proposals/capabilities.md` (handle tables, rights, badges, spawn-time grants, scopes, slices C1-C6).
+**Awaiting the human on its §6** (policy source, file scoping, memory isolation depth, the shell as the
+last ambient authority). Next after approval: C1 (pure handle table + benchmark), then dispatcher Stage 2.
+
+## Session 9n — core design draft
+
+Human gave the structural principles (client-server layers; libraries; placement by measured
+performance; soft library path). Drafted `docs/proposals/core_design.md`. **Awaiting the human on §6**
+(Stage B address spaces, device-port rules, first-handles/service directory, order skeleton before
+render server, SMP in/out). The V6 proposal's D1-D4, D7, D10 fold into it.
+
+## Session 9m — V6 proposal (awaiting the human)
+
+PR #7 merged. Wrote `docs/proposals/render_server_v6.md`: 12 decisions, consequences, 7 slices.
+Measured a raylib frame on NimixOS (`rlbench`): rasterization 94-96 % of the frame. **Waiting for the
+human on D1, D3/D4/D7, D5, D8, D10**; then record, freeze the three interfaces, SPAWN
+`subprojects/render_server`, start V6-0 (spike) and V6a. Smaller items that do not depend on it: V5d,
+V2c (sub-tick timer, also needed by D2), V4b sizing.
+
 ## Session 9l — syscall hardening (V14)
 
 Autonomous. The standing seam (syscalls trust user pointers) is closed: one table in

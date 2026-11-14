@@ -85,6 +85,16 @@ proc fillStubVtable() =
   v.displayPresent = proc(req: pointer): int {.nimcall.} = 0
   v.displayModes   = proc(outp: pointer; max: int): int {.nimcall.} = 0
   v.displaySetMode = proc(w, h: uint32): int {.nimcall.} = 0
+  v.chanPair       = proc(req: pointer): int {.nimcall.} = 0
+  v.chanWrite      = proc(h: uint32; data: pointer; len: int; send: pointer): int {.nimcall.} = 0
+  v.chanRead       = proc(h: uint32; buf: pointer; cap: int; info: pointer): int {.nimcall.} = 0
+  v.handleClose    = proc(h: uint32): int {.nimcall.} = 0
+  v.handleDup      = proc(h: uint32; rights: uint32): int {.nimcall.} = 0
+  v.chanStatus     = proc(h: uint32): int {.nimcall.} = 0
+  v.wait           = proc(items: pointer; n: int; ticks: uint32): int {.nimcall.} = 0
+  v.chanWriteBatch = proc(h: uint32; buf: pointer; len: int; count: int): int {.nimcall.} = 0
+  v.chanReadBatch  = proc(h: uint32; buf: pointer; cap: int; info: pointer): int {.nimcall.} = 0
+  v.kernelCalls    = proc(): int {.nimcall.} = 0
   abimod.nimixAbi = v
 
 proc testEnumOrdinals() =
@@ -124,7 +134,13 @@ proc testEnumOrdinals() =
   assert ord(scDisplayPresent) == 38
   assert ord(scDisplayModes)   == 39
   assert ord(scDisplaySetMode) == 40
-  assert NimixSyscallCount == 41
+  assert ord(scChanPair)       == 41
+  assert ord(scChanStatus)     == 46
+  assert ord(scWait)           == 47
+  assert ord(scChanWriteBatch) == 48
+  assert ord(scChanReadBatch)  == 49
+  assert ord(scKernelCalls)    == 50
+  assert NimixSyscallCount == 51
   echo "PASS: syscall enum ordinals"
 
 proc testTableFilled() =

@@ -413,6 +413,15 @@ proc procSleepUntil*(slot: int; ticks: uint64) =
   procTable.tasks[slot].state  = ptsBlocked
   ringRemove(procTable, int16(slot), int(procTable.tasks[slot].class))
 
+proc procWake*(slot: int) =
+  ## Make a blocked task runnable now (it still runs at the next scheduling point). No effect on a
+  ## task that is not blocked. Call with interrupts off or from interrupt context.
+  if slot < 0 or slot >= MaxTasks: return
+  if not procTable.tasks[slot].used or procTable.tasks[slot].state != ptsBlocked: return
+  procTable.tasks[slot].wakeAt = 0
+  procTable.tasks[slot].state = ptsReady
+  ringInsertTail(procTable, int16(slot), int(procTable.tasks[slot].class))
+
 proc procWakeExpired*(pt: var ProcessTable) =
   ## Check all blocked tasks; wake any whose wakeAt <= now.
   ## Called every PIT tick from pitIrqHandler.

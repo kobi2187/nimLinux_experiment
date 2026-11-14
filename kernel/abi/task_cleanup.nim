@@ -13,6 +13,7 @@ import ../../mm/region_allocator
 import ../../mm/user_window
 import ../buffers/kbuffers
 import ../display/display
+import ../handles/khandles
 
 proc releaseTaskResources*(pid: uint32; regionSlot: int) =
   for ch in ownedChannels():
@@ -21,6 +22,7 @@ proc releaseTaskResources*(pid: uint32; regionSlot: int) =
       serverChanRelease(ch)
       cap.capRevoke(tok)
   eventReleaseOwner(pid)
+  khReleasePid(pid)                         # handles close; channels, in-flight handles released
   kbufReleasePid(pid)                       # buffers: lends return, handles close
   displayRelease(pid)                       # the display goes back to the console
   cap.capRevokeAllOf(pid)

@@ -8,6 +8,81 @@ Tags: CLEAR = path obvious | FUZZY = outcome known, path uncertain | OPEN = unde
 
 ---
 
+## ROADMAP v2 (2026-11-14) — structure first. Where this disagrees with the sections below, v2 wins.
+
+Order of work: from what **must** work exactly one way (everything assumes it) down to what has leeway.
+Layers are defined in ARCHITECTURE.md §0. Proposals: `docs/proposals/core_design.md`,
+`capabilities.md`, `render_server_v6.md`. Items marked SCAFFOLD work today but are stubs to stand on:
+replace them, never copy their shape.
+
+### Dependency tree
+
+```
+L1 STRUCTURE
+ S1 handle tables+rights ──┬─ S2 channels, badges, peer-closed ──┬─ S3 spawn with handles + launcher policy
+   (buffers fold in)       │                                     │     (removes ambient: chanSend, topics,
+                           │                                     │      first-present display)
+ S4 wait/wake + timers ────┼─────────────────────────────────────┤
+ S5 rings + small-buffer lane (buffers: DONE, host rings DONE)   │
+ S6 charging + death cleanup ────────────────────────────────────┤
+ S7 syscall gate checks (DONE) ── shrinks as S3/K-layer replace calls
+ S8 memory isolation depth (DECISION) ── under S1's guarantees
+L2 CONTRACTS                                                     │
+ K1 contract format → SDK/server stubs ──────────────────────────┤
+ K2 dispatcher Stage 2 (sessions, discovery, QoS fields, correlation)  needs S1 S2 S3 K1
+ K3 device-port interface (queue-shaped, priority hints)               needs S1 S2 S5
+L3 DEVICE MODULES (driver DONE in kernel; each gains a port)           needs K3
+ M1 display   M2 input   M3 block   M4 net   M5 sound
+L4 DOMAIN SERVERS
+ V1 render server (V6 slices)   needs K2 K3 S4 S5 M1 M2
+ V2 file server, lent buffers   needs K2 K3 M3
+ V3 console + terminal client   needs V1 M2   V4 audio  needs K3 M5   V5 net stack  needs K3 M4
+L5 CLIENTS
+ C1 SDKs (libnimix, bridge)   C2 userspace WASM host (V8)   C3 RUI apps   C4 benchmark (V9)   C5 desktop
+```
+
+### Status
+
+| id | item | layer | status | depends | done-check |
+|----|------|-------|--------|---------|-----------|
+| S1 | per-task handle tables, rights, duplicate (narrow only), move, close-all (`ipc/handles/handle_table.nim`) | L1 | **DONE (library, host-tested; kernel integration TODO)** | — | property tests; no forged handle succeeds; lookup benchmark |
+| S2 | channel endpoint pairs, handle transfer, badges, peer-closed (`ipc/handles/channel.nim`) | L1 | **DONE (library, host-tested; kernel integration TODO)** | S1 | badge = sending handle's badge; transfer moves; no leaks |
+| S2k | kernel integration of S1+S2: syscalls over handles (41-46), spawn-time bootstrap grant, task-death release | L1 | **PARTIAL: channels and handles live in the kernel and are tested from ring 3 (`chan-handles`, `abi-hostile`); the buffers table is NOT yet folded in** | S1 S2 | fold buffers (S2k-b): one table for every object kind |
+| S3 | `spawn(image, handles[])`, launcher policy file; remove ambient chanSend/topics/display race | L1 | PARTIAL: a spawner can give a child its bootstrap handle (shell `chantest`); no spawn syscall or policy file yet, ambient calls still present | S2k | a program given nothing can do nothing; a keylogger test gets nothing |
+| S4 | block-on-wake, wake from IRQ, sub-tick timer (V2c) | L1 | **PARTIAL: `nimixWait` (syscall 47) blocks on up to 8 channel ends with a timeout; channel writes and peer-close wake it; a blocked task uses no CPU. TODO: wake from IRQ/device ports, a finer timer and an immediate reschedule (a woken task still runs at the next 10 ms tick)** | S2k | measured in `chan-handles`: 20-tick wait = 200 ms; woken by a write at 799 ms of an 8 s timeout |
+| S5 | buffers (arena, owned/sealed/move/lend, per-block rights) | L1 | **DONE** | — | `make test-devices` buffers-* |
+| S5b | batches over channels (`nimixChanWriteBatch/ReadBatch`, 48-49) + the kernel-call counter (50): a burst of up to 16 messages crosses in ONE call, so small frames need no buffer at all | L1 | **PARTIAL: batches and the counter DONE and measured from ring 3 (10 messages in, 12 out = 1 call each). The small-buffer lane is NOT built: at block granularity (2 MB) a small buffer cannot have its own owner; it needs the granule decision (S8). DECISION: retire the separate ring queue (`ipc/buffers/ring.nim`) now that a channel with batches is the session ring** | S2k | calls per burst = 1; command buffers stop costing 2 MB (needs S8) |
+| S6 | budgets follow ownership (buffers DONE; handles, channels, sessions not charged); death releases everything (tasks' buffers, display, input DONE; handle tables TODO) | L1 | PARTIAL | S1 | no resource outlives its owner (leak test) |
+| S7 | syscall pointer-argument checks at the gate (V14), hostile-args program | L1 | **DONE (interim: shrinks as calls become handle operations)** | — | `abi-hostile` |
+| S8 | memory isolation underneath: regions and buffers enforced per task today; per-task address spaces (Stage B) undecided | L1 | **DECISION** | — | human, capabilities.md §6.3 |
+| S9 | ring 3, user windows, crash reports, FPU safety, user faults kill the task | L1 | **DONE** | — | structured + device suites |
+| K1 | one contract per service; generated server stub, SDK and validation; versioning | L2 | TODO (proposed) | — | contract round-trip test; open question #3 |
+| K2 | dispatcher Stage 2 | L2 | PARTIAL (Stage 1 actor loop + strict decode DONE; not in the app path) | S1 S2 S3 K1 | request/reply through it; session brokering; QoS fields end to end |
+| E1 | **event server**: events are channel messages, a subscription is a handle, programs `nimixWait` on it (block) or `nimixChanStatus` (poll); kernel wake sources (interrupts) are wait objects the server holds; ELF programs and servers use it like any client. Replaces the event-topic scaffold and the `input` topic | L2/L4 | TODO (the wait primitive S4a and channels exist) | S2k S4 K3 | a subscriber blocks until an event; a program without the subscription handle cannot see it |
+| K3 | device-port interface | L2 | TODO | S1 S2 S5b | two transports (direct call, message), same client code |
+| M1 | display device module | L3 | driver DONE (kernel), modes DONE; port TODO; today SCAFFOLD (direct syscalls) | K3 | single-client bind; second client refused |
+| M2 | input device module | L3 | driver DONE (all virtio-input devices); port TODO; SCAFFOLD (`input` topic) | K3 | keylogger test app gets nothing |
+| M3-5 | block, net, sound modules | L3 | drivers DONE; ports TODO | K3 | per module |
+| V1 | render server (V6 slices V6-0..g) | L4 | TODO (proposal) | K2 K3 S4 S5b M1 M2 | pixel-equal windows, hostile client refused |
+| V2 | file server with lent buffers (+ directory scopes) | L4 | SCAFFOLD (ELF exists, calls kernel FS) | K2 K3 M3 | path escape fails |
+| V3 | console server + terminal client | L4 | SCAFFOLD (kernel console/shell) | V1 M2 | typing in a window runs shell commands |
+| V4, V5 | audio server, network stack server | L4 | TODO | K3 M5 / M4 | per server |
+| C1 | SDKs: libnimix, raylib bridge (direct + remote host-tested), `PLATFORM_NIMIX` | L5 | libnimix/PLATFORM_NIMIX SCAFFOLD (direct kernel calls); bridge DONE (host) | K1 | apps unchanged when calls become contracts |
+| C2 | userspace WASM host (V8) | L5 | TODO (wasm3 is kernel-resident) | S5b K2 | counter app runs in the ELF host |
+| C3-C5 | RUI apps (V7c/d), benchmark (V9), desktop/launcher | L5 | TODO | C2 V1 | per task |
+
+### Libraries finished and useful whatever the architecture
+tsc clock + time page; keymap; term/vt, gfx, fonts; display checks and modes; syscall argument table
+(`user_args`); bump heap (`sip_heap`); buffers state, arena and rings; `mpsc_ring`; the CPS actor and
+dispatcher logic (priority queue, QoS policy, strict wire decode); picolibc build; libnimix; the raylib
+bridge (direct and remote); the pointer and keymap helpers; the handle table and channel library (S1, S2).
+
+### Counts
+Done as designed (structure): S1 S2 (libraries) S5 S7 S9. Scaffold to replace: 10 items (ARCHITECTURE §0).
+Left: S2k S3 S4 S5b S6 S8 K1 K2 K3 M ports V1-V5 C2-C5.
+
+---
+
 ## Layer 0 — Foundation (execute now)
 
 | TW# | Tag | Description | Done-check |
@@ -157,7 +232,7 @@ draw_protocol.md (PROPOSED, awaiting agreement); survey docs/surveys/rui2.md.
 | V5d | PARKED | present only the damaged rectangle (today a full frame per `EndDrawing`: raylib tracks no damage; the V6 render server knows it from the command stream); clear the display when taking ownership; raise the shell's 512 KB program buffer if images outgrow it | V6 | V5b |
 | V5c | DONE (`keys-*` in `make test-devices`) | **keyboard input into raylib**: the platform subscribes to the `input` event topic, maps evdev events to raylib keys and characters (`libnimix/nimix_keymap.h`: golden-tested against the Nim keymap and raylib's own enum), and **input follows display ownership** (the console drops keys while a program owns the screen) | injected key events move a square on the screen; the exact key sequence and characters reach the program; none reach the shell | V5b |
 | V5e | DONE for mouse/tablet (`pointer`, `mouse-*` in `make test-devices`); touch and the focus model PARKED | mouse and tablet into raylib (done: every virtio-input device driven; mouse position, buttons, wheel; remaining: touch/gestures, `SetMousePosition`, and a focus model beyond "the display owner gets the keys" once there are windows (V6) | V6 | V5c |
-| V6 | SPAWN | **render server** (app_server's second face): sessions, command-ring execution, targets, composite, present; **first optimisation: damage-limited compositing** (P0: raster dominates, the protocol costs ~nothing) | draw_protocol conformance tests (host) + QEMU pixel test | V5, buffers rings ABI, protocol agreed |
+| V6 | SPAWN (proposal written 2026-11-13: `docs/proposals/render_server_v6.md`, 12 decisions, 7 slices; awaiting the human on D1/D3/D4/D5/D7/D8/D10) | **render server** (app_server's second face): sessions, command-ring execution, targets, composite, present; **first optimisation: damage-limited compositing** (P0: raster dominates, the protocol costs ~nothing) | draw_protocol conformance tests (host) + QEMU pixel test | V5, buffers rings ABI, protocol agreed |
 | V7 | PARENT | app side: the **raylib bridge** (naylib-compatible `raylib`/`rlgl`; backends direct / remote / hybrid with counted fallback), actor-backed `background`/`mailbox`, RUI text via the `text_*` host imports | RUI + a stock raylib example build unchanged against the bridge; direct = zero-cost (codegen equal to naylib); remote stream decoded on host | protocol agreed |
 | V7a | DONE (`make test-v7`) | direct: **adapted naylib** (`tools/naylib_adapt.py` over pinned `vendor/naylib` v25.51.1 → raylib 6.2 memory platform + rlsw, 6.2 ABI fixes) + RUI text-engine seam with a **Pixie engine** + `ruiNoGlfw` (patches/rui2) | RUI's counter example, unchanged, paints headless with Pixie text | P0 |
 | V7b | DONE (`make test-v7`) | remote: draw ops routed at the **C-symbol level**: `tools/naylib_adapt.py` also emits `build/bridge/naylib_remote/`, where every symbol with an `nxr_<Name>` in `bridge/rl_route.nim` (45: shapes, text, targets, textures, blend, scissor, the rlgl calls RUI makes) imports the encoder instead of raylib; types, CPU images, queries and window/input stay naylib. Raw rlgl framebuffers answer 0 (RUI falls back to `loadRenderTexture`); shaders invalid (as on rlsw); `LoadImageFromScreen` = counted sync point | RUI counter, 3 clicks through RUI's router: remote pixels == direct (byte-identical, repeatable); steady frames ≤ 86 records / 1,016 B | V7a |

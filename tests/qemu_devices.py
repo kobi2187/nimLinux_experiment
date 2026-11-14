@@ -746,6 +746,40 @@ def test_abi_hostile(tmp, iso, bios) -> list:
     return results
 
 
+def test_channels(tmp, iso, bios) -> list:
+    """S2k: handles and channels between a ring-3 program and the kernel shell. The shell starts
+    chantest.elf with ONE handle (its bootstrap channel end, badge 77) and talks to it: the badge
+    is stamped by the kernel from the handle the program wrote through; a handle sent by the
+    program arrives and works, and the program's copy dies; handle values the program does not hold
+    (the shell's decoys, forged and stale values) are refused for every operation and change nothing;
+    rights only narrow; and when the program exits, the shell's end reports peer-closed."""
+    results = []
+    g = boot(tmp, iso=iso, bios=bios, devices=("blk",))
+    try:
+        try:
+            mark = len(g.out)
+            g.type("chantest")
+            done = g.wait("app exit code", 60, mark) and g.wait("chan-kernel:", 5, mark)
+            time.sleep(1.0)
+            out = g.text(mark)
+            assert "KERNEL PANIC" not in out and "CPU EXCEPTION" not in out, "the kernel died: " + out[-600:]
+            assert done, "chantest did not finish: " + out[-600:]
+            bad = [l for l in out.splitlines() if "FAIL" in l]
+            assert not bad, "failures:\n" + "\n".join(bad)[:800]
+            for want in ("chan-kernel: ping badge=77 ok", "chan-kernel: handle received and used ok",
+                         "chan-kernel: burst of 12 in order ok", "chan-kernel: peer closed after exit ok",
+                         "chan-kernel: ok", "chantest: ok"):
+                assert want in out, f"missing '{want}': {out[-500:]}"
+            m = re.search(r"chantest: (\d+) checks, (\d+) failed", out)
+            results.append(("chan-handles", True, f"{m.group(1)} checks in ring 3, none failed; badge, move, forgery, rights, peer-closed all as designed"))
+        except Exception as e:                 # noqa: BLE001
+            results.append(("chan-handles", False, str(e)))
+        assert "NimixOS" in g.run("version"), "shell dead after chantest"
+    finally:
+        g.close()
+    return results
+
+
 def test_user_faults(tmp, iso, bios, kernel) -> list:
     """Ring-3 faults kill only the faulting task: one boot survives them all."""
     results = []
@@ -798,6 +832,7 @@ def main():
             results += test_raylib_keys(tmp, a.iso, a.bios)
             results += test_raylib_mouse(tmp, a.iso, a.bios)
             results += test_abi_hostile(tmp, a.iso, a.bios)
+            results += test_channels(tmp, a.iso, a.bios)
             results += test_crashes(tmp, a.iso, a.bios, a.kernel)
     for name, ok, msg in results:
         print(f"{'PASS' if ok else 'FAIL'}: {name:12} {msg}")

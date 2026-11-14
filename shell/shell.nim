@@ -30,6 +30,11 @@ import ../kernel/process_table
 import ../core/ptr_helpers
 import ../drivers/pci/pci_device
 import ../drivers/virtio/virtio_net
+import ../drivers/pit
+import ../arch/x86_64/cpu_primitives
+import ../ipc/handles/handle_table
+import ../ipc/handles/channel
+import ../kernel/handles/khandles
 
 const
   ShellPrompt = "nimixos> "
@@ -53,6 +58,7 @@ type
     scNetinfo       ## netinfo — virtio-net MAC and packet counts
     scDmesg         ## dmesg — kernel log ring (boot + driver messages)
     scDevtest       ## devtest <gpu|snd|net|input> — exercise a virtio device
+    scChantest      ## chantest — handles and channels between this shell and a ring-3 program
 
 # ── String helpers ─────────────────────────────────────────────────────────
 
@@ -96,6 +102,7 @@ proc parseCommand*(buf: openArray[char], len: int): ShellCommand =
   if bufEq(buf, first, last, "netinfo"): return scNetinfo
   if last - first >= 7 and bufEq(buf, first, first + 7, "devtest "): return scDevtest
   if bufEq(buf, first, last, "devtest"): return scDevtest
+  if bufEq(buf, first, last, "chantest"): return scChantest
   # "run <file>", "exec <file>", "kill <pid>" — prefix match
   if last - first >= 3 and buf[first] == 'r' and buf[first+1] == 'u' and
      buf[first+2] == 'n' and buf[first+3] == ' ':  return scRun
@@ -237,6 +244,10 @@ proc buildAbiPatches(): array[NimixSyscallCount, AbiPatch] =
   for sc in NimixSyscall:
     result[ord(sc)] = AbiPatch(name: NimixSyscallSymbol[sc], nr: ord(sc).uint64)
 
+var gSpawnGrant*: Handle
+  ## A handle of THIS (the spawner's) task to give the next spawned program as its bootstrap handle.
+  ## runPieElf moves it into the child's table before the child can run (a spawn-time grant).
+
 proc runPieElf(filename: cstring; dataBuf: ptr byte; nbytes: int; appArgs: cstring) =
   ## Load and run a PIE (ET_DYN) ELF. Allocates a region, patches ABI stubs,
   ## runs appMain, then frees the region.
@@ -265,7 +276,12 @@ proc runPieElf(filename: cstring; dataBuf: ptr byte; nbytes: int; appArgs: cstri
   setAppArgs(int(slot), appArgs)
   if not appRegionUserAccess(slot, true):
     kprint("Region not user-mappable\n"); regionFree(slot); return
+  # The grant must land before the child can run: no preemption between creating it and granting.
+  let irqState = disableInterrupts()
   let procSlot = procSpawnRing3(filename, loaded.appMain, userStackTop, int32(slot))
+  if procSlot >= 0 and gSpawnGrant != NoHandle:
+    if khGrant(khMe(), gSpawnGrant, procSlot, rtChannelDefault): gSpawnGrant = NoHandle
+  restoreInterrupts(irqState)
   if procSlot < 0:
     discard appRegionUserAccess(slot, false)
     kprint("procSpawnRing3 failed\n"); regionFree(slot); return
@@ -401,6 +417,107 @@ proc runWasmWithCaps(label: string; data: ptr byte; len: int) =
   let caps = [CapIpc, CapEvents]
   if wasmRun(data, len, caps) != wasmOk: wasmLog("error running", label)
 
+proc cmdChantest() =
+  ## Plays the server of tests/qemu_devices.py `chan-*`: starts chantest.elf with ONE handle (its
+  ## bootstrap channel end, badge 77) and talks to it. Prints "chan-kernel: ..." for the harness.
+  let me = khMe()
+  if me < 0: kprint("chan-kernel: FAIL no current task\n"); return
+  var bad = 0
+  proc fail(what: string) =
+    inc bad
+    kprint("chan-kernel: FAIL "); kprint(what); kprint("\n")
+  var hA, hB: Handle
+  if chCreate(gHs, gCh, me, rtChannelDefault, rtChannelDefault, 0, 77, hA, hB) != crOk:
+    fail("create channel"); return
+  # decoys: handles this task holds and the child will be told the values of, but cannot use
+  var dA, dB: Handle
+  if chCreate(gHs, gCh, me, rtChannelDefault, rtChannelDefault, 0, 0, dA, dB) != crOk:
+    fail("create decoys"); return
+  gSpawnGrant = hB
+  var eA, eB: Handle
+  if chCreate(gHs, gCh, me, rtChannelDefault, rtChannelDefault, 0, 0, eA, eB) != crOk:
+    fail("create closer channel"); return
+  let n = loadFile("chantest.elf")
+  if n < 0: fail("chantest.elf not on disk"); gSpawnGrant = NoHandle; return
+  launchLoaded("chantest.elf", n, nil)
+  if gSpawnGrant != NoHandle: fail("the grant did not reach the child"); gSpawnGrant = NoHandle; return
+
+  proc pollRead(h: Handle; msg: var array[300, byte]; len: var int; badge: var uint64;
+                got: var array[ChMaxFlights, Handle]; nGot: var int): ChResult =
+    let deadline = pitTicks() + 600
+    while pitTicks() < deadline:
+      let r = chRead(gHs, gCh, me, h, msg, len, badge, got, nGot)
+      if r != crEmpty: return r
+      sti(); hlt()
+    crEmpty
+  proc asStr(m: array[300, byte]; len: int): string =
+    for i in 0 ..< len: result.add char(m[i])
+  proc bytesOf(s: string): seq[byte] =
+    for c in s: result.add byte(c)
+
+  var m: array[300, byte]
+  var len, nGot: int
+  var badge: uint64
+  var got: array[ChMaxFlights, Handle]
+  proc sleepTicks(n: uint64) =
+    let until = pitTicks() + n
+    while pitTicks() < until:
+      sti(); hlt()
+  sleepTicks(100)                       # the child is blocked in its wait for about a second
+  if chWrite(gHs, gCh, me, hA, bytesOf("hello")) != crOk: fail("write hello")
+  if pollRead(hA, m, len, badge, got, nGot) != crOk or asStr(m, len) != "ping": fail("read ping")
+  elif badge != 77: fail("badge of the child's handle is not 77")
+  else: kprint("chan-kernel: ping badge=77 ok\n")
+  if chWrite(gHs, gCh, me, hA, bytesOf("foreign:" & $uint32(dA) & " " & $uint32(dB))) != crOk:
+    fail("write foreign")
+  # the child's attacks on our decoys must change nothing: no message, nothing closed
+  if pollRead(hA, m, len, badge, got, nGot) != crOk or asStr(m, len) != "here is y" or nGot != 1:
+    fail("read the handle the child sent")
+  else:
+    let yh = got[0]
+    if badge != 77: fail("badge on the message that carried the handle")
+    if chQueued(gHs, gCh, me, dA) != 0 or chQueued(gHs, gCh, me, dB) != 0: fail("the child wrote to our decoys")
+    if chPeerClosed(gHs, gCh, me, dA) or chPeerClosed(gHs, gCh, me, dB): fail("the child closed our decoys")
+    if chWrite(gHs, gCh, me, yh, bytesOf("via y")) != crOk: fail("write through y")
+    else: kprint("chan-kernel: handle received and used ok\n")
+    # a burst for the child in ONE call, then a message that carries a handle: the child's batch
+    # read must take the burst and stop in front of the handle
+    var burst: seq[byte]
+    for i in 0 ..< 10:
+      let t = "r" & $i
+      burst.add byte(t.len); burst.add 0'u8
+      for c in t: burst.add byte(c)
+    var written: int
+    if chWriteBatch(gHs, gCh, me, hA, burst, 10, written) != crOk or written != 10: fail("write the burst")
+    # give the child one end of a channel and close the other after a moment: its wait must end
+    if chWrite(gHs, gCh, me, hA, bytesOf("closer"), [SendHandle(h: eB, rights: rtChannelDefault)]) != crOk:
+      fail("send the closer end")
+    sleepTicks(40)
+    discard chClose(gHs, gCh, me, eA)
+    # the child's burst of 12 (one batch call there): they arrive in order, stamped with badge 77
+    var ordered = true
+    for i in 0 ..< 12:
+      if pollRead(hA, m, len, badge, got, nGot) != crOk or asStr(m, len) != "b" & $i or badge != 77:
+        ordered = false
+        break
+    if not ordered: fail("the child's burst did not arrive in order with badge 77")
+    else: kprint("chan-kernel: burst of 12 in order ok\n")
+    if pollRead(hA, m, len, badge, got, nGot) != crOk: fail("read the child's report")
+    else:
+      let rep = asStr(m, len)
+      kprint("chan-kernel: child reports "); kprint(rep); kprint("\n")
+      if rep.len < 9 or rep[0 ..< 9] != "hostile:0": fail("the child's hostile checks did not all pass")
+  # the child exits: its bootstrap handle goes with it, so we must see the peer close
+  let deadline = pitTicks() + 600
+  while not chPeerClosed(gHs, gCh, me, hA) and pitTicks() < deadline:
+    sti(); hlt()
+  if not chPeerClosed(gHs, gCh, me, hA): fail("no peer-closed after the child exited")
+  else: kprint("chan-kernel: peer closed after exit ok\n")
+  discard chClose(gHs, gCh, me, hA)
+  discard chClose(gHs, gCh, me, dA)
+  discard chClose(gHs, gCh, me, dB)
+  if bad == 0: kprint("chan-kernel: ok\n")
+
 proc dispatchCmd(cmd: ShellCommand; buf: openArray[char];
                  first, last: int; physMgr: PhysicalMemManager) =
   case cmd
@@ -416,6 +533,7 @@ proc dispatchCmd(cmd: ShellCommand; buf: openArray[char];
   of scLoadPingpong:
     runWasmWithCaps("pingpong", cast[ptr byte](unsafeAddr pingpongWasm[0]), pingpongWasm.len)
   of scLspci:  cmdLspci()
+  of scChantest: cmdChantest()
   of scNetinfo: cmdNetinfo()
   of scDevtest:
     var dev: array[16, char]

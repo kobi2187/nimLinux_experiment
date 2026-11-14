@@ -1957,3 +1957,202 @@ its code pages (the region is one range; W^X inside a region is a loader matter)
 defect, recorded in the spec table); blocking calls (`nimixSleep` with huge ticks) are the
 program's own affair. TOCTOU: the kernel is not preempted between check and use on a single CPU,
 and other tasks cannot remap a region; revisit with SMP.
+
+---
+
+## 2026-11-13 — V6 decomposition proposed; frame cost measured on NimixOS
+
+**What.** `docs/proposals/render_server_v6.md` (PROPOSED, nothing frozen): the three interfaces to
+freeze (display ABI, client protocol, input), twelve decisions with options, my pick, consequences and
+what each blocks, seven slices, tests, and what is unknown. Five need the human: transport (D1),
+rights at spawn for display/input/names (D3, D4, D7), what the user sees when the server runs (D5),
+both content lanes (D8), memory sizing (D10).
+
+**Measured** (`apps/c/rlbench`, a widget-like scene, QEMU TCG, whole-frame present): 320x200 draw 63 ms
++ end 3.8 ms; 640x400 draw 142 ms + end 8.5 ms; 1280x800 draw 557 ms + end 20.7 ms per frame ("end" =
+readback into the display format + `nimixDisplayPresent` = kernel copy + virtio-gpu transfer).
+Rasterization is 94-96 % of a frame, so damage-limited compositing is the lever and extra copies are
+cheap by comparison; TCG times are an emulator's, so frame-rate budgets can only be gated on KVM.
+
+**Facts found while writing it (they shape the decisions):** every buffer costs at least one 2 MB
+arena block (64 blocks in total), a channel message carries 256 bytes, the `input` topic and display
+ownership are ambient authority, the dispatcher has no session code, and nothing can block (servers poll
+on the 10 ms tick).
+
+---
+
+## 2026-11-14 — Core design principles stated by the human; first draft of `core_design.md`
+
+**Principles (human, in dialogue):** the design dictates what is possible, fast, where things happen
+and who has authority; crucial decisions are mechanisms, the rest is fill-in that must not change the
+structure. Client-server by layers; servers isolated, each the single client of the hardware-facing
+part it fronts, with no driver code; clients link a library that defines the protocol, a softer path
+than a boundary (it hardens: ids, sequence); mechanisms are composable library code; drivers run in
+userspace if it performs the same, otherwise as kernel modules, conceptually separated, with no
+physical separation mechanism required; all code is useful in every model.
+
+**Corrections I made on the way, recorded:** I first placed drivers in userspace processes as the
+design, then overcorrected to "drivers stay in the kernel". The human's rule is a performance one:
+placement is a measured choice per module, structure is fixed. I also over-claimed that the library
+is the only path to a server and that driver fault containment is an invariant; neither holds.
+
+**Draft:** `docs/proposals/core_design.md`: seven mechanisms (authority by handles, modules and
+placement via device ports with two transports, ownership-based data movement, wait/wake, resource
+charging, failure cleanup, one protocol description per service), a placement matrix, eight forbidden
+things (each to become a failing test), and five questions for the human. Nothing frozen.
+
+---
+
+## 2026-11-14 — Alignment with the early design: the dispatcher stands; the contract is the API
+
+After the human's structural statements, the early record was re-read (OS Interaction Model, Driver
+Strategy, Dispatcher, Decision principles, Kernel residency) to see which statements were new and which
+were already decided. Result: most agree. Corrections to my own recent work:
+
+- **The dispatcher stands as designed** (human, 2026-11-14): the convergence point for QoS, authorization,
+  discovery and session brokering. My V6 pick of direct brokering with a "temporary exception to
+  axiom 1" is **withdrawn**; V6 depends on dispatcher Stage 2.
+- **REST analogy** (human): the wire contract is the API; the library is an SDK for idiomatic code and
+  hardening; a client may bypass the library but not the contract, which servers enforce and the
+  dispatcher funnels. So "the library is the boundary" and "no bypass" were both wrong readings.
+- **Names are addresses, tokens are authority.** I had called global names ambient authority; the
+  early design gates sends with `capIpc` tokens and receives with the creator's capability. The real
+  ungated shortcuts are plain `chanSend`, event topics and first-present display ownership.
+- **Placement** is a measured per-module choice (Driver Strategy; residency map), which the human's
+  performance rule refines; my two flip-flops on it were errors.
+- **Labelled as new proposals, not derived decisions:** device ports with two transports; generated
+  stubs from one contract; the render server's surface lane. Driver fault containment was rejected.
+- **Still interim and contrary to axiom 1 as written:** direct kernel calls for files, display and
+  input (`nimixFsRead`, display ABI, the `input` topic).
+
+Open, awaiting the human: whether the "hardware-related server" is the device module fronted by each
+domain server; whether V6's first clients are ELF test clients until the WASM host exists.
+
+---
+
+## 2026-11-14 — Capabilities: the Zircon/seL4 model, static separation, no revocation tree
+
+**Human:** use the proper capabilities model from Zircon and seL4 with performance hints from
+Singularity-type systems; avoid hurting performance; capabilities are an isolation and separation
+mechanism deciding what apps may access (so they cannot take data from other apps, and keylogging,
+viruses and the like are restricted); there is nobody to revoke dynamically; the details are mine.
+
+**What was found first:** the existing token table (`kernel/cap/capability.nim`) is a 64-entry kernel
+table of *bearer* tokens: `capCheck` never compares the caller with the owner, serials are a counter
+(guessable), one right per token, and plain `chanSend`, event topics and first-present display skip it.
+
+**Decision (proposed in `docs/proposals/capabilities.md`):** per-task handle tables (index plus
+generation, rights bitmask, badge, refcounted object) as the only authority; conservation (authority is
+passed and narrowed, never created); everything a program has is what it was spawned with, decided by a
+static manifest policy at the launcher; the dispatcher endpoint is given at spawn, badged with the
+app's identity; seL4-style badges identify callers without a pid; file access by directory scope
+(Zircon namespaces); close/death/kill as the only revocation (a server cuts a client by closing its end:
+peer-closed). **Rejected:** seL4's derivation tree and `Revoke`, Zircon jobs and policies, untyped
+memory, a separate capability process (the check is inherent and must be in the kernel: one array
+index and a rights test).
+
+**Slices C1-C6** in the proposal, starting with the pure handle table and a before/after benchmark.
+The human's policy questions (where policy lives, file scoping, how far memory isolation must go, the
+shell as the one ambient authority) are in §6 of the proposal.
+
+---
+
+## 2026-11-14 — Roadmap v2: structure first; scaffolding is not precedent; S1 and S2 built
+
+**Human:** pieces built early were stubs to stand on, not the idealized implementation; do not use them
+as a model for later decisions. Record the understanding, show the roadmap and dependency tree with
+done versus left, then work from the parts that must work one way down to the flexible ones.
+
+**Recorded:** VISION "Structural principles"; ARCHITECTURE §0 (layers L1-L5 and a named list of ten
+scaffolds with what replaces each); BACKLOG "ROADMAP v2" (dependency tree, status table, libraries that
+stand on their own). Where v2 disagrees with older BACKLOG sections, v2 wins.
+
+**Built (libraries, host-tested, also compile under the kernel's flags):**
+- `ipc/handles/handle_table.nim` (S1): per-task handle tables, index plus generation, rights that only
+  narrow, badges, move between tables, last-close destruction. Verified against an independent model
+  over 60,000 random operations, an exhaustive forgery sweep (900,000 guessed values: only the 12
+  issued handles resolve), three deliberate breakages each caught, hot path about 1 ns on the host.
+- `ipc/handles/channel.nim` (S2): channel endpoint pairs, handles that move with messages, badges
+  stamped from the writing handle, peer-closed, atomic failure, release of in-flight handles.
+
+**Found by the stress test:** two channels can each hold the other's end in an unread message and
+leak forever (a reference cycle), which a hostile task could use to exhaust the tables. Decision: an
+unread message belongs to its sender; when the sender dies the handles in its unread messages are
+released (bytes stay readable). A leak can outlive only the task that made it. Rejected: a cycle
+collector (cost, complexity), forbidding sending the peer end (does not remove cycles through two
+channels).
+
+---
+
+## 2026-11-14 — S2k-a: handles and channels in the kernel
+
+- One `HandleSpace` and one `ChannelStore` (`kernel/handles/khandles.nim`), tables indexed by process
+  slot, attached lazily; a fresh table starts at generation 1, so **a new task's first handle has a
+  fixed value** (`NIMIX_BOOTSTRAP_HANDLE`, 0x10001). The spawner moves the child's bootstrap channel
+  end into its table with interrupts off between creating the task and letting it run (no race).
+  Convention, not a secret: it is the child's own table.
+- Syscalls 41-46; their pointer arguments are in the argument table (`user_args`), and the reflection
+  test enforces that. Errors are `-ord(ChResult)`; 1 is "bad handle or argument" so the gate's generic
+  refusal (-1) means the same thing.
+- A task's death calls `khReleasePid` first in task cleanup: handles close, in-flight handles in its
+  unread messages are released (the sender-ownership rule), and peers see peer-closed.
+- **Not yet done, on purpose:** the buffers table keeps its own handles (its state machine is richer
+  than a rights mask: owner/borrower/reader/transit roles and the lend/seal rules). Folding it in
+  (S2k-b) means a buffer handle in the generic table references a buffer object while the buffers
+  store keeps the state machine; it changes the buffer syscalls' handle values and the page-rights
+  path, so it gets its own step and its own tests.
+- **Scaffolds untouched:** the old named `chanSend/chanRecv/capSend/chanCreate` and event topics still
+  exist; S3 removes them once spawn grants make them unnecessary.
+
+---
+
+## 2026-11-14 — S4a: a wait that blocks on a set of handles
+
+- `nimixWait(items, n, ticks)` waits on up to 8 channel ends (each needs the wait right) for readable or
+  peer-closed, with a timeout in PIT ticks. Chosen shape: one call over a SET of handles, because a
+  server must wait on all its sessions at once; a per-handle wait would force polling.
+- Wake source: `channel.nim` gained a ready hook (a message queued for an end, or its peer closing);
+  the kernel hook wakes tasks whose wait set contains that end. No lost wakeup: syscalls run with
+  interrupts off, so a writer cannot slip between the check and the block on one CPU.
+- A blocked task is not scheduled. Measured on NimixOS (TCG): timeout accurate to the tick, a
+  write-wake after 799 ms of an 8 s wait, a close-wake after 400 ms.
+- **Stated limit:** a woken task runs at the next scheduling point, which is still the 10 ms PIT
+  tick. The latency budget (33 ms key-to-pixel) needs the sub-tick timer (V2c) or a software-triggered
+  switch; neither is done. Not hidden.
+- Not yet: waking from interrupts (input, devices) needs the device-port layer (K3); the old event
+  topics (scaffold) are unchanged.
+
+---
+
+## 2026-11-14 — No wall-clock assertions in host tests
+
+CI on PR #8 failed in `test-valgrind`: `test_handles` asserted a lookup takes under 100 ns, and under
+valgrind it measures about 1000-1500 ns (1.1 ns natively). The project already gates counts, not times,
+on shared CI (VISION, rendering budgets); that rule applies to unit tests too. The test now reports the
+time as information and asserts only correctness. The cost argument for the handle table is structural
+(one index, one generation compare, one kind compare, one rights test) and is measured on the real
+target by the benchmark, not by a host unit test. The new tests were also run locally under the CI's
+valgrind and ASan/UBSan configurations: clean.
+
+---
+
+## 2026-11-14 — S5b: batches on channels; the channel is the session ring; event server in view
+
+- **Batches** (`nimixChanWriteBatch/ReadBatch`, syscalls 48-49): records packed as a 16-bit length plus
+  bytes, up to 16 per call, bytes only (a message with handles goes alone; a batch read stops in front
+  of it). The whole buffer is validated before anything is queued; if the queue fills, what fits is
+  queued and the count says how many. One ready signal for the batch.
+- **`nimixKernelCalls` (50):** the kernel counts each task's syscalls, so the cost model is stated and
+  tested in numbers: from ring 3, ten messages read = 1 call, twelve written = 1 call.
+- **Decision proposed (human to agree):** a channel with batches IS the session ring. The separate ring
+  queue of the frozen buffers API (`ipc/buffers/ring.nim`) is redundant; the ownership flip at submit is
+  the handle transfer that already exists. This changes the frozen API (cross-cutting): not done, only
+  the additive batch operations are. Logged here and in `bulk_data.md`.
+- **Not built, with the reason:** the small-buffer lane. A small buffer needs its own owner, and rights
+  are enforced per 2 MB block, so two small buffers in one block cannot belong to different tasks.
+  The cure is finer granularity (per-task address spaces, S8), which is the human's decision.
+- **Event server (human, 2026-11-14):** in the long run wake-up and polling become a service: events
+  are channel messages, a subscription is a handle, programs block with `nimixWait` or poll with
+  `nimixChanStatus`, and interrupts are wait objects the server holds. ELF programs and servers use it
+  like any client. Recorded as E1 in the roadmap and in `core_design.md` M4. Nothing here builds on the
+  old string-named event topics.

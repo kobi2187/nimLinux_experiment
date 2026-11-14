@@ -136,6 +136,29 @@ type
     displaySetMode*: proc(w, h: uint32): int {.nimcall.}
       ## Switch to a listed mode (clears the screen; owner only; the boot mode returns on release).
 
+    # ── Handles and channels (docs/proposals/capabilities.md) ─────────────────
+    # A handle is an entry in the CALLING task's own table. Errors are -ord(ChResult).
+    chanPair*:     proc(req: pointer): int {.nimcall.}
+      ## New channel; both ends to the caller (badges and rights from the request struct).
+    chanWrite*:    proc(h: uint32; data: pointer; len: int; send: pointer): int {.nimcall.}
+      ## Write bytes (and up to 4 handles, which move) through a channel end.
+    chanRead*:     proc(h: uint32; buf: pointer; cap: int; info: pointer): int {.nimcall.}
+      ## Read the next message; info gets its length, the sender's badge and the handles received.
+    handleClose*:  proc(h: uint32): int {.nimcall.}
+    handleDup*:    proc(h: uint32; rights: uint32): int {.nimcall.}
+      ## Duplicate with the same or fewer rights; returns the new handle or an error.
+    chanStatus*:   proc(h: uint32): int {.nimcall.}
+      ## bit 0: readable now; bit 1: peer closed.
+    wait*:         proc(items: pointer; n: int; ticks: uint32): int {.nimcall.}
+      ## Block until one of up to 8 channel ends is readable or peer-closed, or the timeout (PIT ticks,
+      ## 0xFFFFFFFF = forever) passes. Returns how many are ready; 0 = timeout; < 0 = error.
+    chanWriteBatch*: proc(h: uint32; buf: pointer; len: int; count: int): int {.nimcall.}
+      ## `count` records (u16 length + bytes) in one call; returns how many were queued.
+    chanReadBatch*:  proc(h: uint32; buf: pointer; cap: int; info: pointer): int {.nimcall.}
+      ## The queued handle-free messages as records, in one call; returns how many.
+    kernelCalls*:    proc(): int {.nimcall.}
+      ## Syscalls the caller has made so far, including this one.
+
 var nimixAbi*: NimixAbiVTable
   ## Global ABI vtable. Set once at boot by the chosen kernel model init.
   ## Apps never call this directly — the ELF loader patches weak stubs with
