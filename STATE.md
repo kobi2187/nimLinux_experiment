@@ -1,96 +1,35 @@
 # STATE.md — Current Status
 
-## Latest (2026-11-15, session 9w): S3a done
-Spawning a program needs a process handle; a child gets only the handles listed in the call; policy is `NAME.mf` intersected with `system.pol`. Session rings retired. See DECISIONS 2026-11-15.
+Last updated: 2026-11-15 (branch `ccr-56330414-wo65nx`, synced to `master` after PR #11 merged). Earlier
+states of this file are in git history; this file holds the CURRENT state only.
 
-## Before: 2026-11-14, session 9v: S8b done
-Buffer ownership is per 4 KB page; per-task page tables split a 2 MB step only where a buffer covers it in part and merge back; `isolation` has an 8th attack (neighbour page of the victim's block). See DECISIONS 2026-11-14 S8b.
+## Repository facts (so no session rediscovers them)
+- Default branch is **`master`**; `main` is stale (14+ commits behind). Base new work on `master`.
+- Work on the session branch, push only there, PRs are drafts, never merge unless the human asks.
+- Toolchain: Nim 2.2.4 at `/opt/nimtc/nim-2.2.4/bin` (put it on PATH); QEMU 8.2.2 (TCG) + OVMF.
+- Safe make targets: `test`, `test-devices`, `test-qemu-models`, `test-structured`, `disk-add-apps`.
+  **Never bare `make`** (its default target opens an interactive QEMU).
+- Gate before any push: all four test targets green, run once and alone (AGENTS.md, VERIFY).
+- Last gate: `make test` pass; `test-devices` 39/39; `test-qemu-models` 16/16 x3; `test-structured` 47/47.
 
-Last updated: 2026-10-27 (session 9e, branch `ccr-56330414-wo65nx`)
+## Awaiting human (decisions only the human can make)
+| asked | question | my recommendation |
+|-------|----------|-------------------|
+| 2026-11-14 | S8c: language domains (checked safe Nim subset, Singularity style) for the SASOS model | keep PROPOSED; build after the contract layer, when a second isolation kind has a user |
+| 2026-11-15 | `main` is stale: fast-forward it to `master` or abandon it | fast-forward, or delete and make `master` the only branch |
+| 2026-11-15 | AGENTS.md revision (this update): new VERIFY/DIAGNOSE/CLOSE modes, size discipline, scaffolding rule | review `git diff docs/archive/AGENTS.v1-2026-11-15.md AGENTS.md` |
+| 2026-11-15 | K1 contract/IDL: how a server's API is described and how client libraries are produced | a proposal comes first (options and a pick) |
 
-## Just landed — roadmap B step 1: graphics libs + framebuffer console (session 9e)
+## Built (the foundation, by layer; details in BACKLOG status table and DECISIONS)
+- **Authority:** per-task handle tables with generations, rights that only narrow, badges, move/duplicate/
+  close; channel endpoint pairs; `spawn` guarded by a process handle; manifests + system policy.
+- **Memory isolation:** every ring-3 task on its own page tables; buffers owned per 4 KB page (move/lend/
+  share, in channel messages); all RAM mapped for the kernel only.
+- **Waiting and cost:** `Wait` on a set of channel ends; batch read/write; per-task syscall counts.
+- **Display/graphics:** virtio-gpu console, display ABI v2 (modes), raylib on NimixOS pixel-exact, input.
+- **Services still scaffolding:** ambient `chanSend`, event topics, first-present display, the shell as the
+  one ambient authority (ARCHITECTURE §0 lists scaffolding).
 
-- `gfx/` canvas + Spleen 8x16 bitmap font, `term/` VT100 subset + incremental
-  renderer, `input/` evdev keymap — pure libraries, host-tested.
-- Kernel framebuffer console: everything on serial also shows on the
-  virtio-gpu display; the shell takes keys from the QEMU window
-  (`make qemu-gui`). Verified pixel-exact against a host replay.
-- Ring-3 faults kill only the task; trap-frame register order fixed.
-
-## Just landed — QEMU integration + debugging (session 9d)
-
-- **One QEMU launcher** `tools/nimix_qemu.py` (devices, gdb, QMP, log, pcap,
-  wav) behind every test and `make qemu|qemu-gui|qemu-debug`.
-- **virtio gpu/snd/net/input verified on the host** — `make test-devices`.
-  Fixed: gpu response wait, snd spec rewrite + completion, 64-entry queues
-  stated to devices, shared PCI IRQ lines (cascade, ELCR, INTx-disable).
-- **Serial debugging**: crash report + backtrace for all CPU exceptions and
-  panics → `tools/symbolize.py`; `dmesg` klog ring; `devtest crash-*`.
-- **Native debugging**: `make test-valgrind`, `make test-asan` (clean;
-  fixed misaligned kernel stack), `make gdb-attach` with nimix-* helpers.
-
-## Earlier — "make it all work" (session 9c)
-
-- Regular apps WASM, system tools + servers ELF; `cat` (WASM) → fs_server
-  (ELF) → FAT → virtio-blk; exit/kill cleanup; all three models pass.
-
-## Verified (Nim 2.2.4, QEMU 8.2.2 TCG, OVMF)
-
-`make test` ✅ · `test-arc` ✅ · `test-valgrind` ✅ · `test-asan` ✅ ·
-`test-wasm` ✅ · `test-devices` **11/11** · `test-structured` **41/41** ·
-`test-qemu-models` **16/16 × 3 models**.
-
-## Now / Next
-
-Roadmap A–E (approved 8b): A) reality audit + virtio-gpu verify → B) rasterizer
-+ font → GUI terminal → C) input_server + app_server → D) media demo → E)
-block-on-mailbox/wake-on-deliver + dispatcher transport — network last.
-
-- [x] Phase A: virtio-gpu verified (screendump pixels) — plus snd/net/input.
-- [x] Phase B step 1: rasterizer + font + VT → framebuffer console (shell on screen, keyboard).
-- [x] Bulk-data API FROZEN (`ipc/buffers.nim`, spec docs/proposals/bulk_data.md v2); `subprojects/buffers` SPAWNED (first task: SURVEY). VISION Q6 resolved.
-- [→] buffers sub-project: B1 SURVEY ✅, B2 ownership state machine ✅, B3 arena ✅, B4 session rings ✅, B5 Stage A enforcement live ✅ (ring-3 violations fault and kill only that task; `buftest` in `make test-devices`); next SASOS/mono enforcement, ring + WASM ABI, fs_server lent buffers → enforcement → ABI/WASM.
-- [ ] SPAWN app_server on top of buffers (protocol agreed, freeze at spawn).
-- [→] Residency migrations R0–R10 (BACKLOG; ARCHITECTURE residency map): historical kernel components to their proper homes; R0 device caps unblocks the drivers.
-- [x] P0 host loopback: bridge (`bridge/`, raylib 6.2 + rlsw headless) remote pixels == direct; steady frame 19 records / 424 B; command path ≈ noise (~7%), rlsw raster dominates → damage-limited compositing first (`make test-p0`).
-- [x] V7a: RUI's counter example, unchanged, runs headless on the bridge's direct backend: adapted naylib (`tools/naylib_adapt.py`) → raylib 6.2 + rlsw; Pixie text engine behind a new RUI text-engine seam; `ruiNoGlfw` (`make test-v7`; RUI changes in `patches/rui2/`).
-- [x] V7b: RUI's counter, unchanged, through the **remote** bridge (draw calls → commands → loopback server): pixels byte-identical to direct after 3 clicks; steady frames ≤ 86 records / 1 KB (`make test-v7`).
-- [x] V3: fine clock — TSC calibrated against PIT channel 2 (`core/tsc_clock.nim`, `drivers/tsc.nim`); 100 PIT ticks = 999-1000 ms on the TSC; structured suite 47/47 (+6), 3 models 16/16. App exposure (V3b) needs a decision.
-- [x] V2: libc/libm = picolibc 1.8.12 (`vendor/picolibc`, `make test-v2`): raylib + rlsw link against it needing exactly 31 OS-layer symbols; libm ≤ 1 ULP over 7,600 samples. Next V2b (libnimix, the OS layer under it).
-- [x] V3b: the clock reaches ring 3 through a read-only time page (`core/tsc_clock.nim` TimePage, `mm/memory_windows.nim` publishTimePage, `apps/nim/nimix_time.nim`): `clocktest` measures 3 s of ticks as 2998 ms with no syscall; a write to the page faults and kills only the writer (`make test-devices` 19/19). Needs a VM with ≥ 226 MB RAM.
-- [x] V2b: **C programs run on NimixOS**: libnimix (appMain, stdio, heap = an owned buffer, time page clock, whole-file files/dirs, refusals) under picolibc; `libctest a b` passes 42 checks under QEMU (`make test-devices` 20/20); raylib + rlsw + picolibc + libnimix link with nothing unresolved. Found and fixed two real bugs: ring-3 entry stack was 8 bytes misaligned (any C `printf` faulted), and the file-read ABI could not say "buffer too small" (-2 now). Next: V5 (raylib on NimixOS).
-- [x] S2k-b1: **buffers ride in channel messages**: a ring-3 program sends a buffer handle through a channel by move, lend or share; the shell checks that a lent buffer is unusable by its lender, comes back with the borrower's reply after `nimixBufReturn`, and that a moved buffer arrives readable (`chantest`, 123 checks; `make test-devices` 37/37). The channel carries a typed foreign flight; the buffers store keeps the transfer. A write that carries buffers is checked completely before anything irreversible, so a failed send never loses a moved buffer. Two handle namespaces remain until S2k-b2.
-- [x] S8: **per-task address spaces**: every ring-3 task runs on its own page tables (the kernel mapped supervisor-only in all of them); only its own region, the arena blocks it holds and the read-only time page are user-accessible. Verified by an attack test (7 read/write attacks on a running victim's region, stack, buffer and the kernel: each killed by a page fault, victim intact, a control app works) and by recreating the old shared tables, under which the attackers read and corrupt the victim. No measurable cost: syscalls identical (about 740 ns under TCG both ways), switching between two compute tasks within noise. `make test-devices` 37/37.
-- [x] S5b (part): **batches over channels** and the **kernel-call counter**: ten queued messages are read in one kernel call and twelve written in one (`chantest`, 103 checks; the kernel counts the program's own syscalls). A channel is the session ring. The small-buffer lane waits on the address-space decision (S8). `make test-devices` 36/36.
-- [x] S4a: **`nimixWait`** (syscall 47): a task blocks on up to 8 channel ends with a timeout and is woken by a channel write or a peer close; it uses no CPU meanwhile (a 20-tick wait took 200 ms; a write ended an 8 s wait at 799 ms; a peer close woke it at 400 ms). A woken task still runs at the next 10 ms tick: finer latency needs the sub-tick timer (V2c). `make test-devices` 36/36, 81 checks in `chantest`.
-- [x] S2k-a: handles and channels are in the kernel: syscalls `nimixChanPair/Write/Read`, `nimixHandleClose/Dup`, `nimixChanStatus` (41-46) over the per-task tables; a spawner grants the child its **bootstrap handle** before it can run; a task's death closes its handles and releases what was in flight. A ring-3 program (`chantest`, 67 checks) proves badges, handle movement, forgery and foreign-handle refusal, rights, and peer-closed; `abifuzz` covers the new calls (`make test-devices` 36/36). The buffers table is not yet folded in (S2k-b).
-- [x] S1+S2 (Roadmap v2): per-task **handle tables** and **channel endpoints** as pure, kernel-compilable libraries (`ipc/handles/`): unforgeable handles (generation-checked), rights that only narrow, badges, handles that move in messages, peer-closed, in-flight release, reference-cycle leaks bounded by the sender; model-checked, mutation-checked, ~1 ns lookup (`make test`). Kernel integration (S2k) is next.
-- [x] V14: **syscall arguments are checked at the gate** (`kernel/abi/user_args.nim`): a ring-3 program can no longer make the kernel read or write kernel memory or another task's memory through any syscall; `abifuzz` passes 339 hostile and legitimate calls; two kernel-crash bugs found by it fixed (`mapAnon` assert, `sipAlloc` negative size) (`make test-devices` 35/35). Next: V6 the render server (design), V5d, V2c, V4b.
-- [x] V5e: **mouse and tablet into raylib**: every virtio-input device is driven (the driver found only the first), the launcher passes keyboard + mouse + tablet; raylib gets mouse position, buttons and wheel (`rlmouse`); a kernel panic on a negative relative move found and fixed (`make test-devices` 34/34). Next: V6 the render server.
-- [x] V5f: **display modes** (ABI v2, syscalls 39-40): a graphics program lists modes and switches to one (800x600 in the test); the screen is cleared; the boot mode and a repainted console return when it ends (`make test-devices` 30/30, test-qemu-models 16/16 x3, structured 47/47). Next: V6 the render server.
-- [x] V5c: **keyboard input into raylib**: real key events injected through QEMU's virtio keyboard move a square on the NimixOS screen, reach the program as raylib key codes and characters, and do not leak into the shell (`make test-devices` 28/28). Next: V6 the render server.
-- [x] V5b: **raylib 6.2 (rlsw) runs on NimixOS** in a ring-3 C program (`rldemo`): the QMP screendump of the virtio-gpu equals the host render of the same scene for all 256,000 pixels, with real colours asserted independently (`make test-devices` 25/25). Next: V5c keyboard input; then V6 the render server.
-- [x] V5a: **display ABI v1**: a ring-3 program presents a rectangle of an owned buffer on the virtio-gpu (`nimixDisplayInfo`/`nimixDisplayPresent`); `gfxtest` region == host pattern pixel for pixel; bad requests (kernel pointers too) refused; console steps aside and returns (`make test-devices` 23/23). Next: V5b raylib platform + demo.
-- [x] Test runner: a failing host test now fails the build (`tools/check_run.sh`); `test_syscall_table` had been failing silently since V2b.
-- [x] Kernel fix (found by CI): the kernel clobbered ring-3 xmm registers on timer ticks and new tasks inherited the previous task's FPU state; now `-mgeneral-regs-only` (0 SSE insns in all three kernels) + a default FPU image per new task; `fputest` (`make test-devices` 21/21) proves xmm0-15 + x87 survive ~8 ticks.
-- [x] V4: large memory = buffers (a server's heap is one owned arena buffer): `buftest big` creates, touches and verifies 32 MB from ring 3; budget enforced and returned (`make test-devices` 17/17). Sizing (arena, per-class budgets) deferred to measurements (V4b).
-- [→] Vertical slice raylib + RUI2 (BACKLOG V1–V13): next V7c (actor-backed background/mailbox), V4, then V5 (needs V2).
-- [x] Region capability holes fixed (any-task minting, use-after-free on owner exit, leaked caps) — tests/test_zerocopy.nim.
-- [x] User-mode CPU faults kill the task (system continues); kernel faults halt.
-- [ ] Dispatcher in the app path: apps → `dispatch` → servers (today WASM apps
-  talk to servers directly; route via dispatcher with QoS + cap-gating, M2).
-- [ ] Larger file reads for WASM apps (region caps into linear memory, or
-  chunked replies) — fs replies are ≤508 B inline today.
-- [ ] Re-verify kernel strings/seqs with the aligned heap (metadata_db bypass).
-- [→] casfs brainstorm (HANDOFF §8b): ecosystem survey, namespace question 1.
-- [ ] Phase E: block-on-mailbox replaces interim `waitForTick` + server polling.
-
-## Known sharp edges
-
-- WASM apps run in the in-kernel wasm3 interpreter (shell context); moving the
-  runtime into a userspace ELF host is the microkernel-pure follow-up.
-- All ELF apps share one address space (per-region User windows); per-app CR3
-  is VISION open question 6.
-- `cat` after a server dies waits the full 5 s event timeout.
-- Loader/spawn path not interrupt-safe (cli/sti scoped fix in testMode only).
-- nim-cps needs `--mm:arc --panics:on`; actor/dispatch tests in `make test-arc`.
+## Next in order
+K1 contract/IDL → K3 device ports (then S3b removes the ambient calls) → K2 dispatcher stage 2 →
+E1 event server → S2k-b2 (one handle table for every object) → V6 render-server slices.

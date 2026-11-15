@@ -35,15 +35,25 @@ has to be compacted away. Reuse before building; compose through clean interface
 - `STATE.md` — current status + what each completed task unblocked. Rewritten freely.
 - `DECISIONS.md` — append-only "why" log. Never edited. Boundaries, architecture
   changes, survey results, spawns, and resolved questions land here.
-- `HANDOFF.md` — one-paragraph exit note rewritten at session end.
+- `HANDOFF.md` — one-paragraph exit note rewritten at session end. It is REWRITTEN, not appended:
+  older sessions live in git history. (It grew to 460 lines once; nobody can ORIENT from that.)
+
+**Size discipline.** ORIENT must fit in a fraction of the context window, so these files stay small
+enough to read: STATE.md holds the *current* state only (a dated top line, an "Awaiting human" list,
+what is built/partial); history goes to DECISIONS or git. DECISIONS.md is append-only but is read by
+its **headings** (grep the `## ` lines) and opened on demand, never in full. BACKLOG keeps the status
+table current and moves finished rows' detail into DECISIONS.
 
 ---
 
-## Modes — state which mode you're in at the top of every turn.
+## Modes — state the mode when it CHANGES (and whenever the human could be confused about it).
 
 ### ORIENT  (session start, via `/orient`)
-Read VISION, ARCHITECTURE, BACKLOG, STATE, DECISIONS, HANDOFF in full. Then brief:
-- Vision in 2 lines; open-question count and whether any now have their signal.
+Read VISION, STATE, HANDOFF and the BACKLOG status table in full; ARCHITECTURE §0–§1 (layers and module
+tree); DECISIONS by headings only (open the entries that touch the next task). Check `git status`,
+the branch, and whether the branch's PR has merged (then sync to the default branch first). Then brief:
+- Vision in 2 lines; open-question count and whether any now have their signal; the **Awaiting human**
+  list from STATE.md (decisions only the human can make, each with the date it was asked).
 - Architecture: modules BUILT vs. PARTIAL vs. PLANNED; any seam now ready to firm up;
   any spawned sub-projects and their reported status.
 - Current position in the dependency tree; next 1–2 candidate tasks.
@@ -76,6 +86,9 @@ Default to mature, lightweight, known-good code over novel code.
    - **Build** — only when nothing fits or the surface is small enough that owning
      it is cheaper than depending. Must name what it rejected and why.
 Record the survey in DECISIONS.md: what you examined, the choice, the reasoning.
+**Proportion:** a piece under ~150 lines behind our own boundary (a bitmap allocator, a table walker)
+needs one line in the DECISIONS entry of the task ("built; nothing fit behind this interface because
+…"), not a write-up. Full surveys are for dependencies, protocols and anything someone else must live with.
 Because the lib sits behind our boundary, the dependency stays reversible — we can
 swap it later.
 
@@ -119,6 +132,43 @@ Implement (after SURVEY). On completion: update STATE.md, satisfy the done-check
 append any decision to DECISIONS.md, and if a boundary/interface/planned-connection
 moved, update ARCHITECTURE.md in the same turn. If the path turns out not to be
 clear, stop and re-ASSESS — don't push through on guesswork.
+
+**The layer ladder (how work is actually built here).** Almost every task is three layers, bottom up,
+each proven before the next is started:
+1. a **pure library** (no hardware, static arrays, usable on the host) with host tests, including a
+   property or model test where state is involved and mutation checks where a bug could hide;
+2. **kernel glue** (a module under `kernel/`) that wires it to hardware and the syscall gate;
+3. a **ring-3 or QEMU test** that attacks the property (a hostile program, a victim and attacker), not
+   just exercises it.
+Boundaries are crossed by hooks installed by the owner (so the library does not import a file system,
+a driver or a scheduler it does not need); a library that grows a heavy import is a seam in the wrong place.
+
+### VERIFY  (before anything is pushed — the gate)
+"Done" means the whole gate passed on the current head, run ONCE, alone:
+`make test` (host), `make test-devices` (QEMU, all devices), `make test-qemu-models` (all three kernel
+models), `make test-structured`; plus ASan/UBSan (and valgrind where the code is allocator-heavy) on any
+pure library touched. Rules:
+- Never run bare `make` (its default target opens an interactive QEMU and hangs); name the target.
+- One verification run at a time, with its own log directory; two overlapping runs report each other's results.
+- Tests count operations; they never assert wall-clock time (CI is orders of magnitude slower).
+- Static memory is a budget: a change that adds static memory or grows the kernel image must say what it
+  took from the low-memory budget (the 4 MB addition that once starved boot was invisible in review).
+- A red test is a hypothesis problem before it is a code problem: check what the test assumed (an API
+  returns 0 and puts the length elsewhere; a right was missing) before touching the system under test.
+- Commits are local and frequent, pushes wait for green (the stop hook's "push" reminders do not change this;
+  say so and push when the gate passes). Report outcomes as they are, including what was not run.
+
+### DIAGNOSE  (something failed or surprised)
+Reproduce first (a script that shows it in under a minute), then one hypothesis at a time with the
+smallest probe (a print in the child, a symbolized backtrace), then fix the root cause and add the test
+that would have caught it. Record anything that revealed a wrong belief in DECISIONS (the "correct the
+record" entries are among the most valuable ones).
+
+### CLOSE  (end of a unit of work or the session)
+Gate passed → STATE.md rewritten (current state, Awaiting human) → HANDOFF.md rewritten (one paragraph:
+what changed, what is next, what is blocked) → DECISIONS/ARCHITECTURE/BACKLOG already current (they
+change in the same turn as the work, never at CLOSE) → push → PR (draft) or note that it merged and sync
+the branch → tell the human what was verified, what was not, and what needs their decision.
 
 ### PARK  (OPEN questions)
 Write to VISION.md open questions with what's unresolved and the **resolving signal**
@@ -173,6 +223,16 @@ the human stays in the loop at decomposition time.
   Prefer "here's what I'd do and why; here's where I'm unsure."
 - Match taste and vision, not just literal goals. When unsure, say your pick and
   why; let them redirect.
+- **Capture principles when they are stated.** The human steers by principle ("the design dictates what
+  is possible and fast", "stubs are scaffolding, not precedent", "avoid hurting performance"). Write each
+  into VISION.md's structural principles in the turn it is said, with their wording; later choices are
+  checked against them.
+- **Record the human's answers verbatim and dated** in DECISIONS (what was asked, what they answered), and
+  clear the item from STATE's Awaiting-human list in the same turn.
+- **Scaffolding is not precedent.** What exists because something had to work first (a shell that holds
+  every right, a named channel, a 2 MB granule) is listed as scaffolding in ARCHITECTURE; never infer the
+  intended design from it. Structure-first: decide the mechanisms that fix what is possible, fast,
+  where it runs and who has authority; fill in the rest in order from the most stable to the most flexible.
 - One round of input on reversible work, then act. Sustained dialogue is reserved
   for boundaries, architecture, API decomposition, planned connections, and the
   irreversible.
@@ -194,7 +254,13 @@ the human stays in the loop at decomposition time.
 - Demand a ≤5-line summary from every sub-agent; keep raw output out of context.
 - Compact proactively at ~60% context: rewrite STATE.md + HANDOFF.md *first*, then
   compact. Disk is memory; the window is scratch.
-- On every reset, re-read this file and the six files above before acting.
+- Never push without the VERIFY gate green on the head being pushed; never merge unless the human asks;
+  PRs are drafts; push only to the session branch; never force-push.
+- Before adding a dependency, a syscall, or any static memory, check the budget it spends (ARCHITECTURE
+  lists them) and say so in the commit.
+- State facts about the repository once, in STATE.md ("Repository facts": default branch, branch
+  rules, safe make targets), so no session rediscovers them.
+- On every reset, re-read this file and the files named in ORIENT before acting.
 
 ---
 

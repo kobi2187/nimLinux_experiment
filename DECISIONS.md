@@ -2335,3 +2335,23 @@ this syscall, and the server is then ordinary user code.
 
 **Not done (S3b):** removing chanSend, event topics and the first-present display race. They are replaced by
 handles that do not exist yet (dispatcher endpoint, display/input ports).
+
+
+## 2026-11-15 — AGENTS.md revised after the first long run (backup: docs/archive/AGENTS.v1-2026-11-15.md)
+
+**Why:** the human asked what we had learned about the process. Evidence from ~60 commits of work:
+the protocol said nothing about what "done" is (a bare `make` hung on an interactive QEMU; overlapping
+background test runs reported each other's results; tests were repeatedly blamed on the kernel when their own
+assumptions were wrong; a 4 MB static addition starved boot memory unnoticed); the files it told every
+session to "read in full" had grown to ~3,700 lines (HANDOFF alone 460 lines though it is defined as one
+paragraph); repository facts (default branch `master`, safe make targets) were rediscovered more than once;
+the human's principles and answers lived only in conversation until copied.
+
+**Changed:** ORIENT reads by size class (headings for DECISIONS); modes announced on change, not every turn;
+new modes VERIFY (the gate, with its rules), DIAGNOSE and CLOSE; the layer ladder (pure library, kernel glue,
+attacking test) written down as the real EXECUTE recipe; SURVEY proportional to size; rules for capturing
+principles and answers verbatim, for scaffolding-is-not-precedent, for static-memory budgets, for push/merge
+discipline; STATE.md carries Repository facts and an Awaiting-human list; HANDOFF is rewritten, not appended.
+**Not changed:** the Hard rules' core, SPAWN, the dialogue-over-approval stance. **Open for the human:** whether
+SPAWN as a separate-project mode still earns its place (it was used once, for buffers; in-tree pure libraries
+behind frozen APIs have done the same job at lower cost).
