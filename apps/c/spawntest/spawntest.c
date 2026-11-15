@@ -26,7 +26,7 @@ static int child(void) {
     int got = -1;
     for (int i = 0; i < 400 && got < 0; i++) {
         int s = nimixChanStatus(mine);
-        if (s > 0 && (s & 1)) { got = nimixChanRead(mine, buf, sizeof buf - 1, &info); break; }
+        if (s > 0 && (s & 1)) { got = nimixChanRead(mine, buf, sizeof buf - 1, &info) == 0 ? info.n : -1; break; }
         nimixSleep(1);
     }
     chk(got > 0, "the child received the parent's message");
@@ -91,7 +91,7 @@ static int parent(void) {
     for (int i = 0; i < 600 && got < 0; i++) {
         int s = nimixChanStatus(p.h0);
         if (s < 0) break;
-        if (s & 1) { got = nimixChanRead(p.h0, buf, sizeof buf - 1, &info); break; }
+        if (s & 1) { got = nimixChanRead(p.h0, buf, sizeof buf - 1, &info) == 0 ? info.n : -1; break; }
         nimixSleep(1);
     }
     chk(got == 10 && !memcmp(buf, "child done", 10), "the child answered");
