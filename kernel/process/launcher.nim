@@ -53,7 +53,7 @@ type FileReader* = proc(path: cstring; buf: ptr byte; cap: int): int {.nimcall.}
   ## the launcher does not depend on a particular one (today FAT; later the file server).
 
 var
-  readFile*: FileReader                 ## nil until a file system is installed: nothing can be loaded
+  imageReader*: FileReader                 ## nil until a file system is installed: nothing can be loaded
   gImage: array[ImageMax, byte]       ## the file being started by a syscall (the shell has its own)
   gImageBusy: bool
   gLastSlot*: int = -1                ## the task slot and region slot of the last program started
@@ -128,7 +128,7 @@ var
 
 proc readSmall(path: cstring; buf: var array[2048, char]): int =
   ## A small text file, or -1 (missing, unreadable or too big).
-  if readFile == nil: -1 else: readFile(path, cast[ptr byte](addr buf[0]), buf.len)
+  if imageReader == nil: -1 else: imageReader(path, cast[ptr byte](addr buf[0]), buf.len)
 
 proc manifestGrants*(spawner: int; launcherH: Handle; program: cstring;
                      grants: var array[SpawnGrantMax, Grant]): int =
@@ -179,7 +179,7 @@ proc abiSpawn*(launcher: uint32; path: cstring; args: cstring; req: pointer): in
   if gImageBusy: return ErrBusy
   gImageBusy = true
   defer: gImageBusy = false
-  if readFile == nil: return ErrNotFound
-  let nbytes = readFile(path, addr gImage[0], ImageMax)
+  if imageReader == nil: return ErrNotFound
+  let nbytes = imageReader(path, addr gImage[0], ImageMax)
   if nbytes < 0: return ErrNotFound
   spawnPie(me, path, addr gImage[0], nbytes, args, grants.toOpenArray(0, int(q.n) - 1))
