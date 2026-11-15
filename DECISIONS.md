@@ -2359,3 +2359,5 @@ behind frozen APIs have done the same job at lower cost).
 **Follow-up (same day, human: "change it as you see fit, I'll see if it's an improvement"):** SPAWN now defaults to an in-tree module behind a frozen API; a separate sub-project only for a module with its own lifecycle. Added a Process log (STATE.md) with five counts so the experiment can be judged; the previous AGENTS.md stays in `docs/archive/` for reverting.
 
 **Human's standing request (2026-11-15):** questions are simple, with concrete examples, the sides weighed with pros, cons and implications. Written into AGENTS.md (Working with the human) as a five-part template.
+
+**Human's standing request (2026-11-15):** keep the whole picture in view: what is easy, what is involved, where we are lacking, where to focus, every time. Written into AGENTS.md as the STEP BACK mode (at ORIENT, CLOSE and after each task) and into STATE.md as "The picture".

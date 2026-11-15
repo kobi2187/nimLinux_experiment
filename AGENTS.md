@@ -61,6 +61,19 @@ the branch, and whether the branch's PR has merged (then sync to the default bra
 End with a routing decision — CLEAR (execute), FUZZY (resolve), OPEN (park), or
 too-big (spawn). Then wait.
 
+### STEP BACK  (at ORIENT, at CLOSE, and whenever a task finishes — before choosing the next one)
+Do not pick the next task from the list in front of you; look at the whole first. Keep `STATE.md`'s
+**The picture** section current (rewrite it, do not append), with:
+1. **Each ranked goal in VISION.md**: where it stands (strong / partial / weak) and the evidence.
+2. **Easy vs involved**: what can be done quickly with little risk (name it), what is a real design effort
+   (name it), and what is the critical path (what blocks the most).
+3. **Where we are lacking**: gaps and blind spots, especially *what no test reaches* (a feature proven on
+   one kernel model only; a mechanism no real program uses yet; scaffolding still carrying real traffic).
+4. **Focus**: the one or two things that most improve the picture, and why now.
+The aim is to avoid losing the thread: mechanisms that nothing consumes drift; easy wins left undone pile
+up; a goal that nobody touches for three sessions needs a decision. Bring the focus to the human in the
+question template when it is a choice between directions.
+
 ### ASSESS  (triage each task — fast, biased toward action)
 Sort by confidence in the *next action*, not completeness of the spec:
 - **CLEAR** — path obvious → SURVEY then EXECUTE.
