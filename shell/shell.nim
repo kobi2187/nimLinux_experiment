@@ -252,9 +252,15 @@ var gSpawnGrant*: Handle
   ## A handle of THIS (the spawner's) task to give the next spawned program as its bootstrap handle.
   ## runPieElf moves it into the child's table before the child can run (a spawn-time grant).
 
+proc fatReadFile(path: cstring; buf: ptr byte; cap: int): int {.nimcall.} =
+  if not fsMounted and not fsMount(): return -1
+  let (res, n) = fsReadInto(path, buf, cap)
+  if res != fOk: -1 else: n
+
 proc runPieElf(filename: cstring; dataBuf: ptr byte; nbytes: int; appArgs: cstring) =
   ## Start a PIE ELF as a ring-3 task (kernel/process/launcher). The shell is the one ambient
   ## authority: it holds the process right itself and grants a child only what `gSpawnGrant` names.
+  if readFile == nil: readFile = fatReadFile       # the launcher reads programs and manifests through the shell's file system
   let me = khMe()
   if gShellLauncher == NoHandle: gShellLauncher = khNewLauncher(me)
   var grants: array[SpawnGrantMax, Grant]
@@ -682,6 +688,7 @@ proc printBanner() =
 
 proc runShell*(physMgr: PhysicalMemManager) =
   klog(llInfo, "Entering shell")
+  readFile = fatReadFile                       # programs and manifests are read through this file system
   printBanner()
   var inputBuf: array[InputMax, char]
   var inputLen = 0

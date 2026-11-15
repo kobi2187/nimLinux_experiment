@@ -24,7 +24,6 @@ import ../../arch/x86_64/syscall_gate
 import ../../arch/x86_64/cpu_primitives
 import ../../mm/region_allocator
 import ../../mm/sip_heap
-import ../../fs/fatfs
 import ../../core/log
 import ../../launch/manifest
 
@@ -49,7 +48,12 @@ type
 
 static: doAssert sizeof(SpawnReq) == SpawnReqBytes
 
+type FileReader* = proc(path: cstring; buf: ptr byte; cap: int): int {.nimcall.}
+  ## Read a whole file into buf: the byte count, or -1. Installed by whoever owns the file system, so
+  ## the launcher does not depend on a particular one (today FAT; later the file server).
+
 var
+  readFile*: FileReader                 ## nil until a file system is installed: nothing can be loaded
   gImage: array[ImageMax, byte]       ## the file being started by a syscall (the shell has its own)
   gImageBusy: bool
   gLastSlot*: int = -1                ## the task slot and region slot of the last program started
@@ -124,9 +128,7 @@ var
 
 proc readSmall(path: cstring; buf: var array[2048, char]): int =
   ## A small text file, or -1 (missing, unreadable or too big).
-  if not fsMounted and not fsMount(): return -1
-  let (res, n) = fsReadInto(path, cast[ptr byte](addr buf[0]), buf.len)
-  if res != fOk: -1 else: n
+  if readFile == nil: -1 else: readFile(path, cast[ptr byte](addr buf[0]), buf.len)
 
 proc manifestGrants*(spawner: int; launcherH: Handle; program: cstring;
                      grants: var array[SpawnGrantMax, Grant]): int =
@@ -177,7 +179,7 @@ proc abiSpawn*(launcher: uint32; path: cstring; args: cstring; req: pointer): in
   if gImageBusy: return ErrBusy
   gImageBusy = true
   defer: gImageBusy = false
-  if not fsMounted and not fsMount(): return ErrNotFound
-  let (res, nbytes) = fsReadInto(path, addr gImage[0], ImageMax)
-  if res != fOk: return ErrNotFound
+  if readFile == nil: return ErrNotFound
+  let nbytes = readFile(path, addr gImage[0], ImageMax)
+  if nbytes < 0: return ErrNotFound
   spawnPie(me, path, addr gImage[0], nbytes, args, grants.toOpenArray(0, int(q.n) - 1))
