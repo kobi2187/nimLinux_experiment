@@ -71,8 +71,14 @@ current (rewritten, not appended). It has exactly three parts, short:
    frozen API touched, prior art settled), in the order I will take them. I do these without asking.
 3. **Needs direction**: the leaves that define or cross a boundary, change a frozen API, or are real
    policy; each one asks its question in the template above. Mark which of these block the most.
-The project is built semi-automatically: part 2 keeps moving without the human, part 3 is what the human
-steers. If part 2 is empty, say so and bring the most blocking part-3 question first. A goal nobody has
+4. **Results you could see next** (a short menu): outcomes the human can watch or run, each with the
+   demo ("type in a window; a second app gets none of your keys"), what it takes, and which leaves and
+   decisions it needs. **The human chooses the focus and which result they want to see first**; seeing a
+   result often sharpens the product vision, so a visible result may outrank a more "foundational" leaf.
+The project is built semi-automatically: once the human has chosen a focus, I do every leaf it needs
+that I can do alone (part 2) and bring only the decisions it needs (part 3), in the order the focus
+requires. With no focus chosen, I work the hygiene leaves of part 2 and keep the menu in front of the
+human. If part 2 is empty, say so and bring the most blocking part-3 question first. A goal nobody has
 touched for three sessions needs a decision, so name it.
 
 ### ASSESS  (triage each task — fast, biased toward action)

@@ -59,6 +59,16 @@ states of this file are in git history; this file holds the CURRENT state only.
 - **K2 dispatcher stage 2**, **R0 device capabilities** (interrupt/MMIO/DMA as handles), **V6 render server** (12 decisions open), **V8 userspace WASM host**, **S8c language domains**.
 - **`main` branch**: fast-forward or delete.
 
+**4. Results you could see next** (you choose the focus; each is a demo you can run)
+| # | what you would see | what it takes | decisions needed |
+|---|--------------------|---------------|------------------|
+| a | **Three kernels, one table**: the 39-test device suite passing on monolithic, microkernel and SASOS | leaf 1 only (hours) | none |
+| b | **Keys reach only the focused app**: a "keylogger" app started beside a game gets nothing, the game gets every key; the shared `input` topic is gone | K3 device port + E1 events + S3b for input | K3, E1 |
+| c | **The shell as an ordinary program**: `shell.elf` started by the launcher with only the rights its manifest grants; the kernel keeps a serial console | R5/R6 console server + userspace shell (needs b's patterns) | K3, K1 |
+| d | **Two windows on screen**, overlapping, each drawn by a different app, composed by a render server; a hostile client is refused | V6 slices (needs K1, K2, K3, M1, M2) | the 12 open V6 decisions, K1, K2, K3 |
+| e | **A WASM app (the RUI counter) running in a userspace host** with no WASM code in the kernel | V8 (needs K2) | V8 boundary |
+| f | **Sound through an audio server** (440 Hz tone via a session) | V10 (needs K3) | K3 |
+
 ## Next in order
 K1 contract/IDL → K3 device ports (then S3b removes the ambient calls) → K2 dispatcher stage 2 →
 E1 event server → S2k-b2 (one handle table for every object) → V6 render-server slices.

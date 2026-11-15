@@ -2361,3 +2361,5 @@ behind frozen APIs have done the same job at lower cost).
 **Human's standing request (2026-11-15):** questions are simple, with concrete examples, the sides weighed with pros, cons and implications. Written into AGENTS.md (Working with the human) as a five-part template.
 
 **Human's standing request (2026-11-15):** keep the whole picture in view: what is easy, what is involved, where we are lacking, where to focus, every time. Written into AGENTS.md as the STEP BACK mode (at ORIENT, CLOSE and after each task) and into STATE.md as "The picture".
+
+**Human's standing direction (2026-11-15):** the human decides the focus and which result they want to see first (a visible result often sharpens the product vision). STEP BACK gains a fourth part, a menu of demo-able results; once a focus is chosen I do every leaf it needs that I can do alone and bring only the decisions it needs. Written into AGENTS.md and STATE.md.
