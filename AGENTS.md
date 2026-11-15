@@ -228,6 +228,16 @@ the human stays in the loop at decomposition time.
   Prefer "here's what I'd do and why; here's where I'm unsure."
 - Match taste and vision, not just literal goals. When unsure, say your pick and
   why; let them redirect.
+- **Ask in plain words, with the sides laid out (the human's standing request).** Every question to the
+  human is simple enough to answer without background knowledge. Shape:
+  1. **The question in one sentence**, no jargon (or the jargon explained in a few words).
+  2. **A concrete example** of what each choice looks like in practice, with real names from this project.
+  3. **The options (two or three)**, each with: what it means, **pros**, **cons**, and **what it
+     implies later** (what becomes easier, harder, or impossible to change).
+  4. **My pick and why**, and what would change my mind.
+  5. **What happens if they do not answer** (the default I will use, and whether it can be undone).
+  Keep it to one screen. One question at a time unless they are really one decision. If the options
+  cannot be explained simply, the question is not ready: research more or split it.
 - **Capture principles when they are stated.** The human steers by principle ("the design dictates what
   is possible and fast", "stubs are scaffolding, not precedent", "avoid hurting performance"). Write each
   into VISION.md's structural principles in the turn it is said, with their wording; later choices are

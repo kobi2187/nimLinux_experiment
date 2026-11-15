@@ -2357,3 +2357,5 @@ SPAWN as a separate-project mode still earns its place (it was used once, for bu
 behind frozen APIs have done the same job at lower cost).
 
 **Follow-up (same day, human: "change it as you see fit, I'll see if it's an improvement"):** SPAWN now defaults to an in-tree module behind a frozen API; a separate sub-project only for a module with its own lifecycle. Added a Process log (STATE.md) with five counts so the experiment can be judged; the previous AGENTS.md stays in `docs/archive/` for reverting.
+
+**Human's standing request (2026-11-15):** questions are simple, with concrete examples, the sides weighed with pros, cons and implications. Written into AGENTS.md (Working with the human) as a five-part template.
