@@ -77,8 +77,8 @@ static int parent(void) {
     chk(nimixSpawn(launcher, "notes.txt", "x", &r) == -31, "not an executable image");
     chk(nimixChanStatus(p.h1) >= 0, "after all the refusals the end is still ours");
 
-    /* the real spawn: the child gets exactly h1, read+write only */
-    r.n = 1; r.handle[0] = p.h1; r.rights[0] = NIMIX_RIGHT_READ | NIMIX_RIGHT_WRITE;
+    /* the real spawn: the child gets exactly h1: read, write and wait (no transfer, no duplicate) */
+    r.n = 1; r.handle[0] = p.h1; r.rights[0] = NIMIX_RIGHT_READ | NIMIX_RIGHT_WRITE | NIMIX_RIGHT_WAIT;
     int pid = nimixSpawn(launcher, "spawntest.elf", "child", &r);
     chk(pid > 0, "spawn the child");
     chk(nimixChanStatus(p.h1) < 0, "the granted end moved out of our table");
