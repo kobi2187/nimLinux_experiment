@@ -10,7 +10,7 @@ states of this file are in git history; this file holds the CURRENT state only.
 - Safe make targets: `test`, `test-devices`, `test-qemu-models`, `test-structured`, `disk-add-apps`.
   **Never bare `make`** (its default target opens an interactive QEMU).
 - Gate before any push: all four test targets green, run once and alone (AGENTS.md, VERIFY).
-- Last gate: `make test` pass; `test-devices` 39/39; `test-qemu-models` 16/16 x3; `test-structured` 47/47.
+- Last gate (2026-11-15, head 26da1d0): `make test` pass; `test-devices` 39/39 on all three kernels; `test-qemu-models` 16/16 x3; `test-structured` 47/47.
 
 ## Awaiting human (decisions only the human can make)
 | asked | question | my recommendation |
@@ -36,21 +36,21 @@ states of this file are in git history; this file holds the CURRENT state only.
 | # | goal (VISION) | state | evidence / gap |
 |---|---------------|-------|----------------|
 | 1 | composable, host-testable modules | **strong** | pure libraries with host tests: handles, channels, buffers, address spaces, manifests, arena |
-| 2 | three interchangeable kernel models | **partial; unproven for the newest work** | `test-qemu-models` (16 tests) passes on all three, but the 39-test `test-devices` suite (isolation, handles, spawn, buffers) runs on the monolithic kernel only |
+| 2 | three interchangeable kernel models | **strong** (2026-11-15) | the 16-test harness AND the 39-test device suite (isolation, handles, spawn, buffers, display, input) pass on monolithic, microkernel and SASOS |
 | 3 | dispatcher as the QoS/concurrency hub | **weak** | Stage 1 exists but is in no app's path; K1 and K2 not started |
 | 4 | CPS coroutines for servers | partial | dispatcher only |
 | 5 | raylib graphics + audio | strong for direct rendering | pixel-exact on NimixOS; render server (V6) and audio server not started |
 | 6 | capabilities as the only access control | **mechanism strong, adoption weak** | handles, rights, spawn, per-task spaces tested; real traffic still uses ambient `chanSend`, event topics, first-present display; the shell holds every right |
 
 **2. Leaves I do on my own** (CLEAR: local, reversible, no frozen API, in this order)
-1. Run `test-devices` against the sasos and microkernel kernels; fix model-specific failures (closes goal-2 gap).
+1. ~~Run `test-devices` against the sasos and microkernel kernels~~ **DONE 2026-11-15: 39/39 on all three.**
 2. valgrind/ASan pass on the new libraries (launcher/manifest, addr_space, arena) and the missing ones.
 3. Guard pages below task stacks (the page-splitting code exists; local to `kspace`/`addr_space`).
 4. R9: retire the ping/dispatch kernel modules in the microkernel model.
 5. V7c: actor-backed `background`/`mailbox` behind RUI's API (threads off).
 6. V4b: measure arena sizing and per-class budgets, then set them from the numbers.
 7. V2c: sub-tick timer (S4).
-8. **Static-checking audit** (new, from the engineering principles): find `case` statements over enums that end in a catch-all `else`, bare `int`s standing for handles/sizes/addresses/states, and silent `discard`s of results that can fail; fix them or add the missing compile-time checks. Local and reversible; I take it early because every later step benefits.
+8. **Static-checking audit** (first pass DONE 2026-11-15 on the foundation code: 2 enum catch-alls made exhaustive, 4 silent discards made assertions; still to audit: bare `int`s standing for handles/sizes/addresses outside the ABI boundary, and the older drivers/shell code). Original scope: find `case` statements over enums that end in a catch-all `else`, bare `int`s standing for handles/sizes/addresses/states, and silent `discard`s of results that can fail; fix them or add the missing compile-time checks. Local and reversible; I take it early because every later step benefits.
 
 **3. Needs direction** (each will be asked in the question template; first = blocks the most)
 - **K3 device-port interface** (blocks S3b, M1/M2, V6, most R-moves): a new boundary.
@@ -63,7 +63,7 @@ states of this file are in git history; this file holds the CURRENT state only.
 **4. Results you could see next** (you choose the focus; each is a demo you can run)
 | # | what you would see | what it takes | decisions needed |
 |---|--------------------|---------------|------------------|
-| a | **Three kernels, one table**: the 39-test device suite passing on monolithic, microkernel and SASOS | leaf 1 only (hours) | none |
+| a | ~~**Three kernels, one table**~~ **DONE 2026-11-15**: 39/39 on monolithic, microkernel and SASOS | — | — |
 | b | **Keys reach only the focused app**: a "keylogger" app started beside a game gets nothing, the game gets every key; the shared `input` topic is gone | K3 device port + E1 events + S3b for input | K3, E1 |
 | c | **The shell as an ordinary program**: `shell.elf` started by the launcher with only the rights its manifest grants; the kernel keeps a serial console | R5/R6 console server + userspace shell (needs b's patterns) | K3, K1 |
 | d | **Two windows on screen**, overlapping, each drawn by a different app, composed by a render server; a hostile client is refused | V6 slices (needs K1, K2, K3, M1, M2) | the 12 open V6 decisions, K1, K2, K3 |
