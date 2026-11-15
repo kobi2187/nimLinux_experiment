@@ -50,7 +50,7 @@ proc khMe*(): int =
   ## The calling task's slot (its table), attached on first use; -1 when no task is current.
   let t = int(procTable.current)
   if t < 0 or t >= HsMaxTasks: return -1
-  discard hsAttach(gHs, t)
+  doAssert hsAttach(gHs, t) == heOk, "khMe: the current task has no handle table"
   t
 
 proc khReleasePid*(pid: uint32) =
@@ -66,7 +66,7 @@ proc khGrant*(fromTask: int; h: Handle; childSlot: int; rights: Rights): bool =
   ## The first grant to a new task lands on the bootstrap value. Call with interrupts off, between
   ## creating the task and letting it run.
   if fromTask < 0 or childSlot < 0 or childSlot >= HsMaxTasks: return false
-  discard hsAttach(gHs, childSlot)
+  doAssert hsAttach(gHs, childSlot) == heOk, "khGrant: the child's slot is not a task"
   var f: Flight
   if hsTransferOut(gHs, fromTask, h, rights, f) != heOk: return false
   var nh: Handle
@@ -244,7 +244,7 @@ proc abiHandleDup*(h: uint32; rights: uint32): int {.nimcall.} =
   of heWidens: code(crWidens)
   of heNoRight: code(crNoRight)
   of heTableFull: code(crTableFull)
-  else: code(crBadHandle)
+  of heBadTask, heBadHandle, heWrongType, heObjsFull, heBadObject: code(crBadHandle)   # no catch-all: a new HsError must be mapped here
 
 proc abiChanStatus*(h: uint32): int {.nimcall.} =
   ## bit 0: a message can be read now; bit 1: the peer has closed.

@@ -113,7 +113,7 @@ proc spawnPie*(spawner: int; name: cstring; image: ptr byte; nbytes: int; args: 
 proc khNewLauncher*(task: int): Handle =
   ## A process handle with the spawn right (and the right to hand it on) for `task`. Only trusted
   ## boot code calls this: it is where spawn authority enters the system.
-  discard hsAttach(gHs, task)
+  doAssert hsAttach(gHs, task) == heOk, "khNewLauncher: not a task slot"
   var o: ObjId
   if hsNewObject(gHs, okProcess, 0, o) != heOk: return NoHandle
   var h: Handle
