@@ -1,6 +1,9 @@
 # STATE.md — Current Status
 
-## Latest (2026-11-14, session 9v): S8b done
+## Latest (2026-11-15, session 9w): S3a done
+Spawning a program needs a process handle; a child gets only the handles listed in the call; policy is `NAME.mf` intersected with `system.pol`. Session rings retired. See DECISIONS 2026-11-15.
+
+## Before: 2026-11-14, session 9v: S8b done
 Buffer ownership is per 4 KB page; per-task page tables split a 2 MB step only where a buffer covers it in part and merge back; `isolation` has an 8th attack (neighbour page of the victim's block). See DECISIONS 2026-11-14 S8b.
 
 Last updated: 2026-10-27 (session 9e, branch `ccr-56330414-wo65nx`)

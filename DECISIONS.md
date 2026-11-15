@@ -2303,3 +2303,35 @@ the kernel image and the app regions (32 MB) shrank, the frame allocator then ha
 226 MB, which the boot map never covered, and the kernel faulted at boot in `getOrCreateTable`. Fixed in
 `initMemoryWindows`: the rest of RAM (up to the 1 GB the boot tables span) is identity-mapped,
 supervisor-only, 2 MB pages. A latent bug any kernel growth would have hit.
+
+
+## 2026-11-15 — S3a: spawn is a syscall guarded by a process handle; policy is two small files
+
+**Need:** the capability model says a program's world is what it is given and that starting programs is a
+right, not an ambient power. Until now only the in-kernel shell could start programs, and it could give a
+child one test handle.
+
+**Survey:** Zircon `process_start` (the child gets the handles passed in; no ambient namespace), seL4's
+initial-task rule, Singularity manifests (declared needs, resolved once). **Adopted all three shapes.** Built
+ourselves (small): rejected a general "launcher server" as a first step, because the mechanism it needs is
+this syscall, and the server is then ordinary user code.
+
+**Decision:**
+- `spawn(launcher, path, args, req)` (syscall 51). `launcher` is a handle to a process object with the spawn
+  right (`okProcess`/`rtSpawn`). `req` lists up to 8 handles: each is MOVED from the spawner's table, must be
+  transferable, may only be narrowed, may be listed once. All checks run before anything is created, so a
+  refusal changes nothing. The i-th handle arrives as `NIMIX_BOOTSTRAP_HANDLE + i`. Errors: -1 bad
+  handle/argument, -30 no file, -31 not loadable, -32 no region/task, -33 busy.
+- The loader moved out of the shell into `kernel/process/launcher.nim`; the shell and the syscall share it.
+  The syscall reads the image into its own 512 KB buffer (no race with the shell's).
+- Policy is data: `NAME.mf` (`grant <name>` lines, what the app asks for) and `system.pol` (`allow <name>`
+  lines, what the machine permits). The launcher grants the intersection. An invalid file grants nothing (a
+  typo can only remove authority); a missing manifest means nothing; a missing policy means nothing allowed.
+  Library `launch/manifest.nim` is pure and host-tested. Names are a closed set (spawn, dispatcher, display,
+  input, files, net); only `spawn` has an object today, the rest are reported and skipped until their
+  objects exist (K2, K3, C5).
+- The shell remains the one ambient authority (human's answer 3) and holds the root process handle; policy
+  grants a narrowed duplicate (spawn only, no further delegation).
+
+**Not done (S3b):** removing chanSend, event topics and the first-present display race. They are replaced by
+handles that do not exist yet (dispatcher endpoint, display/input ports).
