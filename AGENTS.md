@@ -105,6 +105,11 @@ Never ask what research could answer. Never make the human the bottleneck on
 reversible work.
 
 ### SPAWN  (a module big enough to be its own project)
+**Default to an in-tree module behind a frozen API** (a pure library with host tests, kernel glue, an
+attacking test): that gave the same isolation as a sub-project at far lower cost, and it is how nearly
+everything here was built. Spawn a separate sub-project only when the module has its own lifecycle that the
+parent should not hold in context (a driver stack, a port of someone else's code, work that runs in
+parallel with the parent). The rest of this section applies when you do.
 Spawn when a planned module is large, self-contained, and reachable through a
 single clean interface. This is the heart of the strategy: a tiny lib fits in
 context, so its orchestrator never fights compaction.
@@ -277,3 +282,18 @@ A task is CLEAR when, without hand-waving, you can name:
 If you can't, it's FUZZY (→ research & propose), a SPAWN (→ too big, decompose), or
 the boundary is unclear (→ dialogue). Never a reason to interrogate the human into
 the ground or to stall. Move the project forward.
+
+
+---
+
+## Process experiment (2026-11-15 revision)
+
+This revision is an experiment, judged by the human. STATE.md keeps a short **Process log**: one line per
+session with five counts, so the effect is visible rather than remembered:
+1. times a fact about the repository or toolchain was rediscovered;
+2. pushes made without the full gate (should be 0);
+3. red results that turned out to be the test's fault, not the system's;
+4. times the human had to repeat a principle or answer;
+5. size (lines) of what ORIENT had to read.
+If the counts do not fall after a few sessions, the revision failed; change or revert it
+(`docs/archive/AGENTS.v1-2026-11-15.md` is the previous version). Add a line to the log in CLOSE.

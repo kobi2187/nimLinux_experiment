@@ -17,7 +17,7 @@ states of this file are in git history; this file holds the CURRENT state only.
 |-------|----------|-------------------|
 | 2026-11-14 | S8c: language domains (checked safe Nim subset, Singularity style) for the SASOS model | keep PROPOSED; build after the contract layer, when a second isolation kind has a user |
 | 2026-11-15 | `main` is stale: fast-forward it to `master` or abandon it | fast-forward, or delete and make `master` the only branch |
-| 2026-11-15 | AGENTS.md revision (this update): new VERIFY/DIAGNOSE/CLOSE modes, size discipline, scaffolding rule | review `git diff docs/archive/AGENTS.v1-2026-11-15.md AGENTS.md` |
+| 2026-11-15 | AGENTS.md revision is an experiment: judge it from the Process log below | none needed; revert from `docs/archive/` if it does not help |
 | 2026-11-15 | K1 contract/IDL: how a server's API is described and how client libraries are produced | a proposal comes first (options and a pick) |
 
 ## Built (the foundation, by layer; details in BACKLOG status table and DECISIONS)
@@ -33,3 +33,8 @@ states of this file are in git history; this file holds the CURRENT state only.
 ## Next in order
 K1 contract/IDL → K3 device ports (then S3b removes the ambient calls) → K2 dispatcher stage 2 →
 E1 event server → S2k-b2 (one handle table for every object) → V6 render-server slices.
+
+## Process log (AGENTS.md experiment; see AGENTS.md, last section)
+| session | rediscovered facts | pushes without gate | test-fault reds | human repeats | ORIENT lines |
+|---------|-------------------|---------------------|-----------------|---------------|--------------|
+| 2026-11-15 (before the revision, S8b + S3a) | 3 (default branch, bare `make`, `-fPIE` link) | 0 | 4 | 2 | ~3,700 |

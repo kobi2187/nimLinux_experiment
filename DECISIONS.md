@@ -2355,3 +2355,5 @@ discipline; STATE.md carries Repository facts and an Awaiting-human list; HANDOF
 **Not changed:** the Hard rules' core, SPAWN, the dialogue-over-approval stance. **Open for the human:** whether
 SPAWN as a separate-project mode still earns its place (it was used once, for buffers; in-tree pure libraries
 behind frozen APIs have done the same job at lower cost).
+
+**Follow-up (same day, human: "change it as you see fit, I'll see if it's an improvement"):** SPAWN now defaults to an in-tree module behind a frozen API; a separate sub-project only for a module with its own lifecycle. Added a Process log (STATE.md) with five counts so the experiment can be judged; the previous AGENTS.md stays in `docs/archive/` for reverting.
