@@ -2218,3 +2218,120 @@ generation), and (3) hardware domains for anything outside the subset (raylib, p
 honest answer is both: a SASOS model that mixes language domains for checked Nim tasks with hardware
 domains for foreign code, and microkernel/monolithic using hardware domains. Recorded as S8c (PROPOSED).
 The structure already allows it: a task's "domain" is an abstraction over how its memory is protected.
+
+---
+
+## 2026-11-14 — S2k-b1: buffers ride in channel messages (and why not the full fold yet)
+
+**Need:** the new channels could not carry a buffer, so no bulk transfer (a file read into a lent
+buffer, a surface, a font) could use them. The old named channels could (`bufMsgSend`).
+
+**Decision:** a channel message may carry *foreign flights*: typed ids of transfers that another
+store owns. The buffers store keeps the real state (its in-flight table, budgets, lend/return); the
+channel carries the id and calls three hooks of the owner: can-deliver (a dry run), deliver, drop.
+Library: `ipc/handles/channel.nim`. Kernel: `kbufSendFlight/CancelFlight` and the three hooks in
+`kernel/buffers/kbuffers.nim`, installed by `khandles`. ABI: a send-list entry has a kind (0 = a
+handle of the caller's table, 1/2/3 = a buffer handle sent by move/lend/share); a read reports a kind
+per handle. Buffer errors are -(20 + BufError) so they never collide with the channel's.
+
+**Atomicity (found while designing it):** a buffer sent by move and then "cancelled" is gone, so a
+write that carries buffers may not fail after the first buffer left its sender. The syscall checks the
+channel, every generic handle, every buffer (`bufCanSend`), the transfer-table room and duplicates
+first, and only then performs the sends; a read that cannot deliver (no handle room, no budget) leaves
+the whole message queued (`bufCanDeliver`).
+
+**A rule I had to relax:** the "unread message belongs to its sender" rule (cycle protection) dropped a
+moved buffer when the sender exited before the receiver read, which the ring-3 test caught ("send a
+result and exit" lost the buffer). Buffers hold no queue, so they cannot form a cycle: foreign flights
+now survive their sender; the rule still applies to handles of the table.
+
+**Not done on purpose (S2k-b2):** folding the buffers table into the one handle table. It rewrites the
+frozen buffers store and ends the separate ring queue (`ring.nim`), which depend on the in-flight API;
+that is the human's pending decision. Until then two handle namespaces exist (buffer handles and
+table handles), each unforgeable and per task. The foreign-flight mechanism stays useful after the
+fold for any object whose lifecycle lives elsewhere.
+
+
+## 2026-11-14 — S8b: ownership is per 4 KB page (small buffers get their own owner)
+
+**Need:** with 2 MB ownership blocks, a 4 KB buffer cost 2 MB of budget and arena, and two tasks could
+never own neighbouring small buffers, so a small-buffer lane (cursors, messages, fonts) was impossible.
+
+**Survey:** the per-task tables of S8 already allow any granularity; Zircon/seL4 map by page and keep
+huge pages only where uniform. **Adopted that shape; built the small parts ourselves** (a bitmap
+allocator and a split/merge page-table helper are ~100 lines; no library fits behind our boundaries).
+Rejected: a 64 KB granule compromise (still needs the split work, gives only part of the benefit).
+
+**Decision:**
+- `ipc/buffers/arena.nim`: bitmap, `MaxBlocks` = 32768 granules; the kernel's granule is 4 KB.
+- `ipc/buffers/state.nim`: `accessRuns` (sorted, disjoint, one run per buffer, strongest right) replaces
+  the per-block array, which would not fit the 16 KB kernel stack at this size. `MaxBufs` 256.
+- `mm/addr_space.nim`: `spaceSetPages`. A whole 2 MB step stays one huge entry (big buffers and
+  surfaces cost no extra TLB entries); a partial step gets the space's own page table (one per arena
+  step, inside `SpaceMem`, so no allocation can fail) and is merged back when its pages are alike.
+  The kernel keeps supervisor write on every page. `SpaceMem` grew from 12 KB to ~268 KB; the pool of
+  16 spaces is ~4 MB of bss.
+- `kernel/buffers/kbuffers.nim`: applies only the runs that changed, then one TLB flush if anything
+  did; `kbufAccessible` walks the applied runs, so pointer checks are exact to the page.
+
+**Consequences:** a buffer of any size costs `ceil(size/4096)` pages of budget; the 32 MB budget is
+unchanged in bytes. Stack/guard pages for regions use the same helper later (regions stay 2 MB steps
+for now). Syscall latency is unchanged: rights are written at buffer calls and switches, only for
+changed runs.
+
+
+## 2026-11-15 — Human's answers on capabilities §6; session rings retired; all RAM mapped
+
+**Policy (human: "yes to 1, 2, 3"), as recommended in `capabilities.md` §6:**
+1. Policy lives in a per-app **manifest read by the launcher**, narrowable by a **system policy file**.
+2. Apps get a **directory scope** (private home plus shared read-only areas), not the whole disk.
+3. The **shell stays the one ambient authority** until it is a userspace program (R6); accepted and listed.
+These unblock S3.
+
+**Rings retired (human: "may retire unless we have a future use").** Survey of uses: `ipc/buffers/ring.nim`
+was used only by its own test; the frozen API held stubs that return `beNotImplemented`; bridge files
+mention it in comments. Its ideas live on in the channel: staged writes plus one kernel call are
+`ChanWriteBatch/ReadBatch`, inline payloads are channel messages, the ownership flip is a buffer in a
+message. Removed: `ring.nim`, `test_buffers_ring`, the ring stubs and `RingEnd` in the frozen API
+(`ipc/buffers.nim`, `types.nim`). **Kept on purpose:** `ipc/mpsc_ring` (a generic lock-free queue, the
+likely base for SMP and for a future shared-memory fast path) and `RingSlot` (the 256-byte message-slot
+layout). `ring.nim` stays in git history. Rejected alternative: keep it as dead code "just in case".
+S2k-b2 (fold the buffers table into the handle table) is therefore unblocked.
+
+**All RAM is mapped for the kernel.** The per-task page tables added ~4 MB of bss; the free RAM between
+the kernel image and the app regions (32 MB) shrank, the frame allocator then handed out frames above
+226 MB, which the boot map never covered, and the kernel faulted at boot in `getOrCreateTable`. Fixed in
+`initMemoryWindows`: the rest of RAM (up to the 1 GB the boot tables span) is identity-mapped,
+supervisor-only, 2 MB pages. A latent bug any kernel growth would have hit.
+
+
+## 2026-11-15 — S3a: spawn is a syscall guarded by a process handle; policy is two small files
+
+**Need:** the capability model says a program's world is what it is given and that starting programs is a
+right, not an ambient power. Until now only the in-kernel shell could start programs, and it could give a
+child one test handle.
+
+**Survey:** Zircon `process_start` (the child gets the handles passed in; no ambient namespace), seL4's
+initial-task rule, Singularity manifests (declared needs, resolved once). **Adopted all three shapes.** Built
+ourselves (small): rejected a general "launcher server" as a first step, because the mechanism it needs is
+this syscall, and the server is then ordinary user code.
+
+**Decision:**
+- `spawn(launcher, path, args, req)` (syscall 51). `launcher` is a handle to a process object with the spawn
+  right (`okProcess`/`rtSpawn`). `req` lists up to 8 handles: each is MOVED from the spawner's table, must be
+  transferable, may only be narrowed, may be listed once. All checks run before anything is created, so a
+  refusal changes nothing. The i-th handle arrives as `NIMIX_BOOTSTRAP_HANDLE + i`. Errors: -1 bad
+  handle/argument, -30 no file, -31 not loadable, -32 no region/task, -33 busy.
+- The loader moved out of the shell into `kernel/process/launcher.nim`; the shell and the syscall share it.
+  The syscall reads the image into its own 512 KB buffer (no race with the shell's).
+- Policy is data: `NAME.mf` (`grant <name>` lines, what the app asks for) and `system.pol` (`allow <name>`
+  lines, what the machine permits). The launcher grants the intersection. An invalid file grants nothing (a
+  typo can only remove authority); a missing manifest means nothing; a missing policy means nothing allowed.
+  Library `launch/manifest.nim` is pure and host-tested. Names are a closed set (spawn, dispatcher, display,
+  input, files, net); only `spawn` has an object today, the rest are reported and skipped until their
+  objects exist (K2, K3, C5).
+- The shell remains the one ambient authority (human's answer 3) and holds the root process handle; policy
+  grants a narrowed duplicate (spawn only, no further delegation).
+
+**Not done (S3b):** removing chanSend, event topics and the first-present display race. They are replaced by
+handles that do not exist yet (dispatcher endpoint, display/input ports).

@@ -124,7 +124,7 @@ nim-apps: build/apps/ping_server.elf \
 # stubs in build/nimix_abi_stub.o and finds `appMain` by name, so the image must
 # keep its symbol table (no strip).
 PICOLIBC_INSTALL = build/picolibc/install
-C_APPS = libctest fputest gfxtest rldemo rlkeys rlmouse abifuzz rlbench chantest isotest syscbench
+C_APPS = libctest fputest gfxtest rldemo rlkeys rlmouse abifuzz rlbench chantest isotest syscbench spawntest
 CC_INC := $(shell gcc -print-file-name=include)
 LIBGCC := $(shell gcc -print-libgcc-file-name)
 C_FLAGS = -O2 -Wall -Wextra -fPIC -ffreestanding -fno-stack-protector -mno-red-zone \
@@ -339,7 +339,7 @@ $(DISK):
 disk-add-apps: apps/ping/ping.wasm apps/pingpong/pingpong.wasm nim-apps c-apps wasm-apps
 	MTOOLS_SKIP_CHECK=1 mcopy -oi $(DISK) apps/ping/ping.wasm apps/pingpong/pingpong.wasm $(WASM_APPS) ::
 	MTOOLS_SKIP_CHECK=1 mcopy -oi $(DISK) $(addprefix build/apps/,$(addsuffix .elf,$(NIM_TOOLS))) build/apps/dispatch_server.elf build/apps/fs_server.elf build/apps/ping_server.elf build/apps/user_tests.elf $(addprefix build/apps/,$(addsuffix .elf,$(C_APPS))) ::
-	MTOOLS_SKIP_CHECK=1 mcopy -oi $(DISK) apps/data/notes.txt ::
+	MTOOLS_SKIP_CHECK=1 mcopy -oi $(DISK) apps/data/notes.txt apps/manifests/*.mf apps/manifests/system.pol ::
 
 # Add a single file: make disk-add FILE=myapp.wasm
 disk-add:
@@ -358,8 +358,8 @@ HOST_TESTS = \
   tests/test_klog_ring.nim \
   tests/test_buffers_api.nim \
   tests/test_buffers_state.nim \
+  tests/test_manifest.nim \
   tests/test_buffers_arena.nim \
-  tests/test_buffers_ring.nim \
   tests/test_gfx.nim \
   tests/test_term.nim \
   tests/test_keymap.nim \

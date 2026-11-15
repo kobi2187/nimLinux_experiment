@@ -15,7 +15,10 @@
 ##     reference left: reference counting alone never frees them, and a hostile task could use that to
 ##     exhaust the tables. So an unread message belongs to its SENDER: when the sender dies, the
 ##     handles riding in its unread messages are released (the bytes stay readable). A leak can
-##     therefore outlive only the task that made it, never the system.
+##     therefore outlive only the task that made it, never the system. This applies to handles of
+##     the table (a channel end can hold a queue, so cycles are possible). FOREIGN flights (buffers)
+##     survive their sender: a buffer holds no queue, cannot be part of a cycle, and "send a result
+##     and exit" must not lose it.
 ## There are no names here: a channel is reached only through a handle someone was given.
 ## Static arrays only; the sizes are tunables, not structure.
 
@@ -40,9 +43,24 @@ type
     h*: Handle
     rights*: Rights
 
+  ForeignFlight* = object
+    ## A handle of another namespace in transit (today: a buffer, kind 1). Its owner keeps the real
+    ## state (the buffers store holds the in-flight transfer); the channel only carries the id and
+    ## calls the owner's hooks at delivery and when the message is discarded.
+    kind*: uint8
+    id*: int32
+
+  ForeignGot* = tuple[kind: uint8, h: uint32]
+
+  ForeignCanDeliver* = proc(kind: uint8; id: int32; t: TaskId): bool {.nimcall.}
+  ForeignDeliver* = proc(kind: uint8; id: int32; t: TaskId; handle: var uint32): bool {.nimcall.}
+  ForeignDrop* = proc(kind: uint8; id: int32) {.nimcall.}
+
   Msg = object
     len: uint16
     nFlights: uint8
+    nForeign: uint8
+    foreign: array[ChMaxFlights, ForeignFlight]
     sender: int16               ## the task that wrote it (see "Cycles" above)
     badge: uint64
     data: array[ChMsgBytes, byte]
@@ -62,6 +80,9 @@ type ReadyHook* = proc(endIdx: int) {.nimcall.}
 
 var
   gReadyHook: ReadyHook                    ## told when an end becomes readable or its peer closes
+  gCanDeliver: ForeignCanDeliver
+  gDeliver: ForeignDeliver
+  gDrop: ForeignDrop
   gPending: array[ChMaxChans * 2, int32]   ## ends whose objects were destroyed, still to process
   gNPending: int
   gOther: DestroyCb                        ## told about destroyed objects that are not channel ends
@@ -70,6 +91,11 @@ proc chSetReadyHook*(cb: ReadyHook) =
   ## Called with an end index when a message is queued for it or its peer closes: a task blocked
   ## waiting on that end can be woken (the kernel's wait, S4).
   gReadyHook = cb
+
+proc chSetForeignHooks*(canDeliver: ForeignCanDeliver; deliver: ForeignDeliver; drop: ForeignDrop) =
+  ## The owner of a foreign handle kind (the buffers store) says how to check, complete and cancel
+  ## a delivery. Without hooks a message carrying foreign flights cannot be sent.
+  gCanDeliver = canDeliver; gDeliver = deliver; gDrop = drop
 
 proc chSetDestroyHook*(cb: DestroyCb) =
   ## Called for every destroyed object that is not a channel end (e.g. a buffer to be freed).
@@ -114,6 +140,8 @@ proc settle(s: var HandleSpace; c: var ChannelStore) =
         var d: Destroyed
         hsDropFlight(s, m.flights[k], d)
         note(d)
+      for k in 0 ..< int(m.nForeign):
+        if gDrop != nil: gDrop(m.foreign[k].kind, m.foreign[k].id)
       c.ends[i].head = (c.ends[i].head + 1) mod ChQueueDepth
       dec c.ends[i].count
     let p = int(c.ends[i].peer)
@@ -164,21 +192,9 @@ proc endOf(s: HandleSpace; t: TaskId; h: Handle; need: Rights; endIdx: var int;
   endIdx = int(hsObjPayload(s, obj))
   crOk
 
-proc chWrite*(s: var HandleSpace; c: var ChannelStore; t: TaskId; h: Handle;
-              data: openArray[byte]; send: openArray[SendHandle] = []): ChResult =
-  ## Write a message through h (needs rtWrite). Either the whole message is queued and every
-  ## listed handle has moved, or nothing has changed.
-  var i: int
-  var badge: uint64
-  var self: ObjId
-  var r = endOf(s, t, h, rtWrite, i, badge, self)
-  if r != crOk: return r
-  if data.len > ChMsgBytes: return crTooBig
-  if send.len > ChMaxFlights: return crTooManyHandles
-  let p = int(c.ends[i].peer)
-  if c.ends[p].closed: return crPeerClosed
-  if c.ends[p].count >= ChQueueDepth: return crFull
-  # validate every handle before moving any
+proc validateSends(s: HandleSpace; t: TaskId; self: ObjId; send: openArray[SendHandle]): ChResult =
+  ## Every listed handle is the sender's, may be sent, is not narrowed upward, is not the channel
+  ## end being written through, and is listed once. Changes nothing.
   for k in 0 ..< send.len:
     var o: ObjId
     var b: uint64
@@ -190,11 +206,53 @@ proc chWrite*(s: var HandleSpace; c: var ChannelStore; t: TaskId; h: Handle;
     if o == self: return crSelfTransfer                   # a channel end cannot ride its own channel
     for j in 0 ..< k:
       if send[j].h == send[k].h: return crBadHandle       # the same handle twice
+  crOk
+
+proc chWriteCheck*(s: HandleSpace; c: ChannelStore; t: TaskId; h: Handle; dataLen: int;
+                   send: openArray[SendHandle] = []; nForeign = 0): ChResult =
+  ## Would a write of dataLen bytes (carrying `send`) through h be accepted right now: handle, right,
+  ## size, peer, room, and every listed handle? Changes nothing. A caller that must do something
+  ## irreversible first (take a buffer out of the sender's hands) asks this before, so the write
+  ## that follows cannot fail for any of these reasons.
+  var i: int
+  var badge: uint64
+  var self: ObjId
+  let r = endOf(s, t, h, rtWrite, i, badge, self)
+  if r != crOk: return r
+  if dataLen < 0 or dataLen > ChMsgBytes: return crTooBig
+  if send.len + nForeign > ChMaxFlights: return crTooManyHandles
+  if nForeign > 0 and gDrop == nil: return crHasHandles
+  let p = int(c.ends[i].peer)
+  if c.ends[p].closed: return crPeerClosed
+  if c.ends[p].count >= ChQueueDepth: return crFull
+  validateSends(s, t, self, send)
+
+proc chWrite*(s: var HandleSpace; c: var ChannelStore; t: TaskId; h: Handle;
+              data: openArray[byte]; send: openArray[SendHandle] = [];
+              foreign: openArray[ForeignFlight] = []): ChResult =
+  ## Write a message through h (needs rtWrite). Either the whole message is queued and every
+  ## listed handle has moved, or nothing has changed. `foreign` flights (already taken from their
+  ## sender by their owner) ride along; on any failure the CALLER cancels them.
+  var i: int
+  var badge: uint64
+  var self: ObjId
+  var r = endOf(s, t, h, rtWrite, i, badge, self)
+  if r != crOk: return r
+  if data.len > ChMsgBytes: return crTooBig
+  if send.len + foreign.len > ChMaxFlights: return crTooManyHandles    # one message carries at most 4 handles in all
+  if foreign.len > 0 and gDrop == nil: return crHasHandles
+  let p = int(c.ends[i].peer)
+  if c.ends[p].closed: return crPeerClosed
+  if c.ends[p].count >= ChQueueDepth: return crFull
+  r = validateSends(s, t, self, send)             # validate every handle before moving any
+  if r != crOk: return r
   # commit
   let slot = (c.ends[p].head + c.ends[p].count) mod ChQueueDepth
   let m = addr c.ends[p].q[slot]
   m.len = uint16(data.len)
   m.nFlights = uint8(send.len)
+  m.nForeign = uint8(foreign.len)
+  for k in 0 ..< foreign.len: m.foreign[k] = foreign[k]
   m.sender = int16(t)
   m.badge = badge
   for k in 0 ..< data.len: m.data[k] = data[k]
@@ -207,13 +265,16 @@ proc chWrite*(s: var HandleSpace; c: var ChannelStore; t: TaskId; h: Handle;
   if gReadyHook != nil: gReadyHook(p)
   crOk
 
-proc chRead*(s: var HandleSpace; c: var ChannelStore; t: TaskId; h: Handle;
-             buf: var openArray[byte]; n: var int; badge: var uint64;
-             got: var array[ChMaxFlights, Handle]; nGot: var int): ChResult =
+proc chReadEx*(s: var HandleSpace; c: var ChannelStore; t: TaskId; h: Handle;
+               buf: var openArray[byte]; n: var int; badge: var uint64;
+               got: var array[ChMaxFlights, Handle]; nGot: var int;
+               gotF: var array[ChMaxFlights, ForeignGot]; nGotF: var int): ChResult =
   ## Read the next message from h's end (needs rtRead). Handles that rode along are installed in
-  ## t's table. Nothing is consumed if the buffer is too small (n = needed size) or the table has
-  ## no room for the handles.
-  n = 0; nGot = 0
+  ## t's table, and foreign flights (buffers) are delivered by their owner's hook into t's other
+  ## namespace. Nothing is consumed if the buffer is too small (n = needed size), the table has no
+  ## room, or the owner of a foreign flight says it cannot deliver (no room, no budget): the whole
+  ## message stays queued and a retry sees the same thing.
+  n = 0; nGot = 0; nGotF = 0
   var i: int
   var wb: uint64
   var self: ObjId
@@ -225,6 +286,8 @@ proc chRead*(s: var HandleSpace; c: var ChannelStore; t: TaskId; h: Handle;
   n = int(m.len)
   if n > buf.len: return crTooBig
   if int(m.nFlights) > hsFreeSlots(s, t): return crTableFull
+  for k in 0 ..< int(m.nForeign):
+    if gCanDeliver == nil or not gCanDeliver(m.foreign[k].kind, m.foreign[k].id, t): return crTableFull
   for k in 0 ..< n: buf[k] = m.data[k]
   badge = m.badge
   for k in 0 ..< int(m.nFlights):
@@ -233,9 +296,31 @@ proc chRead*(s: var HandleSpace; c: var ChannelStore; t: TaskId; h: Handle;
     doAssert ie == heOk, "room was checked"
     got[k] = nh
   nGot = int(m.nFlights)
+  for k in 0 ..< int(m.nForeign):
+    var hv: uint32
+    let ok = gDeliver(m.foreign[k].kind, m.foreign[k].id, t, hv)
+    doAssert ok, "delivery was checked"
+    gotF[k] = (kind: m.foreign[k].kind, h: hv)
+  nGotF = int(m.nForeign)
   c.ends[i].head = (c.ends[i].head + 1) mod ChQueueDepth
   dec c.ends[i].count
   crOk
+
+proc chRead*(s: var HandleSpace; c: var ChannelStore; t: TaskId; h: Handle;
+             buf: var openArray[byte]; n: var int; badge: var uint64;
+             got: var array[ChMaxFlights, Handle]; nGot: var int): ChResult =
+  ## chReadEx for a caller that cannot take foreign flights: such a message is left queued and
+  ## reported as crHasHandles (read it with chReadEx).
+  n = 0; nGot = 0
+  var i: int
+  var wb: uint64
+  var self: ObjId
+  let r = endOf(s, t, h, rtRead, i, wb, self)
+  if r != crOk: return r
+  if c.ends[i].count > 0 and c.ends[i].q[c.ends[i].head].nForeign > 0: return crHasHandles
+  var gotF: array[ChMaxFlights, ForeignGot]
+  var nGotF: int
+  chReadEx(s, c, t, h, buf, n, badge, got, nGot, gotF, nGotF)
 
 # ── batches: many messages, one call ─────────────────────────────────────────
 # A stream (frames, events, audio) crosses as a BATCH: records packed back to back, each
@@ -274,7 +359,7 @@ proc chWriteBatch*(s: var HandleSpace; c: var ChannelStore; t: TaskId; h: Handle
     let n = recLen(buf, starts[k])
     let slot = (c.ends[p].head + c.ends[p].count) mod ChQueueDepth
     let m = addr c.ends[p].q[slot]
-    m.len = uint16(n); m.nFlights = 0; m.sender = int16(t); m.badge = badge
+    m.len = uint16(n); m.nFlights = 0; m.nForeign = 0; m.sender = int16(t); m.badge = badge
     for b in 0 ..< n: m.data[b] = buf[starts[k] + 2 + b]
     inc c.ends[p].count
   written = take
@@ -297,7 +382,7 @@ proc chReadBatch*(s: var HandleSpace; c: var ChannelStore; t: TaskId; h: Handle;
     return (if c.ends[int(c.ends[i].peer)].closed: crPeerClosed else: crEmpty)
   while nMsgs < maxMsgs and c.ends[i].count > 0:
     let m = addr c.ends[i].q[c.ends[i].head]
-    if m.nFlights > 0:
+    if m.nFlights > 0 or m.nForeign > 0:
       if nMsgs == 0: return crHasHandles
       break
     let need = 2 + int(m.len)
@@ -363,5 +448,5 @@ proc chCloseAll*(s: var HandleSpace; c: var ChannelStore; t: TaskId) =
           var d: Destroyed
           hsDropFlight(s, m.flights[f], d)
           note(d)
-        m.nFlights = 0
+        m.nFlights = 0                              # foreign flights (buffers) stay: no cycles through them
   settle(s, c)

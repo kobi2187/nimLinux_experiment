@@ -20,6 +20,7 @@ import ../display/display_checks   # inRange
 const
   MaxCStr* = 512                   ## a name or path longer than this (or unterminated) is refused
   BufMsgHandlesBytes* = 4 + 4 * 4 + 4 * 4   ## BufMsgHandles: n + 4 handles + 4 modes (kbuffers asserts it)
+  SpawnReqBytes* = 4 + 8 * 4 + 8 * 4         ## n + 8 handles + 8 rights (kernel/process/launcher asserts it)
 
 type
   ArenaAccess* = proc(p, n: uint64; write: bool): bool {.nimcall.}
@@ -45,6 +46,7 @@ func b(nr, p, n: int; elem = 1; wr = false): ArgSpec =
   ArgSpec(nr: uint8(nr), kind: akBuf, p: uint8(p), n: uint16(n), elem: uint8(elem), wr: wr)
 func st(nr, p, size: int; optional = false; wr = false): ArgSpec =
   ArgSpec(nr: uint8(nr), kind: akStruct, p: uint8(p), n: uint16(size), optional: optional, wr: wr)
+func ss(nr, p: int): ArgSpec = ArgSpec(nr: uint8(nr), kind: akStr, p: uint8(p))
 func o(nr, p: int): ArgSpec = ArgSpec(nr: uint8(nr), kind: akOpaque, p: uint8(p))
 
 const ArgSpecs* = [
@@ -76,11 +78,12 @@ const ArgSpecs* = [
   st(38, 0, 36),                               # displayPresent(req): 9 x u32
   b(39, 0, 1, elem = 8, wr = true),
   st(41, 0, 40, wr = true),                    # chanPair(req): rights and badges in, two handles out
-  b(42, 1, 2), st(42, 3, 36, optional = true), # chanWrite(h, data, len, sendList): data read; list read
-  b(43, 1, 2, wr = true), st(43, 3, 32, optional = true, wr = true),  # chanRead(h, buf, cap, info)
+  b(42, 1, 2), st(42, 3, 52, optional = true), # chanWrite(h, data, len, sendList): data read; list read
+  b(43, 1, 2, wr = true), st(43, 3, 48, optional = true, wr = true),  # chanRead(h, buf, cap, info)
   b(47, 0, 1, elem = 8, wr = true),            # wait(items, n, ticks): n x (handle, ready)
   b(48, 1, 2),                                 # chanWriteBatch(h, buf, len, count): records read
-  b(49, 1, 2, wr = true), st(49, 3, 16, optional = true, wr = true)]  # chanReadBatch(h, buf, cap, info)                       # displayModes(out, max): max x (w, h)
+  b(49, 1, 2, wr = true), st(49, 3, 16, optional = true, wr = true),  # chanReadBatch(h, buf, cap, info)
+  ss(51, 1), ss(51, 2), st(51, 3, SpawnReqBytes)]                       # spawn(launcher, path, args, req)                       # displayModes(out, max): max x (w, h)
 
 func refusedResult*(nr: uint64): uint64 =
   ## What a refused call returns: -1, except where the syscall's failure value is 0 (those that

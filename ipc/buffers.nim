@@ -8,8 +8,8 @@
 ##
 ## The rule: mutable memory is never shared. A buffer is owned (exactly one
 ## task may access it) or sealed (immutable, any holder may read); ownership
-## changes only by move or lend. Rings are the only concurrent sharing and
-## carry descriptors or ≤ InlineMax inline bytes — never bulk data.
+## changes only by move or lend. Messages on a channel carry descriptors or
+## ≤ InlineMax inline bytes — never bulk data.
 ##
 ## STUB: every operation returns beNotImplemented until the sub-project
 ## delivers, so nothing can come to depend on unenforced semantics.
@@ -53,19 +53,7 @@ proc bufRefCheck*(r: BufRef; handles: openArray[BufHandle]): BufError =
   ## Receiver-side validation: handle present, offset + len within the buffer.
   beNotImplemented
 
-# ── session rings (data plane for streams) ───────────────────────────────────
-
-proc ringCreate*(slots: int; producer, consumer: var RingEnd): BufError =
-  ## slots: power of two. Ends are transferable like any handle.
-  beNotImplemented
-proc ringPush*(p: RingEnd; slot: RingSlot): BufError =
-  ## Library-only, no kernel call: stage one slot in the ring.
-  beNotImplemented
-proc ringSubmit*(p: RingEnd): BufError =
-  ## ONE kernel call per batch: validates every staged BufRef, flips its
-  ## ownership to the consumer, posts one mailbox wake to the consumer actor.
-  beNotImplemented
-proc ringPop*(c: RingEnd; slot: var RingSlot): BufError = beNotImplemented
+# Session rings were retired 2026-11-15: a stream runs on a channel (ipc/handles/channel, batch calls).
 
 # ── budgets (no ambient authority) ───────────────────────────────────────────
 

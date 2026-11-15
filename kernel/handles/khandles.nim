@@ -10,6 +10,8 @@
 import ../../ipc/handles/handle_table
 import ../../ipc/handles/channel
 import ../process_table
+import ../buffers/kbuffers
+import ../../ipc/buffers/types as bufTypes
 import ../../core/log
 import ../../drivers/pit
 import ../../arch/x86_64/cpu_primitives
@@ -37,6 +39,7 @@ proc khInit*() =
   hsInit(gHs)
   chInit(gCh)
   chSetReadyHook(onEndReady)
+  chSetForeignHooks(kbufForeignCanDeliver, kbufForeignDeliver, kbufForeignDrop)   # buffers ride in messages
 
 proc khCountCall*() =
   ## One more syscall by the running task (called by the gate's check for every call).
@@ -84,7 +87,7 @@ type
     h0, h1: uint32
 
   SendEnt {.packed.} = object
-    h, rights: uint32
+    h, rights, kind: uint32            ## kind 0: a handle of this table; 1/2/3: a BUFFER handle sent by move/lend/share
 
   SendListReq {.packed.} = object
     n: uint32
@@ -95,6 +98,7 @@ type
     nGot: uint32
     badge: uint64
     got: array[ChMaxFlights, uint32]
+    kind: array[ChMaxFlights, uint32]  ## 0: a handle of this table; 1: a buffer handle
 
 template code(r: ChResult): int = -ord(r)
 
@@ -117,32 +121,72 @@ proc abiChanPair*(req: pointer): int {.nimcall.} =
   0
 
 proc abiChanWrite*(h: uint32; data: pointer; len: int; send: pointer): int {.nimcall.} =
+  ## Write a message, optionally carrying up to 4 handles in all: handles of this task's table
+  ## (kind 0) and buffer handles (kind 1/2/3 = move/lend/share). Everything that can fail is checked
+  ## BEFORE anything irreversible happens (a buffer sent by move and then lost to a later failure
+  ## would be gone), so the write either happens completely or changes nothing.
   let t = khMe()
   if t < 0: return code(crBadTask)
   if len < 0 or len > ChMsgBytes: return code(crTooBig)
   var sl: array[ChMaxFlights, SendHandle]
-  var n = 0
+  var bh, bk: array[ChMaxFlights, uint32]
+  var nG, nB = 0
   if send != nil:
     let q = cast[ptr SendListReq](send)[]
     if q.n > uint32(ChMaxFlights): return code(crTooManyHandles)
-    n = int(q.n)
-    for i in 0 ..< n: sl[i] = SendHandle(h: Handle(q.ent[i].h), rights: Rights(q.ent[i].rights))
+    for i in 0 ..< int(q.n):
+      if q.ent[i].kind == 0:
+        sl[nG] = SendHandle(h: Handle(q.ent[i].h), rights: Rights(q.ent[i].rights)); inc nG
+      elif q.ent[i].kind <= 3:
+        bh[nB] = q.ent[i].h; bk[nB] = q.ent[i].kind; inc nB
+      else: return code(crBadHandle)
   let bytes = cast[ptr UncheckedArray[byte]](data)
-  code(chWrite(gHs, gCh, t, Handle(h), toOpenArray(bytes, 0, len - 1), toOpenArray(sl, 0, n - 1)))
+  let hh = Handle(h)
+  # 1. check everything, change nothing
+  let chk = chWriteCheck(gHs, gCh, t, hh, len, toOpenArray(sl, 0, nG - 1), nB)
+  if chk != crOk: return code(chk)
+  if nB > 0:
+    if kbufFlightRoom() < nB: return -(20 + ord(bufTypes.beRingFull))
+    for i in 0 ..< nB:
+      let e = kbufCanSend(bh[i], bk[i])
+      if e != 0: return e
+      for j in 0 ..< i:
+        if bh[j] == bh[i]: return -(20 + ord(bufTypes.beBadHandle))        # the same buffer handle twice
+  # 2. the irreversible part: it cannot fail now (one CPU, syscalls run with interrupts off)
+  var ff: array[ChMaxFlights, ForeignFlight]
+  for i in 0 ..< nB:
+    var id: int32
+    let e = kbufSendFlight(bh[i], bk[i], id)
+    if e != 0:
+      for j in 0 ..< i: kbufCancelFlight(ff[j].id)
+      return e
+    ff[i] = ForeignFlight(kind: 1, id: id)
+  let r = chWrite(gHs, gCh, t, hh, toOpenArray(bytes, 0, len - 1), toOpenArray(sl, 0, nG - 1),
+                  toOpenArray(ff, 0, nB - 1))
+  if r != crOk:
+    for i in 0 ..< nB: kbufCancelFlight(ff[i].id)
+  code(r)
 
 proc abiChanRead*(h: uint32; buf: pointer; cap: int; info: pointer): int {.nimcall.} =
   let t = khMe()
   if t < 0: return code(crBadTask)
   if cap < 0: return code(crTooBig)
   let bytes = cast[ptr UncheckedArray[byte]](buf)
-  var n, nGot: int
+  var n, nGot, nGotF: int
   var badge: uint64
   var got: array[ChMaxFlights, Handle]
-  let r = chRead(gHs, gCh, t, Handle(h), toOpenArray(bytes, 0, cap - 1), n, badge, got, nGot)
+  var gotF: array[ChMaxFlights, ForeignGot]
+  let r = chReadEx(gHs, gCh, t, Handle(h), toOpenArray(bytes, 0, cap - 1), n, badge, got, nGot,
+                   gotF, nGotF)
   if info != nil:
     let o = cast[ptr ChanInfo](info)
-    o.n = int32(n); o.nGot = uint32(nGot); o.badge = badge
+    o.n = int32(n); o.badge = badge
+    o.nGot = uint32(nGot + nGotF)
+    for i in 0 ..< ChMaxFlights: o.got[i] = 0; o.kind[i] = 0
     for i in 0 ..< nGot: o.got[i] = uint32(got[i])
+    for i in 0 ..< nGotF:
+      o.got[nGot + i] = gotF[i].h
+      o.kind[nGot + i] = uint32(gotF[i].kind)
   code(r)
 
 type BatchInfo {.packed.} = object

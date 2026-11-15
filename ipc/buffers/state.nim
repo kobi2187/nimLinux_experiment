@@ -17,7 +17,7 @@ import arena
 export arena
 
 const
-  MaxBufs*     = 64      ## Stage A: one per 2 MB arena block at most
+  MaxBufs*     = 256     ## live buffers (a small buffer takes one 4 KB page)
   MaxTasks*    = 32
   MaxHandles*  = 32      ## per task
   MaxInFlight* = 64      ## handles inside undelivered messages
@@ -259,6 +259,19 @@ proc applySend(s: var BufStore; t: TaskId; slot: int; mode: TransferMode) =
     inc s.bufs[b].refs
   of tmTransit: discard
 
+proc bufCanSend*(s: BufStore; t: TaskId; h: BufHandle; mode: TransferMode): BufError =
+  ## Would bufSend of h in this mode succeed (handle, right, state)? Changes nothing. A caller that
+  ## sends several buffers in one message checks all of them first, because a send that is later
+  ## cancelled is not undone for a move (the buffer is lost).
+  let slot = s.lookup(t, h)
+  if slot < 0: return beBadHandle
+  s.sendCheck(s.tasks[t].handles[slot], t, mode)
+
+proc bufFlightRoom*(s: BufStore): int =
+  ## How many more transfers can be in flight at once.
+  for f in s.flights:
+    if not f.used: inc result
+
 proc bufSend*(s: var BufStore; t: TaskId; h: BufHandle; mode: TransferMode;
               flight: var InFlightId): BufError =
   ## Put handle h into a message. Like Zircon, the handle leaves the sender
@@ -313,6 +326,18 @@ proc bufDeliver*(s: var BufStore; flight: InFlightId; t: TaskId; asTransit: bool
        s.budgetLeft(t) < s.cost(f.buf): return beNoBudget
     h = s.settle(f, t)
   s.flights[flight].used = false              # its reference is now h's
+  beOk
+
+proc bufCanDeliver*(s: BufStore; flight: InFlightId; t: TaskId): BufError =
+  ## Would bufDeliver (not as transit) to task t succeed right now? The same checks, changing
+  ## nothing: a receiver that reads a message with a buffer in it must find out BEFORE it takes
+  ## anything, so a refused delivery leaves the whole message queued.
+  if flight notin 0 ..< MaxInFlight or not s.flights[flight].used: return beBadHandle
+  if t notin 0 ..< MaxTasks or not s.tasks[t].attached: return beBadHandle
+  if not s.hasFreeHandle(t): return beTooManyHandles
+  let f = s.flights[flight]
+  if f.mode == tmMove and s.bufs[f.buf].state == bsOwned and
+     s.budgetLeft(t) < s.cost(f.buf): return beNoBudget
   beOk
 
 proc dropFlightRef(s: var BufStore; b: int; mode: TransferMode) =
@@ -458,16 +483,31 @@ proc handleAt*(s: BufStore; t: TaskId; slot: int): BufHandle =
 proc isAttached*(s: BufStore; t: TaskId): bool =
   t in 0 ..< MaxTasks and s.tasks[t].attached
 
-proc blockAccess*(s: BufStore; t: TaskId; acc: var array[MaxBlocks, Access]) =
-  ## Per arena block, the access task t has right now — what the enforcement
-  ## layer turns into page rights at switch-in.
-  for i in 0 ..< MaxBlocks: acc[i] = acNone
-  if not s.isAttached(t): return
+type
+  AccessRun* = object
+    ## A stretch of arena granules and what one task may do with it.
+    first*, count*: int
+    acc*: Access
+
+proc accessRuns*(s: BufStore; t: TaskId; runs: var array[MaxHandles, AccessRun]): int =
+  ## The arena memory task t can access right now, as runs sorted by position (one per buffer, the
+  ## strongest right over all of t's handles to it); returns how many. What the enforcement layer
+  ## turns into page rights. Distinct buffers never overlap, so the runs are disjoint.
+  if not s.isAttached(t): return 0
   for slot in 0 ..< MaxHandles:
     let e = s.tasks[t].handles[slot]
     if not e.used: continue
     let a = s.access(t, encode(slot, e.gen))
     if a == acNone: continue
     let r = s.bufs[e.buf].run
-    for b in r.first ..< r.first + r.count:
-      if a > acc[b]: acc[b] = a
+    var k = 0
+    while k < result and runs[k].first != r.first: inc k
+    if k < result:
+      if a > runs[k].acc: runs[k].acc = a
+      continue
+    # insert keeping the order by position
+    var at = result
+    while at > 0 and runs[at - 1].first > r.first:
+      runs[at] = runs[at - 1]; dec at
+    runs[at] = AccessRun(first: r.first, count: r.count, acc: a)
+    inc result

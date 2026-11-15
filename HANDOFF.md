@@ -4,6 +4,24 @@ Last updated: 2026-10-27 (session 9e, branch `ccr-56330414-wo65nx`, cloud contai
 
 
 
+## Session 9w — S3a: spawn authority
+
+Rings retired; `spawn` syscall (51) with a process handle; `kernel/process/launcher.nim`; `launch/manifest.nim`; `spawntest`. **Next in order:** K1 contract/IDL, K3 device ports (then S3b removes the ambient calls), K2 dispatcher stage 2, E1 event server, S2k-b2 (fold the buffers table into the handle table).
+
+## Session 9v — S8b: page-granular buffer ownership
+
+Arena bitmap (4 KB pages), `accessRuns`, `spaceSetPages` (split/merge), run-diff apply and exact
+pointer checks in `kbuffers`, isolation attack 8. **Next in order:** S3 (spawn + launcher policy), K1
+contract/IDL, K2 dispatcher stage 2, K3 device ports, E1 event server; S2k-b2 waits on the ring decision.
+
+## Session 9u — S2k-b1: buffers in channel messages
+
+Foreign flights in `channel.nim` (hooks: can-deliver, deliver, drop), `bufCanDeliver/bufCanSend/
+bufFlightRoom` in the store, `kbufSendFlight` & co in `kbuffers`, send list entries carry a kind
+(0 handle, 1/2/3 buffer move/lend/share), info reports a kind per received handle. Branch restarted
+from `master` (the default branch; `main` is stale). **Next in order:** S8b (4 KB granularity), S3,
+the contract/dispatcher/device-port layer; S2k-b2 waits on the ring decision.
+
 ## Session 9t — S8 done properly
 
 Per-task page tables (`mm/addr_space.nim` pure + `kernel/space/kspace.nim` pool/switch), spaces created

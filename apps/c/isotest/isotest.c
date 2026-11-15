@@ -6,6 +6,8 @@
  *   isotest own               positive control: touches its OWN region and buffer (must work)
  *   isotest read  <addr>      tries to READ another address   (must fault: the kernel kills this app)
  *   isotest write <addr>      tries to WRITE another address  (must fault)
+ *   isotest neighbor <addr>   owns a 4 KB buffer of its own right next to the victim's (the same 2 MB
+ *                             block), proves it can use it, then reads the victim's page (must fault)
  * An attacker that survives its attack prints "isotest: LEAK ...": the test fails on that line. */
 #include <stdint.h>
 #include <stdio.h>
@@ -54,6 +56,19 @@ int main(int argc, char **argv) {
             *target = 0xBADBADBADull;
             printf("isotest: LEAK wrote\n");
         }
+        return 3;
+    }
+    if (argc >= 3 && !strcmp(argv[1], "neighbor")) {
+        volatile uint64_t *target = (volatile uint64_t *)(uintptr_t)strtoull(argv[2], NULL, 16);
+        int h = nimixBufCreate(4096);
+        volatile uint64_t *buf = h > 0 ? (volatile uint64_t *)nimixBufMap((unsigned)h) : NULL;
+        if (!buf) { printf("isotest: neighbor could not get a buffer\n"); return 2; }
+        *buf = 77;
+        printf("isotest: neighbor owns %p (%s), victim page %p\n", (void *)buf,
+               *buf == 77 ? "usable" : "NOT usable",
+               (void *)target);
+        uint64_t v = *target;
+        printf("isotest: LEAK read %llx\n", (unsigned long long)v);
         return 3;
     }
     printf("isotest: bad arguments\n");

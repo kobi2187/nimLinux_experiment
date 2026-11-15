@@ -158,6 +158,10 @@ type
       ## The queued handle-free messages as records, in one call; returns how many.
     kernelCalls*:    proc(): int {.nimcall.}
       ## Syscalls the caller has made so far, including this one.
+    spawn*:          proc(launcher: uint32; path: cstring; args: cstring; req: pointer): int {.nimcall.}
+      ## Start the program at `path` with the handles listed in `req` (moved from the caller's table;
+      ## the i-th arrives as the bootstrap handle + i). Needs a process handle with the spawn right.
+      ## Returns the new pid, or a negative error.
 
 var nimixAbi*: NimixAbiVTable
   ## Global ABI vtable. Set once at boot by the chosen kernel model init.

@@ -1,0 +1,3 @@
+# spawntest: starts a child of its own
+grant spawn
+grant display   # asked for, but the system does not allow it

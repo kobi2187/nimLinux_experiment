@@ -113,9 +113,15 @@ typedef struct {
     unsigned long long badge0, badge1;              /* what the OTHER side sees through h0 / h1 */
     NimixHandle h0, h1;                             /* out */
 } NimixChanPair;
-typedef struct { NimixHandle handle; unsigned rights; } NimixSendEnt;
+/* kind 0: a handle of your own table (it moves). kind 1/2/3: a BUFFER handle, sent by MOVE (the
+ * receiver owns it; you do not), LEND (the receiver borrows it, you get it back when it returns it or
+ * exits; you cannot use it meanwhile) or SHARE (a sealed buffer, read-only). At most 4 handles of any
+ * kind per message. Buffer errors are -20 - BufError (-23 no such handle, -24 no right, -25 not the
+ * owner, -29 transfer table full); the receiver reads a buffer's handle from info.got[i] with
+ * info.kind[i] == 1 and uses it with nimixBufMap / nimixBufReturn / nimixBufClose. */
+typedef struct { NimixHandle handle; unsigned rights; unsigned kind; } NimixSendEnt;
 typedef struct { unsigned n; NimixSendEnt ent[4]; } NimixSendList;
-typedef struct { int n; unsigned nGot; unsigned long long badge; NimixHandle got[4]; } NimixChanInfo;
+typedef struct { int n; unsigned nGot; unsigned long long badge; NimixHandle got[4]; unsigned kind[4]; } NimixChanInfo;
 
 int nimixChanPair(NimixChanPair* req);
 int nimixChanWrite(NimixHandle h, const void* data, int len, const NimixSendList* send);
@@ -145,3 +151,13 @@ int nimixChanReadBatch(NimixHandle h, void* records, int cap, NimixBatchInfo* in
 /* How many syscalls this task has made so far, including this one: the number the cost model
  * ("about one kernel call per frame") is stated in. */
 int nimixKernelCalls(void);
+
+/* spawn: start the program at `path` (a PIE ELF on the disk) with exactly the handles listed in `req`.
+ * `launcher` is a process handle with the spawn right; without one the call fails with -1. Each listed
+ * handle is MOVED out of the caller's table (it must be transferable; `rights` may only narrow it) and
+ * the i-th arrives in the child as NIMIX_BOOTSTRAP_HANDLE + i. The child has nothing else.
+ * Returns the child's pid, or -1 bad handle/argument, -30 no such file, -31 not loadable, -32 out of
+ * regions or tasks, -33 busy. */
+#define NIMIX_SPAWN_MAX 8
+typedef struct { unsigned n; unsigned handle[NIMIX_SPAWN_MAX]; unsigned rights[NIMIX_SPAWN_MAX]; } NimixSpawnReq;
+int nimixSpawn(NimixHandle launcher, const char* path, const char* args, const NimixSpawnReq* req);

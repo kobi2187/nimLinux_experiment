@@ -59,8 +59,6 @@ type
     seq*:    uint64              ## producer sequence (orders batches)
     data*:   array[RingSlotSize - 16, byte]   ## inline bytes or a BufRef
 
-  RingEnd* = distinct uint32     ## a producer or consumer end (a handle)
-
   BufEnforcer* = object
     ## Per-kernel-model enforcement hook (the oskit seam): the shared state
     ## machine calls these; SASOS installs no-ops (the type system enforces),
@@ -69,6 +67,5 @@ type
     onRevoke*: proc(pid: uint32; blockIdx: int) {.nimcall.}
 
 proc `==`*(a, b: BufHandle): bool {.borrow.}
-proc `==`*(a, b: RingEnd): bool {.borrow.}
 const NoHandle* = BufHandle(0)
 

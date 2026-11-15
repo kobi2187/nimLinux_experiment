@@ -4,7 +4,7 @@
 `ipc/buffers.nim`: types `BufHandle, BufRights, BufState, TransferMode,
 BufError, BufRef(12 B), MsgHandle, RingSlot(256 B), RingEnd, BufEnforcer`;
 procs `bufCreate/Map/Unmap/Size/State/Seal/Return/Close`, `msgSend/msgRecv`,
-`bufRefCheck`, `ringCreate/Push/Submit/Pop`, `budgetAvailable`,
+`bufRefCheck`, `budgetAvailable`,
 `installEnforcer`. Layouts pinned by the parent's `tests/test_buffers_api.nim`.
 Today it is a stub returning `beNotImplemented`.
 
@@ -12,7 +12,7 @@ Today it is a stub returning `beNotImplemented`.
 - `state`    [BUILT `ipc/buffers/state.nim`] pure ownership state machine: buffers, per-task handle
   tables, lends, seals, refcounts, budgets. Host-testable; the heart.
 - `arena`    [BUILT `ipc/buffers/arena.nim`] Stage A: 128 MB arena of 2 MB blocks (allocation, budget charge).
-- `ring`     [BUILT `ipc/buffers/ring.nim`] session rings over `ipc/mpsc_ring` semantics; staging,
+- `ring`     [RETIRED 2026-11-15; was `ipc/buffers/ring.nim`] session rings over `ipc/mpsc_ring` semantics; staging,
   `ringSubmit` validation, mailbox wake.
 - `enforce/` [PLANNED] `BufEnforcer` per model: `sasos` (no-op + owned `Buf`
   type with `=copy` error), `mono` (table), `micro` (PDE rights per block at

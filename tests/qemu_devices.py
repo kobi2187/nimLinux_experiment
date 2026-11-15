@@ -767,7 +767,9 @@ def test_channels(tmp, iso, bios) -> list:
             bad = [l for l in out.splitlines() if "FAIL" in l]
             assert not bad, "failures:\n" + "\n".join(bad)[:800]
             for want in ("chan-kernel: ping badge=77 ok", "chan-kernel: handle received and used ok",
-                         "chan-kernel: burst of 12 in order ok", "chan-kernel: peer closed after exit ok",
+                         "chan-kernel: burst of 12 in order ok", "chan-kernel: lent buffer not usable by the lender ok",
+                         "chan-kernel: lend returned with the child's reply ok", "chan-kernel: buffer moved to us ok",
+                         "chan-kernel: peer closed after exit ok",
                          "chan-kernel: ok", "chantest: ok"):
                 assert want in out, f"missing '{want}': {out[-500:]}"
             m = re.search(r"chantest: (\d+) checks, (\d+) failed", out)
@@ -775,6 +777,48 @@ def test_channels(tmp, iso, bios) -> list:
         except Exception as e:                 # noqa: BLE001
             results.append(("chan-handles", False, str(e)))
         assert "NimixOS" in g.run("version"), "shell dead after chantest"
+    finally:
+        g.close()
+    return results
+
+
+def test_spawn(tmp, iso, bios) -> list:
+    """S3: spawn authority. The launcher reads the program's manifest and the system policy and gives
+    it the intersection (spawntest asks for spawn and display; the policy allows spawn): one process
+    handle. That program spawns a child with exactly one channel end, and every way of cheating the
+    grant list (forged, widened, duplicated, non-transferable, too many, no process handle) is refused.
+    The child holds only that end: it cannot spawn and no other handle value works. A program with no
+    manifest (isotest) is granted nothing."""
+    results = []
+    g = boot(tmp, iso=iso, bios=bios, devices=("blk",))
+    try:
+        try:
+            mark = len(g.out)
+            g.type("spawntest parent")
+            ok = g.wait("spawntest: parent ok", 60, mark) or g.wait("spawntest: parent FAILED", 1, mark)
+            g.wait("spawntest: child ok", 20, mark)
+            time.sleep(1.0)
+            out = g.text(mark)
+            assert "KERNEL PANIC" not in out, "the kernel died: " + out[-600:]
+            fails = [l for l in out.splitlines() if "spawntest: FAIL" in l]
+            assert not fails, "\n".join(fails)
+            assert ok and "spawntest: parent ok" in out, "the parent did not finish: " + out[-700:]
+            assert "spawntest: child ok" in out, "the child did not finish: " + out[-700:]
+            assert "launcher: spawntest.elf grants: spawn" in out and "display" not in \
+                out.split("launcher: spawntest.elf grants:")[1].split("\n")[0], \
+                "the policy did not narrow the manifest: " + out[-700:]
+            results.append(("spawn-authority", True, "forged/widened/duplicated/non-transferable grants refused; child holds exactly one end and cannot spawn"))
+        except Exception as e:                 # noqa: BLE001
+            results.append(("spawn-authority", False, str(e)))
+        try:
+            mark = len(g.out)
+            g.type("isotest own")
+            assert g.wait("isotest: own region and buffer ok", 30, mark), g.text(mark)[-400:]
+            assert "launcher: isotest.elf grants: none" in g.text(mark), "a program with no manifest was granted something: " + g.text(mark)[-500:]
+            results.append(("spawn-no-manifest", True, "no manifest, no grants"))
+        except Exception as e:                 # noqa: BLE001
+            results.append(("spawn-no-manifest", False, str(e)))
+        assert "NimixOS" in g.run("version"), "shell dead after spawntest"
     finally:
         g.close()
     return results
@@ -803,11 +847,12 @@ def test_isolation(tmp, iso, bios) -> list:
             assert done, "isotest did not finish: " + out[-700:]
             assert "isotest: own region and buffer ok" in out, "the control app could not use its own memory"
             contained = out.count(" contained")
-            assert contained == 7, f"{contained} of 7 attacks contained: " + out[-900:]
+            assert contained == 8, f"{contained} of 8 attacks contained: " + out[-900:]
+            assert "isotest: neighbor owns" in out and "(usable)" in out, "the neighbour never owned its own page: " + out[-900:]
             killed = out.count("=== killed pid")
-            assert killed >= 7, f"only {killed} attackers were killed by the hardware"
+            assert killed >= 8, f"only {killed} attackers were killed by the hardware"
             assert "victim: intact" in out, "the victim's secrets were not confirmed intact"
-            results.append(("isolation", True, f"{contained} attacks (read/write region, stack, buffer, kernel) each killed by a page fault; victim intact; control ok"))
+            results.append(("isolation", True, f"{contained} attacks (read/write region, stack, buffer, kernel) each killed by a page fault, incl. a neighbour owning the next page of the victim's 2 MB block; victim intact; control ok"))
         except Exception as e:                 # noqa: BLE001
             results.append(("isolation", False, str(e)))
         assert "NimixOS" in g.run("version"), "shell dead after isotest"
@@ -870,6 +915,7 @@ def main():
             results += test_abi_hostile(tmp, a.iso, a.bios)
             results += test_channels(tmp, a.iso, a.bios)
             results += test_isolation(tmp, a.iso, a.bios)
+            results += test_spawn(tmp, a.iso, a.bios)
             results += test_crashes(tmp, a.iso, a.bios, a.kernel)
     for name, ok, msg in results:
         print(f"{'PASS' if ok else 'FAIL'}: {name:12} {msg}")

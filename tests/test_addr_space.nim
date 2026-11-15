@@ -105,6 +105,83 @@ proc testIsolation() =
   assert not acc(0, regionVa(3)).user
   echo "PASS: spaces reach only their own windows; grants never leak into another space or the master"
 
+proc pageVa(b: int; page: int): uint64 = blockVa(b) + uint64(page) * 4096
+
+proc testPages() =
+  initMaster()
+  assert spaceBuild(sp(0), rp()) and spaceBuild(sp(1), rp())
+  assert spaceGrantWindow(sp(0), regionVa(0), RegionSize, true)
+  # a victim's page and an attacker's page share one 2 MB block
+  assert spaceSetPages(sp(0), pageVa(4, 10), 4096, user = true, writable = true)    # task 0 owns page 10
+  assert spaceSetPages(sp(1), pageVa(4, 11), 4096, user = true, writable = true)    # task 1 owns page 11
+  assert acc(0, pageVa(4, 10)).user and acc(0, pageVa(4, 10)).writable
+  assert not acc(0, pageVa(4, 11)).user, "the neighbouring page is not task 0's"
+  assert not acc(1, pageVa(4, 10)).user, "and task 0's page is not task 1's"
+  assert acc(1, pageVa(4, 11)).user
+  for pg in [0, 9, 12, 511]:
+    let a = acc(0, pageVa(4, pg))
+    assert a.present and not a.user, "every other page of the block is present for the kernel, closed to ring 3"
+  # the block was split: its PD entry points at a page table, and the page entries are exactly these
+  let idx = int(blockVa(4) div HugePage)
+  assert (spaces[0].pd[idx] and PteHuge) == 0
+  let pt = addr spaces[0].pts[idx - ArenaPdLo]
+  var userPages = 0
+  for i in 0 ..< 512:
+    assert (pt[i] and AddrMask) == blockVa(4) + uint64(i) * 4096, "identity kept"
+    assert (pt[i] and PtePresent) != 0 and (pt[i] and PteWritable) != 0 or i == 10, "kernel keeps write"
+    if (pt[i] and PteUser) != 0: inc userPages
+  assert userPages == 1, "exactly one user page in the table"
+  # read-only for the user, writable for the kernel's sake only when no user has it
+  assert spaceSetPages(sp(0), pageVa(4, 10), 4096, user = true, writable = false)
+  assert acc(0, pageVa(4, 10)).user and not acc(0, pageVa(4, 10)).writable
+  # a range over many pages and across the block edge into the next block
+  assert spaceSetPages(sp(0), pageVa(5, 500), 24 * 4096, user = true, writable = true)   # pages 500..511 of block 5, 0..11 of block 6
+  for pg in 500 ..< 512: assert acc(0, pageVa(5, pg)).user
+  for pg in 0 ..< 12: assert acc(0, pageVa(6, pg)).user
+  assert not acc(0, pageVa(5, 499)).user and not acc(0, pageVa(6, 12)).user, "the range ends exactly"
+  # a whole block stays a single huge entry (big buffers cost nothing extra)
+  assert spaceSetPages(sp(0), blockVa(8), HugePage, user = true, writable = true)
+  assert (spaces[0].pd[int(blockVa(8) div HugePage)] and PteHuge) != 0
+  assert acc(0, pageVa(8, 0)).user and acc(0, pageVa(8, 511)).user
+  assert spaceSetPages(sp(0), pageVa(8, 5), 4096, user = false, writable = false), "carve a page out of a whole block"
+  assert not acc(0, pageVa(8, 5)).user and acc(0, pageVa(8, 4)).user and acc(0, pageVa(8, 6)).user
+  # closing the last open page merges the step back into one closed huge entry
+  assert spaceSetPages(sp(1), pageVa(4, 11), 4096, user = false, writable = false)
+  assert (spaces[1].pd[idx] and PteHuge) != 0 and (spaces[1].pd[idx] and PteUser) == 0, "merged back, closed"
+  assert acc(1, pageVa(4, 11)).present and not acc(1, pageVa(4, 11)).user
+  # restoring a split block to all-alike pages also merges (carve then refill)
+  assert spaceSetPages(sp(0), pageVa(8, 5), 4096, user = true, writable = true)
+  assert (spaces[0].pd[int(blockVa(8) div HugePage)] and PteHuge) != 0, "all pages alike again: one huge entry"
+  # outside the arena, unaligned or empty: refused, nothing changes
+  assert not spaceSetPages(sp(0), ArenaBase - 4096, 4096, true, true)
+  assert not spaceSetPages(sp(0), ArenaBase + uint64(ArenaSize), 4096, true, true)
+  assert not spaceSetPages(sp(0), ArenaBase + 1, 4096, true, true)
+  assert not spaceSetPages(sp(0), ArenaBase, 0, true, true)
+  # the master and other spaces never moved
+  assert (master.pd[idx] and PteHuge) != 0 and (master.pd[idx] and PteUser) == 0
+  assert not acc(1, pageVa(5, 500)).user and not acc(1, pageVa(8, 0)).user
+  # exhaustive: for a random sequence of page grants, a model says who can reach what
+  var model: array[2, array[3 * 512, int]]     # 0 none, 1 ro, 2 rw, over blocks 20..22
+  var seed = 12345'u32
+  proc rnd(): uint32 =
+    seed = seed * 1664525'u32 + 1013904223'u32
+    seed shr 8
+  for step in 0 ..< 3000:
+    let who = int(rnd() mod 2)
+    let first = int(rnd() mod 1536)
+    let n = 1 + int(rnd() mod uint32(min(700, 1536 - first)))
+    let mode = int(rnd() mod 3)
+    assert spaceSetPages(sp(who), blockVa(20) + uint64(first) * 4096, uint64(n) * 4096, mode != 0, mode == 2)
+    for i in first ..< first + n: model[who][i] = mode
+    if step mod 50 == 0:
+      for w in 0 ..< 2:
+        for i in 0 ..< 1536:
+          let a = acc(w, blockVa(20) + uint64(i) * 4096)
+          assert a.present
+          assert a.user == (model[w][i] != 0) and (model[w][i] == 0 or a.writable == (model[w][i] == 2)),
+            "space " & $w & " page " & $i & " disagrees with the model"
+  echo "PASS: ownership is page-granular: neighbouring pages of one 2 MB block belong to different spaces; whole blocks stay huge; split/merge keep the model"
+
 proc testSync() =
   initMaster()
   assert spaceBuild(sp(0), rp()) and spaceBuild(sp(1), rp())
@@ -132,4 +209,5 @@ when isMainModule:
   testBuild()
   testIsolation()
   testSync()
+  testPages()
   echo "All address space tests passed."
