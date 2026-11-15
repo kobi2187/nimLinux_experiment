@@ -9,6 +9,7 @@ import nimix_abi_impl
 import ../buffers/kbuffers
 import ../display/display
 import ../handles/khandles
+import ../process/launcher
 
 proc wireSharedAbi*(av: var NimixAbiVTable) =
   ## Wire all shared ABI procs into av.
@@ -65,3 +66,4 @@ proc wireSharedAbi*(av: var NimixAbiVTable) =
   av.chanWriteBatch = abiChanWriteBatch
   av.chanReadBatch  = abiChanReadBatch
   av.kernelCalls    = abiKernelCalls
+  av.spawn          = abiSpawn

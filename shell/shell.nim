@@ -37,6 +37,7 @@ import ../ipc/handles/channel
 import ../kernel/handles/khandles
 import ../kernel/buffers/kbuffers
 import ../kernel/space/kspace
+import ../kernel/process/launcher
 
 const
   ShellPrompt = "nimixos> "
@@ -240,62 +241,38 @@ proc cmdRun(filename: cstring) =
   if r != wasmOk:
     kprint("WASM execution failed\n")
 
-proc buildAbiPatches(): array[NimixSyscallCount, AbiPatch] =
-  ## Build the ABI patch table — every syscall's weak stub name mapped to its
-  ## NimixSyscall ordinal, from the single NimixSyscallSymbol table. The ELF
-  ## loader overwrites stubs with `movabs rax, <nr>; syscall`. (A hand-kept
-  ## list here once covered 20 of 28 calls: nimixSleep/Yield silently no-op'd.)
-  for sc in NimixSyscall:
-    result[ord(sc)] = AbiPatch(name: NimixSyscallSymbol[sc], nr: ord(sc).uint64)
-
 var gLastSpawnSlot*: int = -1
   ## The process slot and region slot of the program runPieElf started last (for the shell's tests).
 var gLastSpawnRegion*: int = -1
+
+var gShellLauncher: Handle
+  ## The shell's process handle (it is the one ambient authority); policy duplicates it for apps.
 
 var gSpawnGrant*: Handle
   ## A handle of THIS (the spawner's) task to give the next spawned program as its bootstrap handle.
   ## runPieElf moves it into the child's table before the child can run (a spawn-time grant).
 
 proc runPieElf(filename: cstring; dataBuf: ptr byte; nbytes: int; appArgs: cstring) =
-  ## Load and run a PIE (ET_DYN) ELF. Allocates a region, patches ABI stubs,
-  ## runs appMain, then frees the region.
-  let slot = regionAlloc(RegionSize)
-  if not regionValid(slot):
-    kprint("No free region slots\n"); return
-  let base = regionBase(slot)
-  klogInt(llInfo, "ELF PIE: region base=0x", int64(base))
-
-  var patches = buildAbiPatches()
-  let loaded = elfLoadPie(dataBuf, nbytes, base,
-                          cast[ptr UncheckedArray[AbiPatch]](addr patches[0]),
-                          patches.len)
-  if loaded.err != elfOk:
-    kprint("PIE ELF load failed\n"); regionFree(slot); return
-  if loaded.appMain == 0:
-    kprint("appMain not found in PIE ELF\n"); regionFree(slot); return
-
-  # Initialise the SIP heap for this region slot, placing bump after the ELF.
-  sipHeapInit(int(slot))
-  if loaded.loadEnd > 0:
-    sipHeapSetBump(int(slot), loaded.loadEnd)
-
-  # User stack: top 64 KB of the 4 MB region (above ELF + heap).
-  let userStackTop = base + RegionSize - 16
-  setAppArgs(int(slot), appArgs)
-  let cr3 = ksCreate(int(slot))                      # its own page tables: only its own region is user-accessible
-  if cr3 == 0:
-    kprint("No address space for the app\n"); regionFree(slot); return
-  # The grant must land before the child can run: no preemption between creating it and granting.
-  let irqState = disableInterrupts()
-  let procSlot = procSpawnRing3(filename, loaded.appMain, userStackTop, int32(slot), cr3)
-  if procSlot >= 0 and gSpawnGrant != NoHandle:
-    if khGrant(khMe(), gSpawnGrant, procSlot, rtChannelDefault): gSpawnGrant = NoHandle
-  restoreInterrupts(irqState)
-  if procSlot < 0:
-    ksDestroy(int(slot))
-    kprint("procSpawnRing3 failed\n"); regionFree(slot); return
-  gLastSpawnSlot = procSlot
-  gLastSpawnRegion = int(slot)
+  ## Start a PIE ELF as a ring-3 task (kernel/process/launcher). The shell is the one ambient
+  ## authority: it holds the process right itself and grants a child only what `gSpawnGrant` names.
+  let me = khMe()
+  if gShellLauncher == NoHandle: gShellLauncher = khNewLauncher(me)
+  var grants: array[SpawnGrantMax, Grant]
+  var nGrants = 0
+  if gSpawnGrant != NoHandle:                   # the shell's own test hook: one explicit grant, first
+    grants[0] = Grant(h: gSpawnGrant, rights: rtChannelDefault); nGrants = 1
+  var fromPolicy: array[SpawnGrantMax, Grant]
+  let nPol = manifestGrants(me, gShellLauncher, filename, fromPolicy)
+  for i in 0 ..< nPol:
+    grants[nGrants] = fromPolicy[i]; inc nGrants
+  let pid = spawnPie(me, filename, dataBuf, nbytes, appArgs, grants.toOpenArray(0, nGrants - 1))
+  if pid > 0 and gSpawnGrant != NoHandle: gSpawnGrant = NoHandle
+  if pid < 0:
+    var d: Destroyed                            # the policy duplicates never reached a child: release them
+    for i in 0 ..< nPol: discard hsClose(gHs, me, fromPolicy[i].h, d)
+    kprint("spawn failed\n"); return
+  gLastSpawnSlot = gLastSlot
+  gLastSpawnRegion = gLastRegion
   kprint("App spawned in ring 3\n")
   # Shell returns immediately; app runs in parallel via the preemptive scheduler.
   # Region and task slot are freed by abiExit when the app calls nimixExit().

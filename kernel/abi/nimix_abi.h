@@ -151,3 +151,13 @@ int nimixChanReadBatch(NimixHandle h, void* records, int cap, NimixBatchInfo* in
 /* How many syscalls this task has made so far, including this one: the number the cost model
  * ("about one kernel call per frame") is stated in. */
 int nimixKernelCalls(void);
+
+/* spawn: start the program at `path` (a PIE ELF on the disk) with exactly the handles listed in `req`.
+ * `launcher` is a process handle with the spawn right; without one the call fails with -1. Each listed
+ * handle is MOVED out of the caller's table (it must be transferable; `rights` may only narrow it) and
+ * the i-th arrives in the child as NIMIX_BOOTSTRAP_HANDLE + i. The child has nothing else.
+ * Returns the child's pid, or -1 bad handle/argument, -30 no such file, -31 not loadable, -32 out of
+ * regions or tasks, -33 busy. */
+#define NIMIX_SPAWN_MAX 8
+typedef struct { unsigned n; unsigned handle[NIMIX_SPAWN_MAX]; unsigned rights[NIMIX_SPAWN_MAX]; } NimixSpawnReq;
+int nimixSpawn(NimixHandle launcher, const char* path, const char* args, const NimixSpawnReq* req);
