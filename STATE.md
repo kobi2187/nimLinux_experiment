@@ -32,32 +32,32 @@ states of this file are in git history; this file holds the CURRENT state only.
 
 ## The picture (rewritten at every STEP BACK; 2026-11-15)
 
-**Ranked goals (VISION) — where they stand**
-| # | goal | state | evidence / gap |
-|---|------|-------|----------------|
-| 1 | composable, host-testable modules | **strong** | pure libraries with host tests for handles, channels, buffers, address spaces, manifests, arena |
-| 2 | three interchangeable kernel models | **partial, and unproven for the newest work** | `test-qemu-models` runs 16 tests on all three, but the 39-test `test-devices` suite (isolation, handles, spawn, buffers) runs on the monolithic kernel only |
-| 3 | dispatcher as the QoS/concurrency hub | **weak** | Stage 1 actor loop exists but is not in any app's path; K1 (contract) and K2 (stage 2) not started |
-| 4 | CPS coroutines for servers | partial | dispatcher only; no second user yet |
-| 5 | raylib/naylib graphics + audio | strong for direct rendering | raylib is pixel-exact on NimixOS; the render server (V6) and audio server not started |
-| 6 | capabilities as the only access control | **mechanism strong, adoption weak** | handles, rights, spawn authority, per-task address spaces all tested; but real traffic still uses ambient `chanSend`, event topics, first-present display, and the shell holds every right |
+**1. Where we stand**
+| # | goal (VISION) | state | evidence / gap |
+|---|---------------|-------|----------------|
+| 1 | composable, host-testable modules | **strong** | pure libraries with host tests: handles, channels, buffers, address spaces, manifests, arena |
+| 2 | three interchangeable kernel models | **partial; unproven for the newest work** | `test-qemu-models` (16 tests) passes on all three, but the 39-test `test-devices` suite (isolation, handles, spawn, buffers) runs on the monolithic kernel only |
+| 3 | dispatcher as the QoS/concurrency hub | **weak** | Stage 1 exists but is in no app's path; K1 and K2 not started |
+| 4 | CPS coroutines for servers | partial | dispatcher only |
+| 5 | raylib graphics + audio | strong for direct rendering | pixel-exact on NimixOS; render server (V6) and audio server not started |
+| 6 | capabilities as the only access control | **mechanism strong, adoption weak** | handles, rights, spawn, per-task spaces tested; real traffic still uses ambient `chanSend`, event topics, first-present display; the shell holds every right |
 
-**Easy (small, low risk)**
-- run the device suite against the other two kernel models (closes the goal-2 blind spot)
-- `main` branch cleanup; valgrind pass on the new libraries; guard pages for task stacks (the page-splitting code already exists)
-- R9 retire the ping/dispatch kernel modules in the microkernel model; V7c actor-backed `background`; V4b measure the arena sizing; V2c sub-tick timer
+**2. Leaves I do on my own** (CLEAR: local, reversible, no frozen API, in this order)
+1. Run `test-devices` against the sasos and microkernel kernels; fix model-specific failures (closes goal-2 gap).
+2. valgrind/ASan pass on the new libraries (launcher/manifest, addr_space, arena) and the missing ones.
+3. Guard pages below task stacks (the page-splitting code exists; local to `kspace`/`addr_space`).
+4. R9: retire the ping/dispatch kernel modules in the microkernel model.
+5. V7c: actor-backed `background`/`mailbox` behind RUI's API (threads off).
+6. V4b: measure arena sizing and per-class budgets, then set them from the numbers.
+7. V2c: sub-tick timer (S4).
 
-**Medium (a day or two of focused work each)**
-- K3 device-port interface; E1 event server; S2k-b2 one handle table for every object; S3b remove the ambient calls (needs K3)
-
-**Involved (real design, several steps)**
-- K1 contract/IDL (a frozen API every server and SDK depends on); K2 dispatcher stage 2; R0 device-capability mechanisms (interrupts, MMIO, DMA as handles; the gate for moving every driver out of the kernel); V6 render server (7 slices); V8 userspace WASM host; S8c language domains
-
-**Critical path:** K3 (device ports) unblocks S3b, M1/M2, V6 and most R-migrations; K1 unblocks K2 and every server's client library. R0 gates the driver moves.
-
-**Where we are lacking:** the service layer. The foundation (authority, memory isolation, waiting, spawning) is largely done and tested, but only by tests that attack it. No real program uses it yet, and the old scaffolding still carries all real traffic. Mechanisms nothing consumes drift from what consumers will need.
-
-**Focus:** (1) the quick check that the newest work holds on all three kernel models; (2) one thin vertical slice through the new mechanisms with a real consumer: the **input path** (device port, then event channel, then the app), which also removes the `input` topic keylogging hole. It exercises K3 and E1 end to end at small scale before K1 freezes anything.
+**3. Needs direction** (each will be asked in the question template; first = blocks the most)
+- **K3 device-port interface** (blocks S3b, M1/M2, V6, most R-moves): a new boundary.
+- **K1 contract/IDL** (blocks K2 and every server's client library): a frozen API.
+- **E1 event server**: how a subscription is a handle; a new subsystem boundary.
+- **S2k-b2** fold the buffers table into the handle table: changes the frozen buffers API (logged in both projects).
+- **K2 dispatcher stage 2**, **R0 device capabilities** (interrupt/MMIO/DMA as handles), **V6 render server** (12 decisions open), **V8 userspace WASM host**, **S8c language domains**.
+- **`main` branch**: fast-forward or delete.
 
 ## Next in order
 K1 contract/IDL → K3 device ports (then S3b removes the ambient calls) → K2 dispatcher stage 2 →
