@@ -50,6 +50,7 @@ states of this file are in git history; this file holds the CURRENT state only.
 5. V7c: actor-backed `background`/`mailbox` behind RUI's API (threads off).
 6. V4b: measure arena sizing and per-class budgets, then set them from the numbers.
 7. V2c: sub-tick timer (S4).
+8. **Static-checking audit** (new, from the engineering principles): find `case` statements over enums that end in a catch-all `else`, bare `int`s standing for handles/sizes/addresses/states, and silent `discard`s of results that can fail; fix them or add the missing compile-time checks. Local and reversible; I take it early because every later step benefits.
 
 **3. Needs direction** (each will be asked in the question template; first = blocks the most)
 - **K3 device-port interface** (blocks S3b, M1/M2, V6, most R-moves): a new boundary.
@@ -74,6 +75,6 @@ K1 contract/IDL → K3 device ports (then S3b removes the ambient calls) → K2 
 E1 event server → S2k-b2 (one handle table for every object) → V6 render-server slices.
 
 ## Process log (AGENTS.md experiment; see AGENTS.md, last section)
-| session | rediscovered facts | pushes without gate | test-fault reds | human repeats | ORIENT lines |
-|---------|-------------------|---------------------|-----------------|---------------|--------------|
-| 2026-11-15 (before the revision, S8b + S3a) | 3 (default branch, bare `make`, `-fPIE` link) | 0 | 4 | 2 | ~3,700 |
+| session | rediscovered facts | pushes without gate | test-fault reds | human repeats | ORIENT lines | runtime-only bugs a static check could catch |
+|---------|-------------------|---------------------|-----------------|---------------|--------------|------|
+| 2026-11-15 (before the revision, S8b + S3a) | 3 (default branch, bare `make`, `-fPIE` link) | 0 | 4 | 2 | ~3,700 | 3 (free RAM starved by static growth; channel-read return convention; right missing on a handle) |

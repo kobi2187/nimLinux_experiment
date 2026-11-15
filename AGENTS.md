@@ -202,6 +202,33 @@ resolves these — revisit only when the signal arrives.
 
 ---
 
+## How we build: by design, not by vigilance  (human, 2026-11-15; full wording in VISION.md)
+
+The aim is code that is hard to get wrong and quick to debug. These are rules, not tastes; a review
+(including my own before committing) checks them:
+1. **Make illegal states unrepresentable.** A state is an `enum` or a variant object, not an integer plus a
+   convention; a handle, an index, a size and an address are distinct types, not bare `int`s; a set of
+   options is a `set[Enum]`, not a bitmask by hand. A magic number is allowed only at the C/ABI boundary,
+   in one place, with a type on the Nim side of it.
+2. **Exhaustive `case`.** A `case` over an enum has one branch per value and **no catch-all `else`**, so
+   adding a value is a compile error everywhere it matters. `else` is for open-ended values (integers,
+   strings) and says why.
+3. **Static checks first.** Layouts and sizes are `static: doAssert`; a table that must cover an enum is
+   built or checked at compile time (the syscall table test is the model); prefer a compile error to a
+   test, a test to a runtime assert, a runtime assert to a comment.
+4. **Invariants live in one named place.** Each stateful library has a `checkInvariants` that says in words
+   what was violated; property tests call it after every step. Assertions state the broken rule
+   ("two tasks can access an owned buffer"), not "assertion failed".
+5. **Failures are loud and local.** No silently ignored results (`discard` of a result that can fail needs a
+   reason in a comment); an unimplemented path **refuses visibly** (returns a not-implemented error or
+   panics), it never pretends to succeed. A crash report names the function, the registers and the
+   backtrace; a bug found by hand-tracing means a missing assertion: add it with the fix.
+6. **Breadth first, leaves later.** Design the whole at the level of mechanisms and typed interfaces, with
+   the leaves stubbed to refuse loudly, then fill leaves one at a time; each stage ends with its tests green
+   so the next stage stands on known ground. Do not perfect a leaf before its neighbours exist.
+7. **A bug found at runtime is a question to ask the type system.** After fixing it, ask "what static
+   check or assertion would have caught this?" and add it if it is cheap; count it in the Process log.
+
 ## Architecture as a living map
 
 `ARCHITECTURE.md` carries four sections, all kept current:
@@ -324,6 +351,7 @@ session with five counts, so the effect is visible rather than remembered:
 2. pushes made without the full gate (should be 0);
 3. red results that turned out to be the test's fault, not the system's;
 4. times the human had to repeat a principle or answer;
-5. size (lines) of what ORIENT had to read.
+5. size (lines) of what ORIENT had to read;
+6. bugs found only at runtime that a type, an exhaustive `case` or an assertion could have caught.
 If the counts do not fall after a few sessions, the revision failed; change or revert it
 (`docs/archive/AGENTS.v1-2026-11-15.md` is the previous version). Add a line to the log in CLOSE.

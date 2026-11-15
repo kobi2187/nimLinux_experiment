@@ -94,6 +94,20 @@ without changing it. Details: `docs/proposals/core_design.md`, `capabilities.md`
   channels used without tokens, direct display/file syscalls, the kernel-resident shell). They are
   marked SCAFFOLD in ARCHITECTURE.md and must never be used as a model for a later decision.
 
+## Engineering principles (human, 2026-11-15)
+
+- **Correct by design, not by vigilance.** Prefer features that work *by construction* over features
+  that work because every edge case was handled by hand. The compiler should tell us when we forgot a
+  case (an exhaustive `case` over an enum, with no catch-all `else`), when we mixed two kinds of thing
+  (distinct types), when a layout drifted (`static` asserts). More static checking, more assertions, so we
+  can iterate and grow with confidence and not worry about latent bugs or about entering weird code states.
+- **Easy to maintain, fast to debug.** A bug should show where and when it happens: invariants checked in
+  one named place, assertions that name what was violated, crash reports with symbolized backtraces,
+  deterministic tests that reproduce. Quick pinpointing is a feature we design for.
+- **Breadth-first.** The full vision is designed properly up front (mechanisms, typed interfaces, who has
+  authority); the details, which are the leaves of the tree, wait or come at a later stage. Every stage is
+  backed by unit tests, so we advance gradually and know the parts work.
+
 ## Rendering model and budgets (human, 2026-11-03)
 
 **The server-provides model is the default and the experiment; exceptions are
