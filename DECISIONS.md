@@ -2278,3 +2278,28 @@ Rejected: a 64 KB granule compromise (still needs the split work, gives only par
 unchanged in bytes. Stack/guard pages for regions use the same helper later (regions stay 2 MB steps
 for now). Syscall latency is unchanged: rights are written at buffer calls and switches, only for
 changed runs.
+
+
+## 2026-11-15 — Human's answers on capabilities §6; session rings retired; all RAM mapped
+
+**Policy (human: "yes to 1, 2, 3"), as recommended in `capabilities.md` §6:**
+1. Policy lives in a per-app **manifest read by the launcher**, narrowable by a **system policy file**.
+2. Apps get a **directory scope** (private home plus shared read-only areas), not the whole disk.
+3. The **shell stays the one ambient authority** until it is a userspace program (R6); accepted and listed.
+These unblock S3.
+
+**Rings retired (human: "may retire unless we have a future use").** Survey of uses: `ipc/buffers/ring.nim`
+was used only by its own test; the frozen API held stubs that return `beNotImplemented`; bridge files
+mention it in comments. Its ideas live on in the channel: staged writes plus one kernel call are
+`ChanWriteBatch/ReadBatch`, inline payloads are channel messages, the ownership flip is a buffer in a
+message. Removed: `ring.nim`, `test_buffers_ring`, the ring stubs and `RingEnd` in the frozen API
+(`ipc/buffers.nim`, `types.nim`). **Kept on purpose:** `ipc/mpsc_ring` (a generic lock-free queue, the
+likely base for SMP and for a future shared-memory fast path) and `RingSlot` (the 256-byte message-slot
+layout). `ring.nim` stays in git history. Rejected alternative: keep it as dead code "just in case".
+S2k-b2 (fold the buffers table into the handle table) is therefore unblocked.
+
+**All RAM is mapped for the kernel.** The per-task page tables added ~4 MB of bss; the free RAM between
+the kernel image and the app regions (32 MB) shrank, the frame allocator then handed out frames above
+226 MB, which the boot map never covered, and the kernel faulted at boot in `getOrCreateTable`. Fixed in
+`initMemoryWindows`: the rest of RAM (up to the 1 GB the boot tables span) is identity-mapped,
+supervisor-only, 2 MB pages. A latent bug any kernel growth would have hit.

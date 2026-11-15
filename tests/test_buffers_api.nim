@@ -26,5 +26,3 @@ suite "buffers API (frozen layouts)":
     var h: BufHandle
     check bufCreate(4096, h) == beNotImplemented
     check h == NoHandle
-    var p, c: RingEnd
-    check ringCreate(8, p, c) == beNotImplemented

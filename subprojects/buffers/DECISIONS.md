@@ -110,3 +110,10 @@ userspace. QEMU-verified with `buftest` (ok, pass, and faults on move, seal
 and lend). Still open: SASOS (B6) and monolithic kernel-side (B7)
 enforcement, ring syscalls, WASM host calls (B8 rest), and the
 `ipc/buffers.nim` facade, which stays a stub for in-kernel callers until B6/B7.
+
+
+## 2026-11-15 — Session rings removed from the API (logged in both projects)
+
+Human-approved retirement. `ring.nim`, its test, `ringCreate/Push/Submit/Pop` and `RingEnd` are gone from
+the frozen API; streams use channels (batch calls, inline messages, buffers in messages). `RingSlot`
+(message-slot layout) and `ipc/mpsc_ring` stay. Parent DECISIONS 2026-11-15.

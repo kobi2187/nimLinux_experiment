@@ -357,3 +357,4 @@ monolithic model may still link a server in.
 | 2026-11-10 | Input follows display ownership: while a program owns the display the console drains and ignores key events; raylib gets keys from the `input` topic via a generated platform change | DECISIONS.md §V5c |
 | 2026-11-14 | Stability layers L1-L5 and a named list of scaffolding; structure-first order of work (Roadmap v2); capabilities model (per-task handle tables, badges, static separation) and core design proposed; dispatcher stands as the convergence point; placement of device modules is a measured choice | DECISIONS.md §Roadmap v2 |
 | 2026-11-14 | S8b: buffer ownership per 4 KB page (arena bitmap, run lists, per-space page tables split/merge in `mm/addr_space`); `SpaceMem` ~268 KB | DECISIONS.md §S8b |
+| 2026-11-15 | Session rings retired from the buffers API (channels carry streams); all RAM identity-mapped for the kernel | DECISIONS.md §2026-11-15 |
