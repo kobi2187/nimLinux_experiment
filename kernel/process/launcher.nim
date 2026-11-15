@@ -155,7 +155,7 @@ proc manifestGrants*(spawner: int; launcherH: Handle; program: cstring;
     if g notin eff: continue
     if g == gnSpawn:
       var dup: Handle
-      if launcherH != NoHandle and hsDuplicate(gHs, spawner, launcherH, rtSpawn, dup) == heOk:
+      if launcherH != NoHandle and hsDuplicate(gHs, spawner, launcherH, rtSpawn or rtTransfer, dup) == heOk:   # transferable here, narrowed to spawn for the child
         grants[result] = Grant(h: dup, rights: rtSpawn); inc result
         line.add " " & nameOf(g)
     else:
