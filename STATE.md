@@ -18,7 +18,7 @@ states of this file are in git history; this file holds the CURRENT state only.
 | 2026-11-14 | S8c: language domains (checked safe Nim subset, Singularity style) for the SASOS model | keep PROPOSED; build after the contract layer, when a second isolation kind has a user |
 | 2026-11-15 | `main` is stale: fast-forward it to `master` or abandon it | fast-forward, or delete and make `master` the only branch |
 | 2026-11-15 | AGENTS.md revision is an experiment: judge it from the Process log below | none needed; revert from `docs/archive/` if it does not help |
-| 2026-11-16 | **K3 device-port interface**: what a port is (typed operations over a channel, two transports), which device goes first (input) | option 2 in the question: typed port, same code as message or direct call, input first |
+| 2026-11-17 | **Users**: should access be app manifest ∩ system policy ∩ a user policy computed once at launch (Option A, no kernel users), or Unix-style users, or runtime double checks | Option A; add no user concept until the machine has more than one human |
 | 2026-11-15 | K1 contract/IDL: how a server's API is described and how client libraries are produced | a proposal comes first (options and a pick) |
 
 ## Built (the foundation, by layer; details in BACKLOG status table and DECISIONS)

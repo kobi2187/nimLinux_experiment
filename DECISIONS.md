@@ -2369,3 +2369,17 @@ behind frozen APIs have done the same job at lower cost).
 ## 2026-11-15 — Result (a) and the first static-checking pass
 
 The 39-test device suite passes on all three kernel models (monolithic, microkernel, SASOS): the newest work (per-task spaces, handles, spawn, page-granular buffers) is not monolithic-only. Audit of the foundation code: `abiHandleDup` and the DHCP state machine ended in catch-all `else` over enums (now exhaustive, so a new value is a compile error there); four silent `discard`s of results that guard isolation or the handle table (`spaceSetPages` opening/closing arena runs, `hsAttach`) are now `doAssert`s with messages naming the broken rule. The remaining `case ... else` in the foundation code are over chars, strings or raw integers, where an open-ended branch is right.
+
+
+## 2026-11-16 — K3 device ports: the human chose Option 2 (typed port)
+
+**Asked (2026-11-16):** what shape should a device port take — Option 1 a bare channel with a documented
+message format, Option 2 a typed port (a fixed enum of operations, exhaustive handling, one definition carried
+by a channel or by a direct call), or Option 3 exclusive handles over today's syscalls only.
+**Answered (human, 2026-11-16): "Yes option 2".** Input is the first device (my pick, unopposed).
+**Consequences taken on:** a thin typed layer over the channel; the same test body must run over both
+transports; the pattern is what K1 (contract/IDL) will later generate.
+
+## 2026-11-17 — Asked: are access rights the intersection of user and app tokens?
+
+Human asked (2026-11-17) whether rights are an intersection of user tokens and app capability tokens, preferring something more streamlined than Unix users. Answer given: there are no tokens apart from handles; today the effective grant is app manifest ∩ system policy, computed once at launch; a user would be a third policy list plus a home directory scope in the launcher (Option A), not a kernel identity. Options B (Unix users) and C (runtime double check) rejected as heavier and ambient. Awaiting the human on whether multiple users exist at all; default: none.
