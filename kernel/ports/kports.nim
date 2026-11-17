@@ -113,6 +113,13 @@ proc kportFeedEvdev*(typ, code: uint16; value: int32) =
     emit(gEmit, gHs, gCh, m)
   khWakeKey(InputWaitKey)
 
+proc kportInject*(typ, code: uint16; value: int32) =
+  ## Feed one evdev event as the driver would, from task context (the shell's `keytest`): the same decoder,
+  ## the same port. Interrupts are off so the IRQ handler cannot interleave with it.
+  let fl = disableInterrupts()
+  kportFeedEvdev(typ, code, value)
+  restoreInterrupts(fl)
+
 proc kportConsoleNextEvent*(task: int; ev: var InputEvent): bool =
   ## The console's next event, only while the console really holds the port. Interrupts are off while the
   ## ring is touched (the driver fills it from the IRQ handler).

@@ -38,6 +38,9 @@ import ../kernel/handles/khandles
 import ../kernel/buffers/kbuffers
 import ../kernel/space/kspace
 import ../kernel/process/launcher
+import ../kernel/ports/kports
+import ../input/evdev_decode
+import ../ipc/ports/input_port
 
 const
   ShellPrompt = "nimixos> "
@@ -63,6 +66,7 @@ type
     scDevtest       ## devtest <gpu|snd|net|input> — exercise a virtio device
     scChantest      ## chantest — handles and channels between this shell and a ring-3 program
     scIsotest       ## isotest — is one app's memory out of another running app's reach?
+    scKeytest       ## keytest — only the program given the input port sees keys; a keylogger gets nothing
 
 # ── String helpers ─────────────────────────────────────────────────────────
 
@@ -108,6 +112,7 @@ proc parseCommand*(buf: openArray[char], len: int): ShellCommand =
   if bufEq(buf, first, last, "devtest"): return scDevtest
   if bufEq(buf, first, last, "chantest"): return scChantest
   if bufEq(buf, first, last, "isotest"): return scIsotest
+  if bufEq(buf, first, last, "keytest"): return scKeytest
   # "run <file>", "exec <file>", "kill <pid>" — prefix match
   if last - first >= 3 and buf[first] == 'r' and buf[first+1] == 'u' and
      buf[first+2] == 'n' and buf[first+3] == ' ':  return scRun
@@ -639,6 +644,57 @@ proc cmdIsotest() =
   if not waitGone(victim.slot, victim.pid, 800): fail("the victim did not finish")
   if bad == 0: kprint("isotest-kernel: ok\n")
 
+proc waitTaskGone(slot: int; pid: uint32; maxTicks: uint64): bool =
+  let until = pitTicks() + maxTicks
+  while pitTicks() < until:
+    if not procTable.tasks[slot].used or procTable.tasks[slot].pid != pid: return true
+    sti(); hlt()
+  false
+
+proc launchProgram(name: cstring; args: cstring): tuple[slot: int, pid: uint32] =
+  ## Start a program from disk (its manifest decides what it is granted). slot -1 if it did not start.
+  gLastSpawnSlot = -1
+  let n = loadFile(name)
+  if n < 0: return (-1, 0'u32)
+  launchLoaded(name, n, args)
+  if gLastSpawnSlot < 0: return (-1, 0'u32)
+  (gLastSpawnSlot, procTable.tasks[gLastSpawnSlot].pid)
+
+proc cmdKeytest() =
+  ## Who sees the keyboard? A keylogger with no grant, a legitimate client granted the input port, and a
+  ## second client that asks for it while the first holds it. Events are fed through the very decoder and
+  ## port the virtio driver uses. Prints "keytest-kernel: ..." for tests/qemu_devices.py.
+  var bad = 0
+  proc fail(what: string) =
+    inc bad
+    kprint("keytest-kernel: FAIL "); kprint(what); kprint("\n")
+  let me = khMe()
+  kportConsoleEnsure(me)
+  if not kportHolds(me, kportConsoleHandle()): fail("the console does not hold the port to begin with"); return
+  let logger = launchProgram("keylog.elf", "")
+  let c1 = launchProgram("keyclient.elf", "")
+  if logger.slot < 0 or c1.slot < 0: fail("could not start keylog or keyclient"); return
+  let c2 = launchProgram("keyclient.elf", "")          # the port is held by c1 now: this one is not given it
+  if kportHolds(me, kportConsoleHandle()): fail("the console still holds the port after the launcher moved it")
+  let settle = pitTicks() + 100                        # let the programs reach their read loops
+  while pitTicks() < settle: sti(); hlt()
+  kportInject(EvKey, 30, 1); kportInject(EvKey, 30, 0)                        # a key, down and up
+  kportInject(EvRel, 0, 5); kportInject(EvRel, 1, -2); kportInject(EvSyn, 0, 0)   # a mouse move
+  kportInject(EvRel, 8, 1); kportInject(EvSyn, 0, 0)                          # a wheel click
+  kportInject(EvKey, 16, 1)                                                   # 'q' down: the client finishes
+  if not waitTaskGone(c1.slot, c1.pid, 400): fail("the client did not finish")
+  if c2.slot >= 0 and not waitTaskGone(c2.slot, c2.pid, 400): fail("the second client did not finish")
+  if not waitTaskGone(logger.slot, logger.pid, 800): fail("the keylogger did not finish")
+  kportConsoleEnsure(me)                               # the holder is gone: the console takes the port back
+  if not kportHolds(me, kportConsoleHandle()): fail("the console did not get the port back")
+  kportInject(EvKey, 31, 1)
+  var ev: InputEvent
+  if not kportConsoleNextEvent(me, ev) or ev.kind != ikKey or ev.code != 31:
+    fail("the console did not receive a key after getting the port back")
+  else:
+    kprint("keytest-kernel: console took the port back\n")
+  if bad == 0: kprint("keytest-kernel: ok\n")
+
 proc dispatchCmd(cmd: ShellCommand; buf: openArray[char];
                  first, last: int; physMgr: PhysicalMemManager) =
   case cmd
@@ -656,6 +712,7 @@ proc dispatchCmd(cmd: ShellCommand; buf: openArray[char];
   of scLspci:  cmdLspci()
   of scChantest: cmdChantest()
   of scIsotest: cmdIsotest()
+  of scKeytest: cmdKeytest()
   of scNetinfo: cmdNetinfo()
   of scDevtest:
     var dev: array[16, char]

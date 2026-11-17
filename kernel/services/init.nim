@@ -152,11 +152,9 @@ proc wirePciIrq(line: uint8; handler: proc() {.nimcall.}) =
     picUnmask(line)
 
 proc publishInputEvent(ev: VirtioInputEvent) {.nimcall.} =
-  ## Driver → event bus (topic "input"): an input/app server subscribes; the
-  ## kernel keeps no input policy. Payload = the 8-byte virtio input event.
-  var e = ev
-  eventPublish("input", addr e, sizeof(e))                       # legacy topic: removed once every consumer uses the port
-  kportFeedEvdev(ev.typ, ev.code, cast[int32](ev.value))         # the port: typed events to its single holder
+  ## Driver -> the input port (ipc/ports): typed events to its single holder. There is no global topic
+  ## to subscribe to: a program sees keys only if it was given the port's handle at spawn.
+  kportFeedEvdev(ev.typ, ev.code, cast[int32](ev.value))
 
 proc initVirtioDevices*() =
   ## PCI scan + virtio device probing; interrupts wired per (shared) line.

@@ -19,7 +19,9 @@ import ../drivers/virtio/virtio_input
 import ../drivers/net/ethernet
 import ../drivers/net/ipv4
 import ../drivers/net/udp
-import ../kernel/event_server
+import ../kernel/ports/kports
+import ../kernel/handles/khandles
+import ../ipc/ports/input_port
 import ../arch/x86_64/cpu_primitives
 
 const
@@ -96,29 +98,32 @@ proc testNet() =
     say("devtest net: send failed\n")
 
 proc testInput() =
+  ## The kernel's own client of the input port (the console's handle): print every typed event.
   if gInputCount == 0:
     say("devtest input: not available\n"); return
-  let tok = eventSubscribe("input")
+  let me = khMe()
+  kportConsoleEnsure(me)
   say("devtest input: listening 5 s\n")
   let deadline = pitTicks() + 500
   var seen = 0
+  var ev: InputEvent
   while pitTicks() < deadline and seen < 32:
-    let ev = eventPoll(tok)
-    if ev.isSome:
-      let p = ev.get().payload
-      let typ  = uint16(p.data[0]) or (uint16(p.data[1]) shl 8)
-      let code = uint16(p.data[2]) or (uint16(p.data[3]) shl 8)
-      let val  = uint32(p.data[4]) or (uint32(p.data[5]) shl 8)
-      if typ == 1:                            # EV_KEY (skip EV_SYN frames); buttons are keys too
-        say("input: key code="); sayInt(int64(code)); say(" value="); sayInt(int64(val)); say("\n")
-      elif typ == 2 or typ == 3:              # EV_REL (mouse) / EV_ABS (tablet)
-        say(if typ == 2: "input: rel code=" else: "input: abs code="); sayInt(int64(code))
-        say(" value="); sayInt(int64(cast[int32](uint32(p.data[4]) or (uint32(p.data[5]) shl 8) or
-                                          (uint32(p.data[6]) shl 16) or (uint32(p.data[7]) shl 24)))); say("\n")
+    if kportConsoleNextEvent(me, ev):
+      case ev.kind
+      of ikKey:
+        say("input: key code="); sayInt(int64(ev.code)); say(" value="); sayInt(int64(ord(ev.action))); say("\n")
+      of ikMotion:
+        say(if ev.absolute: "input: motion abs " else: "input: motion rel ")
+        sayInt(int64(ev.dx)); say(" "); sayInt(int64(ev.dy)); say("\n")
+      of ikButton:
+        say("input: button code="); sayInt(int64(ev.button)); say(" value="); sayInt(if ev.pressed: 1 else: 0); say("\n")
+      of ikWheel:
+        say("input: wheel "); sayInt(int64(ev.wheelX)); say(" "); sayInt(int64(ev.wheelY)); say("\n")
+      of ikLost:
+        say("input: lost "); sayInt(int64(ev.lost)); say("\n")
       inc seen
     else:
       hlt()
-  eventUnsubscribe(tok)
   say("devtest input: done, events="); sayInt(seen); say(" devices="); sayInt(int64(gInputCount)); say(" irq-events="); sayInt(int64(gInputs[0].evCount)); say("\n")
 
 proc crashPageFault() {.noinline.} =

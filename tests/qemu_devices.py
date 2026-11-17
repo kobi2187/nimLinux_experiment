@@ -234,11 +234,11 @@ def test_devices(tmp, iso, bios) -> list:
             g.qmp.button("left", False)
             assert g.wait("devtest input: done", 15, mark), "devtest input did not finish: " + g.text(mark)[-500:]
             out = g.text(mark)
-            for want in ("abs code=0 value=16384", "abs code=1 value=8192", "rel code=0 value=7",
-                         "rel code=1 value=-3", "key code=272 value=1", "key code=272 value=0"):
+            for want in ("motion abs 16384 8192", "motion rel 7 -3",
+                         "button code=272 value=1", "button code=272 value=0"):
                 assert want in out, f"missing '{want}': {out[-400:]}"
             assert "devices=3" in out, "keyboard, mouse and tablet should all be driven: " + out[-200:]
-            return "tablet abs, mouse rel and left button arrive as evdev events (3 devices)"
+            return "tablet abs, mouse rel and left button arrive as typed input-port events (3 devices)"
         step("pointer", None, "", pointer_check)
     finally:
         g.close()                               # flushes the wav + pcap files
@@ -861,6 +861,42 @@ def test_isolation(tmp, iso, bios) -> list:
     return results
 
 
+def test_keyboard_isolation(tmp, iso, bios) -> list:
+    """K3: who sees the keyboard? A keylogger with no grant tries every way to read keys (an input port among
+    its handles, guessed handle values, the old global `input` topic) while a legitimate client, granted the
+    input port by its manifest, receives every event. A second client that asks for the port while the first
+    holds it is refused, and when the holder exits the console gets the port back."""
+    results = []
+    g = boot(tmp, iso=iso, bios=bios, devices=("blk",))
+    try:
+        try:
+            mark = len(g.out)
+            g.type("keytest")
+            done = g.wait("keytest-kernel: ok", 90, mark) or g.wait("keytest-kernel: FAIL", 1, mark)
+            time.sleep(1.0)
+            out = g.text(mark)
+            assert "KERNEL PANIC" not in out, "the kernel died: " + out[-600:]
+            fails = [l for l in out.splitlines() if "keytest-kernel: FAIL" in l]
+            assert not fails, "\n".join(fails)
+            leaks = [l for l in out.splitlines() if "keylog: LEAK" in l]
+            assert not leaks, "a keylogger saw input:\n" + "\n".join(leaks)
+            assert done, "keytest did not finish: " + out[-700:]
+            assert "keylog: got nothing" in out, "the keylogger did not finish cleanly: " + out[-600:]
+            for want in ("keyclient: key 30 1", "keyclient: key 30 0", "keyclient: motion 5 -2 rel",
+                         "keyclient: wheel 0 1", "keyclient: done"):
+                assert want in out, f"the legitimate client missed '{want}': " + out[-700:]
+            assert out.count("keyclient: no input port") == 1, "the second client should have been refused the port: " + out[-700:]
+            assert "launcher: keyclient.elf grants: input" in out and "input: held by another program" in out
+            assert "keytest-kernel: console took the port back" in out
+            results.append(("keyboard-isolation", True, "keylogger saw nothing; the granted client got key/motion/wheel; a second bind was refused; the console got the port back"))
+        except Exception as e:                 # noqa: BLE001
+            results.append(("keyboard-isolation", False, str(e)))
+        assert "NimixOS" in g.run("version"), "shell dead after keytest"
+    finally:
+        g.close()
+    return results
+
+
 def test_user_faults(tmp, iso, bios, kernel) -> list:
     """Ring-3 faults kill only the faulting task: one boot survives them all."""
     results = []
@@ -916,6 +952,7 @@ def main():
             results += test_channels(tmp, a.iso, a.bios)
             results += test_isolation(tmp, a.iso, a.bios)
             results += test_spawn(tmp, a.iso, a.bios)
+            results += test_keyboard_isolation(tmp, a.iso, a.bios)
             results += test_crashes(tmp, a.iso, a.bios, a.kernel)
     for name, ok, msg in results:
         print(f"{'PASS' if ok else 'FAIL'}: {name:12} {msg}")
