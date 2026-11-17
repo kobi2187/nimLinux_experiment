@@ -2547,3 +2547,22 @@ guess we have plenty of other items that are unrelated and aren't waiting on thi
 **Recorded:** Option D = a persistent-state OS: closing a session saves its state and it can be resumed later (not kept
 running, not frozen in memory). Options now: A end them, B keep running sealed, C freeze, D save and resume. **Undecided,
 as instructed.** Nothing is built on any of them; the work that does not depend on it continues.
+
+
+## 2026-11-17 — Stack guard page: every app region reserves its top 1 MB for the stack
+
+**Need:** the stack started at the very end of the 4 MB region and the heap's limit was the region's very end, so a
+deep recursion could silently overwrite the heap or the program image, and the heap could even hand out the stack's
+memory. A bug like that shows up far from its cause (against "fast debugging, quick pinpointing").
+**Built (independent leaf, local to mm/ and kernel/space):** `UserStackReserve` = 1 MB at the top of each region; the
+heap limit stops below it; the page at the bottom of the reserve is a guard (`spaceGuardPage`: the 2 MB step holding it
+is split into a page table; that page is present for the kernel, closed to ring 3; one guard per space). An overflow is
+now a page fault at a known address; the program is killed with the usual report. Static memory: +8 KB per address
+space (one page table and a flag; 16 spaces = 128 KB of bss); the kernel image still ends near 29 MB.
+**Evidence:** `test_addr_space` (guard closed, neighbours open, other spaces and the master untouched), `test_sip_heap`
+(the heap ends where the reserve begins), ring 3: `stackbomb ok` (about 400 KB of stack runs normally) and `stackbomb
+bomb` (endless recursion killed by a page fault, kernel and shell fine).
+**It also caught a test of mine:** `isotest` planted its secret at offset 3 MB of the region, assumed to be unused heap;
+that is exactly where the reserve (and guard) now begins, so the program faulted. The offset moved to 2 MB (heap area).
+**Consequence to know:** a program that needs more than about 1 MB of stack now faults instead of silently working;
+raising `UserStackReserve` is a one-constant change.

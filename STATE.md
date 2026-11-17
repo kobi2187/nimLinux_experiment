@@ -54,7 +54,7 @@ states of this file are in git history; this file holds the CURRENT state only.
 5. V7c: actor-backed `background`/`mailbox` behind RUI's API (threads off).
 6. V4b: measure arena sizing and per-class budgets, then set them from the numbers.
 7. V2c: sub-tick timer (S4).
-0. ~~K3 layers 2-4~~ **DONE 2026-11-17 (result b delivered for input).** Independent follow-ups: ASan/UBSan on the new libraries (manifest, evdev decoder, ports); migrate `isotest`'s local helpers to the shared `launchProgram/waitTaskGone`; a second static-checking pass. NOT independent (blocked on questions): routing PS/2 into the input port is possible but I cannot test it end to end (QEMU feeds the virtio keyboard) and it could double keys, so it waits for a way to test it.
+0. ~~K3 layers 2-4~~ **DONE 2026-11-17 (result b delivered for input).** Done since: sanitizers on the new libraries, shared launch helpers, a second static-checking pass, the stack guard page (1 MB stack reserve per region). NOT independent (blocked on questions): routing PS/2 into the input port is possible but I cannot test it end to end (QEMU feeds the virtio keyboard) and it could double keys, so it waits for a way to test it.
 8. **Static-checking audit** (first pass DONE 2026-11-15 on the foundation code: 2 enum catch-alls made exhaustive, 4 silent discards made assertions; still to audit: bare `int`s standing for handles/sizes/addresses outside the ABI boundary, and the older drivers/shell code). Original scope: find `case` statements over enums that end in a catch-all `else`, bare `int`s standing for handles/sizes/addresses/states, and silent `discard`s of results that can fail; fix them or add the missing compile-time checks. Local and reversible; I take it early because every later step benefits.
 
 **3. Needs direction** (each will be asked in the question template; first = blocks the most)
@@ -81,4 +81,5 @@ E1 event server → S2k-b2 (one handle table for every object) → V6 render-ser
 ## Process log (AGENTS.md experiment; see AGENTS.md, last section)
 | session | rediscovered facts | pushes without gate | test-fault reds | human repeats | ORIENT lines | runtime-only bugs a static check could catch |
 |---------|-------------------|---------------------|-----------------|---------------|--------------|------|
+| 2026-11-17 (K3, display port, guard page) | 0 | 0 | 4 (spawntest's `display`, the `read` return, the wait right, isotest's offset) | 3 (never assume a decision; questions in the template; ask in plain words) | ~600 | 2 (PS/2 topics still published; a stale offset the guard exposed) |
 | 2026-11-15 (before the revision, S8b + S3a) | 3 (default branch, bare `make`, `-fPIE` link) | 0 | 4 | 2 | ~3,700 | 3 (free RAM starved by static growth; channel-read return convention; right missing on a handle) |
