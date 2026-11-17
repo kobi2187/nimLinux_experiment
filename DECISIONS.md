@@ -2404,3 +2404,45 @@ a full channel, and the client could not tell. Now one rule: the newest is lost 
 rule did its job.
 
 **Not yet:** kernel glue, the real input device, the ring-3 attack test (docs/proposals/device_ports.md, next layers).
+
+
+## 2026-11-17 — K3 layers 2-4: the keyboard goes through a typed port; the global `input` topic is gone
+
+**Result (b) delivered:** keys (and mouse, tablet, wheel) reach only the program that was given the input port.
+Evidence: `keyboard-isolation` (ring 3): a keylogger with no grant tries an input port among its handles,
+guessed handle values (read and wait) and every old global topic, and sees nothing; the legitimate client,
+granted the port by its manifest, receives key/motion/wheel events; a second program that asks for the port
+while the first holds it is refused; when the holder exits the console takes the port back. The real
+keyboard/mouse/tablet tests (`keys-*`, `mouse-*`, `input`, `pointer`) pass through the port.
+
+**Decisions made while building (inside the accepted K3 design, reversible):**
+- **Transport:** the input device module is in the kernel, so its port is the DIRECT transport; the driver's IRQ
+  handler decodes evdev (`input/evdev_decode.nim`, pure, host-tested) and pushes typed events into the holder's ring.
+- **Two syscalls for every port**, in wire form (`PortCall` 52, `PortEvent` 53), plus a reserved *describe*
+  request every port answers, so a program finds its port by asking its handles (`nimix_find_port`) instead of
+  assuming an index. `nimixWait` accepts a port handle (wake key = the port); an IRQ-fed event wakes the waiter.
+- **One holder, moved not copied:** the launcher moves the console's handle to a program whose manifest says
+  `grant input` (rights read/write/wait; NOT transfer, so it cannot be passed on). The port cannot be
+  duplicated. When the holder dies, the last close frees the port and resets the queue (the next holder never
+  sees the last one's unread events); the console takes it back at its next poll. The console is an ordinary
+  client holding an ordinary handle, not a special case.
+- **Events are lossy by rule, loudly:** newest lost, in-band `Lost{count}` (see K3 layer 1). Consumers reset held
+  modifiers on Lost rather than guess.
+- **Typed key action** (`kaUp/kaDown/kaRepeat`), button codes as evdev codes: both consumers (the shell's keymap
+  and the raylib platform) needed exactly (code, value 0/1/2), so that is the typed shape.
+- **Found by asking "what else publishes input?":** the legacy PS/2 keyboard and mouse drivers also published raw
+  scancodes on global topics (`key.down`, `mouse.move`, `mouse.click`). They now call a hook (nil = dropped); PS/2
+  input reaches nobody until it is routed into the port (leaf R3b: set-1 scancode to evdev code). Nobody used
+  those topics (the console reads virtio only). **A source-scan guard** (`tests/test_no_ambient_input.nim`,
+  mutation-checked, requires >100 files scanned) fails if any code publishes input on a global topic again.
+  First version of that guard scanned nothing (wrong relative path): it passed vacuously; fixed by anchoring to the
+  source file and asserting it really scanned.
+
+**What is NOT done:** a focus model. Only one program holds the port at a time, so two programs cannot both
+receive keys, and the console gets none while a program holds it; routing keys to the focused window among
+several is the window/render server's job (V6). The describe probe scans 8 handles. The C-side decoder in
+`libnimix/nimix_input.h` mirrors the Nim layout by hand (host-tested with hand-built bytes); K1 (contract/IDL)
+is what will generate both from one description.
+
+**Static memory:** kports adds one 16-slot event ring of 256-byte messages (~4 KB) plus small state: negligible
+against the low-memory budget (the kernel image ends near 29 MB; regions start at 32 MB).

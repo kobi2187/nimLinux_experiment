@@ -360,3 +360,4 @@ monolithic model may still link a server in.
 | 2026-11-15 | Session rings retired from the buffers API (channels carry streams); all RAM identity-mapped for the kernel | DECISIONS.md §2026-11-15 |
 | 2026-11-15 | S3a: `kernel/process/launcher.nim` (loader moved out of the shell) + syscall 51 `spawn`; `launch/manifest.nim` (manifests + system policy) | DECISIONS.md §S3a |
 | 2026-11-17 | K3 layer 1: `ipc/ports/` (typed device ports: wire form, exclusive binding, direct and channel transports, input port); no kernel code uses it yet | DECISIONS.md §K3 layer 1 |
+| 2026-11-17 | K3 layers 2-4: `kernel/ports` (input port glue, syscalls PortCall 52 / PortEvent 53, port handles waitable), `input/evdev_decode`, launcher grants the input port by moving the console's handle; global `input` topic and PS/2 topics removed; `libnimix/nimix_input.h` | DECISIONS.md §K3 layers 2-4 |

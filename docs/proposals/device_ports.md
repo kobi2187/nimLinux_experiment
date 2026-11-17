@@ -1,6 +1,6 @@
 # Device ports (K3) — the typed front door to a device module
 
-Status: **layer 1 BUILT 2026-11-17** (`ipc/ports/`, host-tested). Human chose Option 2 (typed port) on
+Status: **layers 1-4 BUILT 2026-11-17 for the input port** (`ipc/ports/`, `kernel/ports/`, evdev decoder, consumers, attack test). Human chose Option 2 (typed port) on
 2026-11-16. Kernel glue and the input device are the next layers (below). Mechanism M2 of `core_design.md`.
 
 ## What a port is
@@ -28,7 +28,7 @@ The one official way to use a device module (the hardware-facing code). Rules, e
   newest events are counted and announced (client-side), so a reply behind them is still read.
 - Port message = exactly one channel message (12-byte header + 244 payload); bulk data uses buffers (later).
 
-## Next layers (each ends with its tests green)
+## Layers 2-4 (DONE for input; see DECISIONS 2026-11-17 K3 layers 2-4). The plan they followed:
 2. **Kernel glue** (`kernel/ports/kports.nim`): a `PortRegistry` beside `gHs/gCh`, the destroy hook calls
    `portOnDestroyed`, a spawn grant `input` in the manifest resolves to `portBind` of the input port, syscalls
    for the message transport (request/reply/event use the existing channel calls; only `bind` is new).

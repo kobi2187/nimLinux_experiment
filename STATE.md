@@ -41,7 +41,7 @@ states of this file are in git history; this file holds the CURRENT state only.
 | 3 | dispatcher as the QoS/concurrency hub | **weak** | Stage 1 exists but is in no app's path; K1 and K2 not started |
 | 4 | CPS coroutines for servers | partial | dispatcher only |
 | 5 | raylib graphics + audio | strong for direct rendering | pixel-exact on NimixOS; render server (V6) and audio server not started |
-| 6 | capabilities as the only access control | **mechanism strong, adoption weak** | handles, rights, spawn, per-task spaces tested; real traffic still uses ambient `chanSend`, event topics, first-present display; the shell holds every right |
+| 6 | capabilities as the only access control | **strong for input, partial elsewhere** | handles, rights, spawn, per-task spaces tested; the keyboard/mouse path is now capability-only (keylogger test). Still ambient: `chanSend`, other event topics, first-present display; the shell holds every right |
 
 **2. Leaves I do on my own** (CLEAR: local, reversible, no frozen API, in this order)
 1. ~~Run `test-devices` against the sasos and microkernel kernels~~ **DONE 2026-11-15: 39/39 on all three.**
@@ -51,7 +51,7 @@ states of this file are in git history; this file holds the CURRENT state only.
 5. V7c: actor-backed `background`/`mailbox` behind RUI's API (threads off).
 6. V4b: measure arena sizing and per-class budgets, then set them from the numbers.
 7. V2c: sub-tick timer (S4).
-0. **K3 layers 2-4 (design decided 2026-11-16, layer 1 DONE 2026-11-17)**: kernel glue (`kernel/ports`), the input device module behind the port, the ring-3 keylogger attack test, then retire the `input` topic. This is the first thing I take: it serves the chosen result (b), keys reach only the focused app.
+0. ~~K3 layers 2-4~~ **DONE 2026-11-17 (result b delivered for input).** Follow-ups I can do alone: route PS/2 into the input port (R3b); the display port (M1) the same way (single-client bind replaces first-present display); migrate `isotest`'s local helpers to the shared `launchProgram/waitTaskGone`.
 8. **Static-checking audit** (first pass DONE 2026-11-15 on the foundation code: 2 enum catch-alls made exhaustive, 4 silent discards made assertions; still to audit: bare `int`s standing for handles/sizes/addresses outside the ABI boundary, and the older drivers/shell code). Original scope: find `case` statements over enums that end in a catch-all `else`, bare `int`s standing for handles/sizes/addresses/states, and silent `discard`s of results that can fail; fix them or add the missing compile-time checks. Local and reversible; I take it early because every later step benefits.
 
 **3. Needs direction** (each will be asked in the question template; first = blocks the most)
@@ -65,7 +65,7 @@ states of this file are in git history; this file holds the CURRENT state only.
 | # | what you would see | what it takes | decisions needed |
 |---|--------------------|---------------|------------------|
 | a | ~~**Three kernels, one table**~~ **DONE 2026-11-15**: 39/39 on monolithic, microkernel and SASOS | — | — |
-| b | **Keys reach only the focused app**: a "keylogger" app started beside a game gets nothing, the game gets every key; the shared `input` topic is gone | K3 device port + E1 events + S3b for input | K3, E1 |
+| b | ~~**Keys reach only the program given the port**~~ **DONE 2026-11-17**: a keylogger beside the real client gets nothing; the `input` topic is gone (`keyboard-isolation`) | — | — |
 | c | **The shell as an ordinary program**: `shell.elf` started by the launcher with only the rights its manifest grants; the kernel keeps a serial console | R5/R6 console server + userspace shell (needs b's patterns) | K3, K1 |
 | d | **Two windows on screen**, overlapping, each drawn by a different app, composed by a render server; a hostile client is refused | V6 slices (needs K1, K2, K3, M1, M2) | the 12 open V6 decisions, K1, K2, K3 |
 | e | **A WASM app (the RUI counter) running in a userspace host** with no WASM code in the kernel | V8 (needs K2) | V8 boundary |
