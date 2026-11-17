@@ -15,7 +15,7 @@ states of this file are in git history; this file holds the CURRENT state only.
 ## Awaiting human (decisions only the human can make; **unanswered means OPEN: nothing is built on a recommendation**)
 | asked | question | blocks | my recommendation (NOT a decision) |
 |-------|----------|--------|--------------------------------------|
-| 2026-11-17 | **On a user switch, what happens to the first user's running programs** (end them, keep them running sealed in the background, or freeze them) | the session/login design; per-user budgets; the launcher's per-user token list | see the question below; undecided |
+| 2026-11-17 | **On a user switch, what happens to the first user's running programs**: A end them, B keep running sealed, C freeze, D (yours) save their state so they close but can resume | the session/login design; per-user budgets; the launcher's per-user token list; what a program must be able to save | undecided, left for you |
 | 2026-11-17 | **What proves who logs in** (nothing, a password, a device) and where a user's token set is stored | login; the user-token file format | undecided; the foolish-user rule (a user's tokens never include the system's authority) holds either way |
 | 2026-11-15 | K1 contract/IDL: how a server's API is described and how client libraries are produced | K2 dispatcher stage 2, generated client libraries | a proposal with options comes first |
 | 2026-11-15 | `main` is stale: fast-forward it to `master` or delete it | nothing | fast-forward, then delete later; left as is meanwhile |

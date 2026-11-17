@@ -2538,3 +2538,12 @@ in and out. A "user" is still only a token set, no kernel identity. **Not assume
 what happens to the previous user's running programs on a switch; what proves who logs in (nothing, a password, a
 device); where a user's token set and home scope are stored and who may change them (the "foolish user" principle says
 a user can never hold the system's own authority).
+
+
+## 2026-11-17 — User switching: the human adds Option D; the question stays OPEN
+
+**Human (verbatim):** "There could be option D with persistent state os, so close but can resume. Leave as undecided. I
+guess we have plenty of other items that are unrelated and aren't waiting on this decision."
+**Recorded:** Option D = a persistent-state OS: closing a session saves its state and it can be resumed later (not kept
+running, not frozen in memory). Options now: A end them, B keep running sealed, C freeze, D save and resume. **Undecided,
+as instructed.** Nothing is built on any of them; the work that does not depend on it continues.
