@@ -359,6 +359,7 @@ HOST_TESTS = \
   tests/test_buffers_api.nim \
   tests/test_buffers_state.nim \
   tests/test_manifest.nim \
+  tests/test_ports.nim \
   tests/test_buffers_arena.nim \
   tests/test_gfx.nim \
   tests/test_term.nim \

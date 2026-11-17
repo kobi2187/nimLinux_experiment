@@ -208,5 +208,5 @@ proc dhcpHandle*(client: var DhcpClient; msg: seq[uint8]) =
       client.state = dsAcked
     elif msgType == DhcpMsgNak:
       client.state = dsInit
-  else:
-    discard
+  of dsInit, dsAcked, dsTimeout:
+    discard   # nothing is waiting for a reply in these states; a stray message is ignored (listed so a new state must be decided here)

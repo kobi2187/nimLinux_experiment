@@ -2335,3 +2335,72 @@ this syscall, and the server is then ordinary user code.
 
 **Not done (S3b):** removing chanSend, event topics and the first-present display race. They are replaced by
 handles that do not exist yet (dispatcher endpoint, display/input ports).
+
+
+## 2026-11-15 — AGENTS.md revised after the first long run (backup: docs/archive/AGENTS.v1-2026-11-15.md)
+
+**Why:** the human asked what we had learned about the process. Evidence from ~60 commits of work:
+the protocol said nothing about what "done" is (a bare `make` hung on an interactive QEMU; overlapping
+background test runs reported each other's results; tests were repeatedly blamed on the kernel when their own
+assumptions were wrong; a 4 MB static addition starved boot memory unnoticed); the files it told every
+session to "read in full" had grown to ~3,700 lines (HANDOFF alone 460 lines though it is defined as one
+paragraph); repository facts (default branch `master`, safe make targets) were rediscovered more than once;
+the human's principles and answers lived only in conversation until copied.
+
+**Changed:** ORIENT reads by size class (headings for DECISIONS); modes announced on change, not every turn;
+new modes VERIFY (the gate, with its rules), DIAGNOSE and CLOSE; the layer ladder (pure library, kernel glue,
+attacking test) written down as the real EXECUTE recipe; SURVEY proportional to size; rules for capturing
+principles and answers verbatim, for scaffolding-is-not-precedent, for static-memory budgets, for push/merge
+discipline; STATE.md carries Repository facts and an Awaiting-human list; HANDOFF is rewritten, not appended.
+**Not changed:** the Hard rules' core, SPAWN, the dialogue-over-approval stance. **Open for the human:** whether
+SPAWN as a separate-project mode still earns its place (it was used once, for buffers; in-tree pure libraries
+behind frozen APIs have done the same job at lower cost).
+
+**Follow-up (same day, human: "change it as you see fit, I'll see if it's an improvement"):** SPAWN now defaults to an in-tree module behind a frozen API; a separate sub-project only for a module with its own lifecycle. Added a Process log (STATE.md) with five counts so the experiment can be judged; the previous AGENTS.md stays in `docs/archive/` for reverting.
+
+**Human's standing request (2026-11-15):** questions are simple, with concrete examples, the sides weighed with pros, cons and implications. Written into AGENTS.md (Working with the human) as a five-part template.
+
+**Human's standing request (2026-11-15):** keep the whole picture in view: what is easy, what is involved, where we are lacking, where to focus, every time. Written into AGENTS.md as the STEP BACK mode (at ORIENT, CLOSE and after each task) and into STATE.md as "The picture".
+
+**Human's standing direction (2026-11-15):** the human decides the focus and which result they want to see first (a visible result often sharpens the product vision). STEP BACK gains a fourth part, a menu of demo-able results; once a focus is chosen I do every leaf it needs that I can do alone and bring only the decisions it needs. Written into AGENTS.md and STATE.md.
+
+**Human's engineering principles (2026-11-15):** features work by design, not by meticulous edge-case handling; the compiler should tell us about a missing case; more static checking and assertions so we can grow without latent bugs or weird states; easy maintenance, fast debugging, quick pinpointing of where and when a bug occurs; breadth-first (full vision designed up front, leaf details later), every stage backed by unit tests. Recorded in VISION.md (Engineering principles), AGENTS.md (How we build: seven rules), STATE.md (a static-checking audit leaf; a sixth Process-log count).
+
+## 2026-11-15 — Result (a) and the first static-checking pass
+
+The 39-test device suite passes on all three kernel models (monolithic, microkernel, SASOS): the newest work (per-task spaces, handles, spawn, page-granular buffers) is not monolithic-only. Audit of the foundation code: `abiHandleDup` and the DHCP state machine ended in catch-all `else` over enums (now exhaustive, so a new value is a compile error there); four silent `discard`s of results that guard isolation or the handle table (`spaceSetPages` opening/closing arena runs, `hsAttach`) are now `doAssert`s with messages naming the broken rule. The remaining `case ... else` in the foundation code are over chars, strings or raw integers, where an open-ended branch is right.
+
+
+## 2026-11-16 — K3 device ports: the human chose Option 2 (typed port)
+
+**Asked (2026-11-16):** what shape should a device port take — Option 1 a bare channel with a documented
+message format, Option 2 a typed port (a fixed enum of operations, exhaustive handling, one definition carried
+by a channel or by a direct call), or Option 3 exclusive handles over today's syscalls only.
+**Answered (human, 2026-11-16): "Yes option 2".** Input is the first device (my pick, unopposed).
+**Consequences taken on:** a thin typed layer over the channel; the same test body must run over both
+transports; the pattern is what K1 (contract/IDL) will later generate.
+
+## 2026-11-17 — Asked: are access rights the intersection of user and app tokens?
+
+Human asked (2026-11-17) whether rights are an intersection of user tokens and app capability tokens, preferring something more streamlined than Unix users. Answer given: there are no tokens apart from handles; today the effective grant is app manifest ∩ system policy, computed once at launch; a user would be a third policy list plus a home directory scope in the launcher (Option A), not a kernel identity. Options B (Unix users) and C (runtime double check) rejected as heavier and ambient. Awaiting the human on whether multiple users exist at all; default: none.
+
+
+## 2026-11-17 — K3 layer 1 built: typed device ports (ipc/ports)
+
+**Survey (proportionate; it is our boundary):** Zircon FIDL protocols + channels, seL4 CAmkES interfaces and badged
+endpoints, Genode session RPC interfaces, Singularity channel contracts all give one thing: a closed, typed
+operation set carried by a message pipe, with exclusivity decided at bind time. **Adapted the shape**; built it small
+(~350 lines) because nothing could be adopted behind our handle/channel/buffer boundaries (each prior art brings its
+own IPC and object model). Rejected: a hand-rolled bare-channel format (Option 1, no compiler help), and handles over
+today's syscalls only (Option 3, never proves two placements).
+
+**Built:** `ipc/ports/{port,input_port,link}.nim`, `tests/test_ports.nim` (wire form, hostile bytes, every input event
+kind, exclusive binding incl. duplicate/transfer/death, ONE scenario run over BOTH transports, garbage counted, a
+vanished device module reported). ASan/UBSan clean.
+
+**Corrected while building (wrong first design):** events were dropped OLDEST in the direct transport but NEWEST over
+a full channel, and the client could not tell. Now one rule: the newest is lost and the device sends an in-band
+`Lost{count}`. The compiler also caught the test's missing `ikLost` case the moment the enum grew: the exhaustive-case
+rule did its job.
+
+**Not yet:** kernel glue, the real input device, the ring-3 attack test (docs/proposals/device_ports.md, next layers).

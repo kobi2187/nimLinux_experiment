@@ -35,21 +35,51 @@ has to be compacted away. Reuse before building; compose through clean interface
 - `STATE.md` — current status + what each completed task unblocked. Rewritten freely.
 - `DECISIONS.md` — append-only "why" log. Never edited. Boundaries, architecture
   changes, survey results, spawns, and resolved questions land here.
-- `HANDOFF.md` — one-paragraph exit note rewritten at session end.
+- `HANDOFF.md` — one-paragraph exit note rewritten at session end. It is REWRITTEN, not appended:
+  older sessions live in git history. (It grew to 460 lines once; nobody can ORIENT from that.)
+
+**Size discipline.** ORIENT must fit in a fraction of the context window, so these files stay small
+enough to read: STATE.md holds the *current* state only (a dated top line, an "Awaiting human" list,
+what is built/partial); history goes to DECISIONS or git. DECISIONS.md is append-only but is read by
+its **headings** (grep the `## ` lines) and opened on demand, never in full. BACKLOG keeps the status
+table current and moves finished rows' detail into DECISIONS.
 
 ---
 
-## Modes — state which mode you're in at the top of every turn.
+## Modes — state the mode when it CHANGES (and whenever the human could be confused about it).
 
 ### ORIENT  (session start, via `/orient`)
-Read VISION, ARCHITECTURE, BACKLOG, STATE, DECISIONS, HANDOFF in full. Then brief:
-- Vision in 2 lines; open-question count and whether any now have their signal.
+Read VISION, STATE, HANDOFF and the BACKLOG status table in full; ARCHITECTURE §0–§1 (layers and module
+tree); DECISIONS by headings only (open the entries that touch the next task). Check `git status`,
+the branch, and whether the branch's PR has merged (then sync to the default branch first). Then brief:
+- Vision in 2 lines; open-question count and whether any now have their signal; the **Awaiting human**
+  list from STATE.md (decisions only the human can make, each with the date it was asked).
 - Architecture: modules BUILT vs. PARTIAL vs. PLANNED; any seam now ready to firm up;
   any spawned sub-projects and their reported status.
 - Current position in the dependency tree; next 1–2 candidate tasks.
 - For the next task: its tag, and your proposed move.
 End with a routing decision — CLEAR (execute), FUZZY (resolve), OPEN (park), or
 too-big (spawn). Then wait.
+
+### STEP BACK  (at ORIENT, at CLOSE, and after each finished task — before choosing the next one)
+Look at the whole before picking from the list in front of you. Keep `STATE.md`'s **The picture**
+current (rewritten, not appended). It has exactly three parts, short:
+1. **Where we stand**: each ranked goal in VISION.md as strong / partial / weak, with one line of evidence,
+   including what no test reaches (a feature proven on one kernel model only, a mechanism no real program
+   uses yet, scaffolding still carrying real traffic).
+2. **Leaves I do on my own**: the dependency-tree leaves that are CLEAR (local, reversible, no boundary or
+   frozen API touched, prior art settled), in the order I will take them. I do these without asking.
+3. **Needs direction**: the leaves that define or cross a boundary, change a frozen API, or are real
+   policy; each one asks its question in the template above. Mark which of these block the most.
+4. **Results you could see next** (a short menu): outcomes the human can watch or run, each with the
+   demo ("type in a window; a second app gets none of your keys"), what it takes, and which leaves and
+   decisions it needs. **The human chooses the focus and which result they want to see first**; seeing a
+   result often sharpens the product vision, so a visible result may outrank a more "foundational" leaf.
+The project is built semi-automatically: once the human has chosen a focus, I do every leaf it needs
+that I can do alone (part 2) and bring only the decisions it needs (part 3), in the order the focus
+requires. With no focus chosen, I work the hygiene leaves of part 2 and keep the menu in front of the
+human. If part 2 is empty, say so and bring the most blocking part-3 question first. A goal nobody has
+touched for three sessions needs a decision, so name it.
 
 ### ASSESS  (triage each task — fast, biased toward action)
 Sort by confidence in the *next action*, not completeness of the spec:
@@ -76,6 +106,9 @@ Default to mature, lightweight, known-good code over novel code.
    - **Build** — only when nothing fits or the surface is small enough that owning
      it is cheaper than depending. Must name what it rejected and why.
 Record the survey in DECISIONS.md: what you examined, the choice, the reasoning.
+**Proportion:** a piece under ~150 lines behind our own boundary (a bitmap allocator, a table walker)
+needs one line in the DECISIONS entry of the task ("built; nothing fit behind this interface because
+…"), not a write-up. Full surveys are for dependencies, protocols and anything someone else must live with.
 Because the lib sits behind our boundary, the dependency stays reversible — we can
 swap it later.
 
@@ -92,6 +125,11 @@ Never ask what research could answer. Never make the human the bottleneck on
 reversible work.
 
 ### SPAWN  (a module big enough to be its own project)
+**Default to an in-tree module behind a frozen API** (a pure library with host tests, kernel glue, an
+attacking test): that gave the same isolation as a sub-project at far lower cost, and it is how nearly
+everything here was built. Spawn a separate sub-project only when the module has its own lifecycle that the
+parent should not hold in context (a driver stack, a port of someone else's code, work that runs in
+parallel with the parent). The rest of this section applies when you do.
 Spawn when a planned module is large, self-contained, and reachable through a
 single clean interface. This is the heart of the strategy: a tiny lib fits in
 context, so its orchestrator never fights compaction.
@@ -120,12 +158,76 @@ append any decision to DECISIONS.md, and if a boundary/interface/planned-connect
 moved, update ARCHITECTURE.md in the same turn. If the path turns out not to be
 clear, stop and re-ASSESS — don't push through on guesswork.
 
+**The layer ladder (how work is actually built here).** Almost every task is three layers, bottom up,
+each proven before the next is started:
+1. a **pure library** (no hardware, static arrays, usable on the host) with host tests, including a
+   property or model test where state is involved and mutation checks where a bug could hide;
+2. **kernel glue** (a module under `kernel/`) that wires it to hardware and the syscall gate;
+3. a **ring-3 or QEMU test** that attacks the property (a hostile program, a victim and attacker), not
+   just exercises it.
+Boundaries are crossed by hooks installed by the owner (so the library does not import a file system,
+a driver or a scheduler it does not need); a library that grows a heavy import is a seam in the wrong place.
+
+### VERIFY  (before anything is pushed — the gate)
+"Done" means the whole gate passed on the current head, run ONCE, alone:
+`make test` (host), `make test-devices` (QEMU, all devices), `make test-qemu-models` (all three kernel
+models), `make test-structured`; plus ASan/UBSan (and valgrind where the code is allocator-heavy) on any
+pure library touched. Rules:
+- Never run bare `make` (its default target opens an interactive QEMU and hangs); name the target.
+- One verification run at a time, with its own log directory; two overlapping runs report each other's results.
+- Tests count operations; they never assert wall-clock time (CI is orders of magnitude slower).
+- Static memory is a budget: a change that adds static memory or grows the kernel image must say what it
+  took from the low-memory budget (the 4 MB addition that once starved boot was invisible in review).
+- A red test is a hypothesis problem before it is a code problem: check what the test assumed (an API
+  returns 0 and puts the length elsewhere; a right was missing) before touching the system under test.
+- Commits are local and frequent, pushes wait for green (the stop hook's "push" reminders do not change this;
+  say so and push when the gate passes). Report outcomes as they are, including what was not run.
+
+### DIAGNOSE  (something failed or surprised)
+Reproduce first (a script that shows it in under a minute), then one hypothesis at a time with the
+smallest probe (a print in the child, a symbolized backtrace), then fix the root cause and add the test
+that would have caught it. Record anything that revealed a wrong belief in DECISIONS (the "correct the
+record" entries are among the most valuable ones).
+
+### CLOSE  (end of a unit of work or the session)
+Gate passed → STATE.md rewritten (current state, Awaiting human) → HANDOFF.md rewritten (one paragraph:
+what changed, what is next, what is blocked) → DECISIONS/ARCHITECTURE/BACKLOG already current (they
+change in the same turn as the work, never at CLOSE) → push → PR (draft) or note that it merged and sync
+the branch → tell the human what was verified, what was not, and what needs their decision.
+
 ### PARK  (OPEN questions)
 Write to VISION.md open questions with what's unresolved and the **resolving signal**
 that will answer it. Route around it; execute other tasks. The system taking shape
 resolves these — revisit only when the signal arrives.
 
 ---
+
+## How we build: by design, not by vigilance  (human, 2026-11-15; full wording in VISION.md)
+
+The aim is code that is hard to get wrong and quick to debug. These are rules, not tastes; a review
+(including my own before committing) checks them:
+1. **Make illegal states unrepresentable.** A state is an `enum` or a variant object, not an integer plus a
+   convention; a handle, an index, a size and an address are distinct types, not bare `int`s; a set of
+   options is a `set[Enum]`, not a bitmask by hand. A magic number is allowed only at the C/ABI boundary,
+   in one place, with a type on the Nim side of it.
+2. **Exhaustive `case`.** A `case` over an enum has one branch per value and **no catch-all `else`**, so
+   adding a value is a compile error everywhere it matters. `else` is for open-ended values (integers,
+   strings) and says why.
+3. **Static checks first.** Layouts and sizes are `static: doAssert`; a table that must cover an enum is
+   built or checked at compile time (the syscall table test is the model); prefer a compile error to a
+   test, a test to a runtime assert, a runtime assert to a comment.
+4. **Invariants live in one named place.** Each stateful library has a `checkInvariants` that says in words
+   what was violated; property tests call it after every step. Assertions state the broken rule
+   ("two tasks can access an owned buffer"), not "assertion failed".
+5. **Failures are loud and local.** No silently ignored results (`discard` of a result that can fail needs a
+   reason in a comment); an unimplemented path **refuses visibly** (returns a not-implemented error or
+   panics), it never pretends to succeed. A crash report names the function, the registers and the
+   backtrace; a bug found by hand-tracing means a missing assertion: add it with the fix.
+6. **Breadth first, leaves later.** Design the whole at the level of mechanisms and typed interfaces, with
+   the leaves stubbed to refuse loudly, then fill leaves one at a time; each stage ends with its tests green
+   so the next stage stands on known ground. Do not perfect a leaf before its neighbours exist.
+7. **A bug found at runtime is a question to ask the type system.** After fixing it, ask "what static
+   check or assertion would have caught this?" and add it if it is cheap; count it in the Process log.
 
 ## Architecture as a living map
 
@@ -173,6 +275,26 @@ the human stays in the loop at decomposition time.
   Prefer "here's what I'd do and why; here's where I'm unsure."
 - Match taste and vision, not just literal goals. When unsure, say your pick and
   why; let them redirect.
+- **Ask in plain words, with the sides laid out (the human's standing request).** Every question to the
+  human is simple enough to answer without background knowledge. Shape:
+  1. **The question in one sentence**, no jargon (or the jargon explained in a few words).
+  2. **A concrete example** of what each choice looks like in practice, with real names from this project.
+  3. **The options (two or three)**, each with: what it means, **pros**, **cons**, and **what it
+     implies later** (what becomes easier, harder, or impossible to change).
+  4. **My pick and why**, and what would change my mind.
+  5. **What happens if they do not answer** (the default I will use, and whether it can be undone).
+  Keep it to one screen. One question at a time unless they are really one decision. If the options
+  cannot be explained simply, the question is not ready: research more or split it.
+- **Capture principles when they are stated.** The human steers by principle ("the design dictates what
+  is possible and fast", "stubs are scaffolding, not precedent", "avoid hurting performance"). Write each
+  into VISION.md's structural principles in the turn it is said, with their wording; later choices are
+  checked against them.
+- **Record the human's answers verbatim and dated** in DECISIONS (what was asked, what they answered), and
+  clear the item from STATE's Awaiting-human list in the same turn.
+- **Scaffolding is not precedent.** What exists because something had to work first (a shell that holds
+  every right, a named channel, a 2 MB granule) is listed as scaffolding in ARCHITECTURE; never infer the
+  intended design from it. Structure-first: decide the mechanisms that fix what is possible, fast,
+  where it runs and who has authority; fill in the rest in order from the most stable to the most flexible.
 - One round of input on reversible work, then act. Sustained dialogue is reserved
   for boundaries, architecture, API decomposition, planned connections, and the
   irreversible.
@@ -194,7 +316,13 @@ the human stays in the loop at decomposition time.
 - Demand a ≤5-line summary from every sub-agent; keep raw output out of context.
 - Compact proactively at ~60% context: rewrite STATE.md + HANDOFF.md *first*, then
   compact. Disk is memory; the window is scratch.
-- On every reset, re-read this file and the six files above before acting.
+- Never push without the VERIFY gate green on the head being pushed; never merge unless the human asks;
+  PRs are drafts; push only to the session branch; never force-push.
+- Before adding a dependency, a syscall, or any static memory, check the budget it spends (ARCHITECTURE
+  lists them) and say so in the commit.
+- State facts about the repository once, in STATE.md ("Repository facts": default branch, branch
+  rules, safe make targets), so no session rediscovers them.
+- On every reset, re-read this file and the files named in ORIENT before acting.
 
 ---
 
@@ -211,3 +339,19 @@ A task is CLEAR when, without hand-waving, you can name:
 If you can't, it's FUZZY (→ research & propose), a SPAWN (→ too big, decompose), or
 the boundary is unclear (→ dialogue). Never a reason to interrogate the human into
 the ground or to stall. Move the project forward.
+
+
+---
+
+## Process experiment (2026-11-15 revision)
+
+This revision is an experiment, judged by the human. STATE.md keeps a short **Process log**: one line per
+session with five counts, so the effect is visible rather than remembered:
+1. times a fact about the repository or toolchain was rediscovered;
+2. pushes made without the full gate (should be 0);
+3. red results that turned out to be the test's fault, not the system's;
+4. times the human had to repeat a principle or answer;
+5. size (lines) of what ORIENT had to read;
+6. bugs found only at runtime that a type, an exhaustive `case` or an assertion could have caught.
+If the counts do not fall after a few sessions, the revision failed; change or revert it
+(`docs/archive/AGENTS.v1-2026-11-15.md` is the previous version). Add a line to the log in CLOSE.

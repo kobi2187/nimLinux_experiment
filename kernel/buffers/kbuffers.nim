@@ -74,7 +74,8 @@ proc applyRights(t: int) =
     for j in 0 ..< n:
       if want[j].first == old.first and want[j].count == old.count and want[j].acc == old.acc: keep = true
     if not keep:
-      discard spaceSetPages(sp, runVa(old), uint64(old.count) * Page, false, false)
+      doAssert spaceSetPages(sp, runVa(old), uint64(old.count) * Page, false, false),
+        "buffers: could not CLOSE an arena run in a task's tables (a revoked buffer would stay reachable)"
       changed = true
   for j in 0 ..< n:                                 # open what is new
     var have = false
@@ -82,7 +83,8 @@ proc applyRights(t: int) =
       let old = gApplied[r][k]
       if want[j].first == old.first and want[j].count == old.count and want[j].acc == old.acc: have = true
     if not have:
-      discard spaceSetPages(sp, runVa(want[j]), uint64(want[j].count) * Page, true, want[j].acc == acReadWrite)
+      doAssert spaceSetPages(sp, runVa(want[j]), uint64(want[j].count) * Page, true, want[j].acc == acReadWrite),
+        "buffers: could not OPEN an arena run the store says this task owns (run outside the arena?)"
       changed = true
   if not changed: return
   gApplied[r] = want
