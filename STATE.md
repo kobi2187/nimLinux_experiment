@@ -51,10 +51,10 @@ states of this file are in git history; this file holds the CURRENT state only.
 5. V7c: actor-backed `background`/`mailbox` behind RUI's API (threads off).
 6. V4b: measure arena sizing and per-class budgets, then set them from the numbers.
 7. V2c: sub-tick timer (S4).
+0. **K3 layers 2-4 (design decided 2026-11-16, layer 1 DONE 2026-11-17)**: kernel glue (`kernel/ports`), the input device module behind the port, the ring-3 keylogger attack test, then retire the `input` topic. This is the first thing I take: it serves the chosen result (b), keys reach only the focused app.
 8. **Static-checking audit** (first pass DONE 2026-11-15 on the foundation code: 2 enum catch-alls made exhaustive, 4 silent discards made assertions; still to audit: bare `int`s standing for handles/sizes/addresses outside the ABI boundary, and the older drivers/shell code). Original scope: find `case` statements over enums that end in a catch-all `else`, bare `int`s standing for handles/sizes/addresses/states, and silent `discard`s of results that can fail; fix them or add the missing compile-time checks. Local and reversible; I take it early because every later step benefits.
 
 **3. Needs direction** (each will be asked in the question template; first = blocks the most)
-- **K3 device-port interface** (blocks S3b, M1/M2, V6, most R-moves): a new boundary.
 - **K1 contract/IDL** (blocks K2 and every server's client library): a frozen API.
 - **E1 event server**: how a subscription is a handle; a new subsystem boundary.
 - **S2k-b2** fold the buffers table into the handle table: changes the frozen buffers API (logged in both projects).

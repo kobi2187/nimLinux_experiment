@@ -2383,3 +2383,24 @@ transports; the pattern is what K1 (contract/IDL) will later generate.
 ## 2026-11-17 — Asked: are access rights the intersection of user and app tokens?
 
 Human asked (2026-11-17) whether rights are an intersection of user tokens and app capability tokens, preferring something more streamlined than Unix users. Answer given: there are no tokens apart from handles; today the effective grant is app manifest ∩ system policy, computed once at launch; a user would be a third policy list plus a home directory scope in the launcher (Option A), not a kernel identity. Options B (Unix users) and C (runtime double check) rejected as heavier and ambient. Awaiting the human on whether multiple users exist at all; default: none.
+
+
+## 2026-11-17 — K3 layer 1 built: typed device ports (ipc/ports)
+
+**Survey (proportionate; it is our boundary):** Zircon FIDL protocols + channels, seL4 CAmkES interfaces and badged
+endpoints, Genode session RPC interfaces, Singularity channel contracts all give one thing: a closed, typed
+operation set carried by a message pipe, with exclusivity decided at bind time. **Adapted the shape**; built it small
+(~350 lines) because nothing could be adopted behind our handle/channel/buffer boundaries (each prior art brings its
+own IPC and object model). Rejected: a hand-rolled bare-channel format (Option 1, no compiler help), and handles over
+today's syscalls only (Option 3, never proves two placements).
+
+**Built:** `ipc/ports/{port,input_port,link}.nim`, `tests/test_ports.nim` (wire form, hostile bytes, every input event
+kind, exclusive binding incl. duplicate/transfer/death, ONE scenario run over BOTH transports, garbage counted, a
+vanished device module reported). ASan/UBSan clean.
+
+**Corrected while building (wrong first design):** events were dropped OLDEST in the direct transport but NEWEST over
+a full channel, and the client could not tell. Now one rule: the newest is lost and the device sends an in-band
+`Lost{count}`. The compiler also caught the test's missing `ikLost` case the moment the enum grew: the exhaustive-case
+rule did its job.
+
+**Not yet:** kernel glue, the real input device, the ring-3 attack test (docs/proposals/device_ports.md, next layers).
