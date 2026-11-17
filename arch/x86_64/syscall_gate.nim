@@ -69,10 +69,10 @@ type NimixSyscall* = enum
   scBufReturn      = 34
   scBufMsgSend     = 35
   scBufMsgRecv     = 36
-  scDisplayInfo    = 37
-  scDisplayPresent = 38
-  scDisplayModes   = 39
-  scDisplaySetMode = 40
+  scRetired37      = 37   ## were display info/present/modes/setMode: now the display PORT (nimixPortCall); numbers are never reused
+  scRetired38      = 38
+  scRetired39      = 39
+  scRetired40      = 40
   scChanPair       = 41
   scChanWrite      = 42
   scChanRead       = 43
@@ -112,8 +112,8 @@ const NimixSyscallSymbol*: array[NimixSyscall, cstring] = [
   scBufClose: "nimixBufClose", scBufSeal: "nimixBufSeal",
   scBufReturn: "nimixBufReturn", scBufMsgSend: "nimixBufMsgSend",
   scBufMsgRecv: "nimixBufMsgRecv",
-  scDisplayInfo: "nimixDisplayInfo", scDisplayPresent: "nimixDisplayPresent",
-  scDisplayModes: "nimixDisplayModes", scDisplaySetMode: "nimixDisplaySetMode",
+  scRetired37: "nimixRetired37", scRetired38: "nimixRetired38",
+  scRetired39: "nimixRetired39", scRetired40: "nimixRetired40",
   scChanPair: "nimixChanPair", scChanWrite: "nimixChanWrite", scChanRead: "nimixChanRead",
   scHandleClose: "nimixHandleClose", scHandleDup: "nimixHandleDup", scChanStatus: "nimixChanStatus",
   scWait: "nimixWait", scChanWriteBatch: "nimixChanWriteBatch",
@@ -166,10 +166,10 @@ proc syscallTableInit*() =
   syscallTable[34] = cast[uint64](v.bufReturn)
   syscallTable[35] = cast[uint64](v.bufMsgSend)
   syscallTable[36] = cast[uint64](v.bufMsgRecv)
-  syscallTable[37] = cast[uint64](v.displayInfo)
-  syscallTable[38] = cast[uint64](v.displayPresent)
-  syscallTable[39] = cast[uint64](v.displayModes)
-  syscallTable[40] = cast[uint64](v.displaySetMode)
+  syscallTable[37] = cast[uint64](v.retired)
+  syscallTable[38] = cast[uint64](v.retired)
+  syscallTable[39] = cast[uint64](v.retired)
+  syscallTable[40] = cast[uint64](v.retired)
   syscallTable[41] = cast[uint64](v.chanPair)
   syscallTable[42] = cast[uint64](v.chanWrite)
   syscallTable[43] = cast[uint64](v.chanRead)

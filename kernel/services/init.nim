@@ -38,6 +38,7 @@ import ../../kernel/abi/task_cleanup
 import ../../kernel/abi/user_args_gate
 import ../../kernel/handles/khandles
 import ../ports/kports
+import ../display/display
 import ../../kernel/space/kspace
 import ../buffers/kbuffers
 import ../../fs/fatfs
@@ -246,6 +247,7 @@ proc initSyscallGate*() =
   kbufInit()
   khInit()                                   # handle tables and channels (ipc/handles)
   kportInit()                                # device ports (ipc/ports): the input port's module and binding
+  displayInit()                              # the display device module behind the display port
   userFaultKill   = abiKillFaultingTask
   userStackBounds = abiCurrentTaskBounds
   klog(llInfo, "[SERVICES] ✓ Syscall gate ready (ring 0<->3)")

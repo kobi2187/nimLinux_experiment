@@ -897,6 +897,31 @@ def test_keyboard_isolation(tmp, iso, bios) -> list:
     return results
 
 
+def test_display_isolation(tmp, iso, bios) -> list:
+    """D3 option A: only a program granted the display port can draw. A program with no grant (overlay) tries
+    info, modes, setMode, a present of a buffer it really owns, and raw port calls on guessed handles; every
+    attempt is refused, the console keeps the screen, and the shell is alive afterwards."""
+    results = []
+    g = boot(tmp, iso=iso, bios=bios, devices=("blk", "gpu"))
+    try:
+        try:
+            mark = len(g.out)
+            g.type("overlay")
+            assert g.wait("overlay: refused", 40, mark) or g.wait("overlay: LEAKED", 1, mark), "overlay did not finish: " + g.text(mark)[-500:]
+            out = g.text(mark)
+            assert "overlay: LEAK" not in out, "the overlay program drew or changed the display:\n" + out[-600:]
+            assert "display: owned by pid" not in out, "the display was taken: " + out[-400:]
+            assert "launcher: overlay.elf grants: none" in out, "a program with no manifest was granted something: " + out[-400:]
+            g.wait(PROMPT, 10, mark)
+            assert "NimixOS" in g.run("version"), "the console did not keep working"
+            results.append(("display-isolation", True, "a program with no display grant could not read info/modes, set a mode or present; the console kept the screen"))
+        except Exception as e:                 # noqa: BLE001
+            results.append(("display-isolation", False, str(e)))
+    finally:
+        g.close()
+    return results
+
+
 def test_user_faults(tmp, iso, bios, kernel) -> list:
     """Ring-3 faults kill only the faulting task: one boot survives them all."""
     results = []
@@ -953,6 +978,7 @@ def main():
             results += test_isolation(tmp, a.iso, a.bios)
             results += test_spawn(tmp, a.iso, a.bios)
             results += test_keyboard_isolation(tmp, a.iso, a.bios)
+            results += test_display_isolation(tmp, a.iso, a.bios)
             results += test_crashes(tmp, a.iso, a.bios, a.kernel)
     for name, ok, msg in results:
         print(f"{'PASS' if ok else 'FAIL'}: {name:12} {msg}")

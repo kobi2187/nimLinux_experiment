@@ -39,11 +39,15 @@ proc testBuffers() =
   assert ok(0, a(0x1000, 0)), "zero length touches nothing, whatever the pointer"
   # a region and an arena are separate ranges: a buffer may not straddle them
   assert not ok(0, a(rlo + 4090, 4096 + 100)), "no straddling"
-  # displayModes(out, max): max x 8 bytes
-  assert ok(39, a(rlo, 4)), "4 modes = 32 bytes"
-  assert not ok(39, a(rlo, 1000)), "1000 modes = 8000 bytes: too big"
-  assert not ok(39, a(rlo, 0x2000_0000_0000_0000'u64)), "max * 8 wraps"
-  assert ok(39, a(0, 0)), "count only: max = 0, pointer ignored"
+  # portCall(h, buf, len, cap): the reply is written back, so the whole `cap` bytes must be the caller's
+  assert ok(52, a(7, rlo, 12, 256)), "a port message buffer inside the region"
+  assert not ok(52, a(7, rlo + 4096 - 100, 12, 256)), "cap runs off the end of the region"
+  assert not ok(52, a(7, 0x1000, 12, 256)), "port buffer in kernel memory"
+  assert not ok(52, a(7, rlo, 12, 0x2000_0000_0000_0000'u64)), "cap wraps"
+  # portEvent(h, buf, cap)
+  assert ok(53, a(7, rlo, 256)) and not ok(53, a(7, 0x1000, 256)), "event buffer must be the caller's"
+  # the retired display numbers take no arguments: nothing to check, nothing to widen
+  for nr in 37 .. 40: assert ok(uint64(nr), a(0x1000, 0x2000)), "a retired syscall has no pointer parameters"
   echo "PASS: buffer arguments"
 
 proc testStrings() =
@@ -72,9 +76,6 @@ proc testStructs() =
   assert ok(36, a(1, rlo, 16, rlo + 100)), "handles struct inside"
   assert not ok(36, a(1, rlo, 16, rlo + 4096 - 8)), "handles struct runs off the end"
   assert not ok(36, a(1, rlo, 16, 0x1000)), "handles struct in kernel memory"
-  # displayInfo(out) = 37 needs 20 bytes; displayPresent(req) = 38 needs 36; neither optional
-  assert ok(37, a(rlo)) and not ok(37, a(0)) and not ok(37, a(rlo + 4096 - 19))
-  assert ok(38, a(rlo)) and not ok(38, a(0)) and not ok(38, a(rlo + 4096 - 35))
   echo "PASS: struct arguments"
 
 proc mockArena(p, n: uint64; write: bool): bool {.nimcall.} =
@@ -97,8 +98,7 @@ proc testArenaRights() =
   assert okA(7, a(alo)), "a name inside readable arena memory"
   assert not okA(7, a(alo + 2048)), "a name in an arena block the caller has no rights on"
   # a struct the kernel writes needs write; one it reads does not
-  assert okA(37, a(alo)) and not okA(37, a(alo + 600)), "displayInfo out: writable only up to 512"
-  assert okA(38, a(alo + 600)), "displayPresent req is only read"
+  assert okA(53, a(7, alo, 256)) and not okA(53, a(7, alo + 600, 256)), "portEvent out: writable only up to 512"
   # the region is always the caller's own: the arena rights callback is not consulted for it
   assert okA(5, a(rlo, rlo + 100, 100))
   echo "PASS: arena rights (read vs write, per block)"
@@ -123,6 +123,7 @@ proc testSpecCoversVtable() =
     var fieldName = $NimixSyscallSymbol[sc]
     fieldName = fieldName[5 .. ^1]                # drop "nimix"
     fieldName[0] = toLowerAscii(fieldName[0])
+    if fieldName.startsWith("retired"): fieldName = "retired"   # the reserved numbers all share one refusing vtable entry
     var found = false
     var specStr, specPtr = 0
     for sp in ArgSpecs:

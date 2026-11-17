@@ -1,2 +1,3 @@
-# rlkeys: a raylib program that reads the keyboard
+# rlkeys: a raylib program that draws and reads the keyboard
+grant display
 grant input

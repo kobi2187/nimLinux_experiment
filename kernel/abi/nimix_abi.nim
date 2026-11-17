@@ -127,14 +127,9 @@ type
       ## Post to a named channel with handles (hs: BufMsgHandles: n, handle[], mode[]).
     bufMsgRecv*:  proc(tok: uint64; buf: pointer; bufLen: int; hs: pointer): int {.nimcall.}
       ## Receive on a channel by receive capability, taking its handles (hs out).
-    displayInfo*:    proc(outp: pointer): int {.nimcall.}
-      ## Display ABI v1 (docs/proposals/display_abi.md): width, height, format of the scanout.
-    displayPresent*: proc(req: pointer): int {.nimcall.}
-      ## Show a rectangle of an owned buffer on the display; the first present owns it.
-    displayModes*:   proc(outp: pointer; max: int): int {.nimcall.}
-      ## Display ABI v2: list the modes (width, height pairs); returns how many exist.
-    displaySetMode*: proc(w, h: uint32): int {.nimcall.}
-      ## Switch to a listed mode (clears the screen; owner only; the boot mode returns on release).
+    retired*:        proc(): int {.nimcall.}
+      ## Syscalls 37-40 (display info/present/modes/setMode) are retired: the display is a device PORT now
+      ## (nimixPortCall on the handle `grant display` gives). The numbers stay reserved and refuse with -1.
 
     # ── Handles and channels (docs/proposals/capabilities.md) ─────────────────
     # A handle is an entry in the CALLING task's own table. Errors are -ord(ChResult).

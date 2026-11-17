@@ -74,9 +74,6 @@ const ArgSpecs* = [
   b(29, 1, 2, wr = true),                                 # capRecv(tok, buf, len)
   s(35), b(35, 1, 2), st(35, 3, BufMsgHandlesBytes, optional = true),   # bufMsgSend(name, data, len, hs)
   b(36, 1, 2, wr = true), st(36, 3, BufMsgHandlesBytes, optional = true, wr = true),          # bufMsgRecv(tok, buf, len, hs)
-  st(37, 0, 20, wr = true),                               # displayInfo(out): 5 x u32
-  st(38, 0, 36),                               # displayPresent(req): 9 x u32
-  b(39, 0, 1, elem = 8, wr = true),
   st(41, 0, 40, wr = true),                    # chanPair(req): rights and badges in, two handles out
   b(42, 1, 2), st(42, 3, 52, optional = true), # chanWrite(h, data, len, sendList): data read; list read
   b(43, 1, 2, wr = true), st(43, 3, 48, optional = true, wr = true),  # chanRead(h, buf, cap, info)
@@ -85,7 +82,7 @@ const ArgSpecs* = [
   b(49, 1, 2, wr = true), st(49, 3, 16, optional = true, wr = true),  # chanReadBatch(h, buf, cap, info)
   ss(51, 1), ss(51, 2), st(51, 3, SpawnReqBytes),
   b(52, 1, 3, wr = true),                      # portCall(h, buf, len, cap): the reply is written back, up to cap
-  b(53, 1, 2, wr = true)]                      # portEvent(h, buf, cap)                       # spawn(launcher, path, args, req)                       # displayModes(out, max): max x (w, h)
+  b(53, 1, 2, wr = true)]                      # portEvent(h, buf, cap)
 
 func refusedResult*(nr: uint64): uint64 =
   ## What a refused call returns: -1, except where the syscall's failure value is 0 (those that

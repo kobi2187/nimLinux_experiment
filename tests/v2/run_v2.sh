@@ -60,3 +60,5 @@ gcc -O2 -Wall -Wextra -I"$ROOT/libnimix" -I"$RL" -o "$OUT/test_pointer" "$ROOT/t
 "$OUT/test_pointer"
 gcc -O2 -Wall -Wextra -I"$ROOT/libnimix" -I"$ROOT/kernel/abi" -o "$OUT/test_input" "$ROOT/tests/libnimix/test_input.c"
 "$OUT/test_input"
+gcc -O2 -Wall -Wextra -I"$ROOT/libnimix" -I"$ROOT/kernel/abi" -o "$OUT/test_display" "$ROOT/tests/libnimix/test_display.c"
+"$OUT/test_display"

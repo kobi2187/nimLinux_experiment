@@ -2,3 +2,4 @@
 allow spawn
 allow files
 allow input
+allow display

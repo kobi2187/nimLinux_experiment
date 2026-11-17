@@ -41,6 +41,7 @@ import ../kernel/process/launcher
 import ../kernel/ports/kports
 import ../input/evdev_decode
 import ../ipc/ports/input_port
+import ../ipc/ports/port
 
 const
   ShellPrompt = "nimixos> "
@@ -670,12 +671,12 @@ proc cmdKeytest() =
     kprint("keytest-kernel: FAIL "); kprint(what); kprint("\n")
   let me = khMe()
   kportConsoleEnsure(me)
-  if not kportHolds(me, kportConsoleHandle()): fail("the console does not hold the port to begin with"); return
+  if not kportConsoleHolds(pkInput, me): fail("the console does not hold the port to begin with"); return
   let logger = launchProgram("keylog.elf", "")
   let c1 = launchProgram("keyclient.elf", "")
   if logger.slot < 0 or c1.slot < 0: fail("could not start keylog or keyclient"); return
   let c2 = launchProgram("keyclient.elf", "")          # the port is held by c1 now: this one is not given it
-  if kportHolds(me, kportConsoleHandle()): fail("the console still holds the port after the launcher moved it")
+  if kportConsoleHolds(pkInput, me): fail("the console still holds the port after the launcher moved it")
   let settle = pitTicks() + 100                        # let the programs reach their read loops
   while pitTicks() < settle: sti(); hlt()
   kportInject(EvKey, 30, 1); kportInject(EvKey, 30, 0)                        # a key, down and up
@@ -686,7 +687,7 @@ proc cmdKeytest() =
   if c2.slot >= 0 and not waitTaskGone(c2.slot, c2.pid, 400): fail("the second client did not finish")
   if not waitTaskGone(logger.slot, logger.pid, 800): fail("the keylogger did not finish")
   kportConsoleEnsure(me)                               # the holder is gone: the console takes the port back
-  if not kportHolds(me, kportConsoleHandle()): fail("the console did not get the port back")
+  if not kportConsoleHolds(pkInput, me): fail("the console did not get the port back")
   kportInject(EvKey, 31, 1)
   var ev: InputEvent
   if not kportConsoleNextEvent(me, ev) or ev.kind != ikKey or ev.code != 31:

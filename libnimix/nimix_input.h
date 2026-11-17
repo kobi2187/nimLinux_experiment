@@ -8,10 +8,7 @@
 #pragma once
 #include <stdint.h>
 #include "nimix_abi.h"
-
-#define NIMIX_PORT_INPUT 0u            /* PortKind ordinal of the input port */
-#define NIMIX_PORT_HEADER 12
-#define NIMIX_PORT_LOST_OP 0xFFFFu
+#include "nimix_port.h"
 
 typedef enum { NIMIX_IN_KEY, NIMIX_IN_MOTION, NIMIX_IN_BUTTON, NIMIX_IN_WHEEL, NIMIX_IN_LOST } NimixInputKind;
 
@@ -22,11 +19,6 @@ typedef struct {
     int x, y;            /* MOTION: dx,dy (relative) or the position 0..32767 (absolute); WHEEL: x,y */
     int absolute;        /* MOTION: 1 if x,y are a position */
 } NimixInputEvent;
-
-static inline unsigned nimix_le16(const unsigned char *p) { return (unsigned)p[0] | ((unsigned)p[1] << 8); }
-static inline int32_t nimix_le32(const unsigned char *p) {
-    return (int32_t)((uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24));
-}
 
 /* Decode one event message (wire form, `len` bytes). 1 if it is an event this header understands, else 0:
  * a hostile or truncated message is refused, never half-read. */
@@ -67,15 +59,3 @@ static inline int nimix_input_next(NimixHandle port, NimixInputEvent *ev) {
     }
 }
 
-/* Which of the handles given at spawn is the port of this kind? 0 if none. Asks each handle "what port
- * are you?" (the describe request every port answers); handles of other kinds just refuse. */
-static inline NimixHandle nimix_find_port(unsigned kind) {
-    for (unsigned i = 0; i < 8; i++) {
-        NimixHandle h = NIMIX_BOOTSTRAP_HANDLE + i;
-        unsigned char m[NIMIX_PORT_MSG] = { 0 };                         /* request, status 0, seq 0, len 0 */
-        m[2] = (unsigned char)(NIMIX_PORT_DESCRIBE_OP & 0xFF); m[3] = (unsigned char)(NIMIX_PORT_DESCRIBE_OP >> 8);
-        int n = nimixPortCall(h, m, NIMIX_PORT_HEADER, sizeof m);
-        if (n == NIMIX_PORT_HEADER + 1 && m[0] == 1 && m[1] == 0 && m[NIMIX_PORT_HEADER] == kind) return h;
-    }
-    return 0;
-}

@@ -1,0 +1,2 @@
+# rldemo: a raylib scene
+grant display

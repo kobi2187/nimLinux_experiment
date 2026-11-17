@@ -59,6 +59,7 @@ def adapt(text):
 #include "nimix_keymap.h"
 #include "nimix_pointer.h"
 #include "nimix_input.h"
+#include "nimix_display.h"
 ''', "include block")
 
     text = sub_once(text, '''typedef struct {

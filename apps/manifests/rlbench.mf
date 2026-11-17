@@ -1,0 +1,2 @@
+# rlbench: a raylib frame benchmark
+grant display

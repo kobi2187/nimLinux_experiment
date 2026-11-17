@@ -10,7 +10,7 @@ import port
 
 const
   MaxWireModes* = 8                 ## = kernel/display/display_checks.MaxModes (a static check lives in display.nim)
-  DisplayFormatB8G8R8X8* = 1'u32
+  FormatBgrx* = 1'u32               ## B8G8R8X8, the one pixel format (= display_checks.DisplayFormatB8G8R8X8)
 
 type
   DisplayOp* = enum

@@ -1,2 +1,3 @@
-# rlmouse: a raylib program that reads the mouse and tablet
+# rlmouse: a raylib program that draws and reads the mouse and tablet
+grant display
 grant input
