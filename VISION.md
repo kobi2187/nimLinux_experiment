@@ -113,9 +113,11 @@ without changing it. Details: `docs/proposals/core_design.md`, `capabilities.md`
 - **There is no user identity in the system; a "user" is a set of capability tokens.** Authority is only
   what a program holds (handles, rights); what a person may do is the set of tokens granted on their behalf,
   not an account the kernel checks. (Said about screen capture: "instead of the user identify, it's just a set
-  of cap tokens".) What this does NOT yet settle is recorded in STATE.md's Awaiting list: whether a per-user
-  grant list exists in the launcher at all, and how a user grants the capture token.
-
+  of cap tokens".)
+- **A desktop OS: one person works at a time, and the machine can switch, log in and log out as a different
+  user (human, 2026-11-17).** So several token sets exist on one machine, exactly one is active, and a login
+  selects which one the launcher uses. Open: what happens to the first user's programs on a switch, and what
+  proves who logs in (both on STATE.md's Awaiting list).
 - **A foolish user must not be able to mess up the system; otherwise keep it simple (human, 2026-11-17).** A
   person's token set never includes the system's own authority (the root handles, the system files, the
   policy files), so a careless user can damage only their own things. No account hierarchy, no privilege

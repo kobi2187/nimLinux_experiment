@@ -15,13 +15,14 @@ states of this file are in git history; this file holds the CURRENT state only.
 ## Awaiting human (decisions only the human can make; **unanswered means OPEN: nothing is built on a recommendation**)
 | asked | question | blocks | my recommendation (NOT a decision) |
 |-------|----------|--------|--------------------------------------|
-| 2026-11-17 | **Number of people**: you said "to be decided". It decides whether the launcher keeps a per-user token list (manifest ∩ system policy ∩ user tokens) or only manifest ∩ system policy. (Ruled: no user identity; a user is a token set; a careless user cannot touch the system's own authority.) | a user-token file in the launcher; per-user home scopes | the per-user list only when a second person exists; nothing built until you rule |
+| 2026-11-17 | **On a user switch, what happens to the first user's running programs** (end them, keep them running sealed in the background, or freeze them) | the session/login design; per-user budgets; the launcher's per-user token list | see the question below; undecided |
+| 2026-11-17 | **What proves who logs in** (nothing, a password, a device) and where a user's token set is stored | login; the user-token file format | undecided; the foolish-user rule (a user's tokens never include the system's authority) holds either way |
 | 2026-11-15 | K1 contract/IDL: how a server's API is described and how client libraries are produced | K2 dispatcher stage 2, generated client libraries | a proposal with options comes first |
 | 2026-11-15 | `main` is stale: fast-forward it to `master` or delete it | nothing | fast-forward, then delete later; left as is meanwhile |
 | 2026-11-15 | AGENTS.md revision is an experiment: judge it from the Process log below | nothing | revert from `docs/archive/` if it does not help |
 | 2026-11-14 | S8c: language domains (checked safe Nim subset) for the SASOS model | S8c only | keep PROPOSED |
 
-**Decided 2026-11-17 (see DECISIONS):** screen capture = Option A (held by the compositor, triggered by the user's key chord, built with the render server V6); users are a token set; display ownership = handle-only (D3 option A), BUILT.
+**Decided 2026-11-17 (see DECISIONS):** screen capture = Option A (held by the compositor, triggered by the user's key chord, built with the render server V6); users are a token set, several per machine, one active at a time; display ownership = handle-only (D3 option A), BUILT.
 
 ## Built (the foundation, by layer; details in BACKLOG status table and DECISIONS)
 - **Authority:** per-task handle tables with generations, rights that only narrow, badges, move/duplicate/

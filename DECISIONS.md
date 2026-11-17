@@ -2525,3 +2525,16 @@ removed: they tested kernel-side validation of user pointers that the display no
 check on `portCall` buffers covers the same ground (user_args specs 52/53, abifuzz portCall/portEvent lines).
 
 **Still open (human):** screen capture is decided (A) but built with the render server; number of people; K1.
+
+
+## 2026-11-17 — Human on the number of people: desktop OS, one at a time, switchable
+
+**Asked:** does more than one person use a machine (did I mean several open sessions at once?). **Answered (human,
+verbatim):** "Num of users: do u mean at the same time a few open sessions? I think desktop os, single user working at
+a time, but can switch or login and out as different user."
+**Taken as a ruling on exactly this:** several users exist on a machine (so the launcher keeps a per-user token set:
+manifest ∩ system policy ∩ the active user's tokens); only ONE session is active at a time; a user can switch or log
+in and out. A "user" is still only a token set, no kernel identity. **Not assumed (new questions, on STATE's list):**
+what happens to the previous user's running programs on a switch; what proves who logs in (nothing, a password, a
+device); where a user's token set and home scope are stored and who may change them (the "foolish user" principle says
+a user can never hold the system's own authority).
