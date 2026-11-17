@@ -2474,3 +2474,22 @@ machine. Both stay on the Awaiting list with this narrowing.
 **Also (2026-11-17), process:** the human opened PR #13 (open, head 61734ec at the time) for the work after PR #12
 merged and offered: keep adding to it, or merge now and restart clean. Left to the human; meanwhile pushes to the
 session branch update PR #13, and I do not merge.
+
+
+## 2026-11-17 — Human's rulings: screen capture = Option A; users are a token set; number of people OPEN
+
+**Asked:** capture mechanism A/B/C. **Answered (human, verbatim): "Yes, option A."** So: the capture right is held
+only by the compositor/render server; the user triggers a whole-screen capture with a key chord that only the holder
+of the input port sees; the result is handed to the app the user chooses as a read-only sealed buffer; an app may
+always capture its own window (it owns that buffer). There is NO manifest name for whole-screen capture (that
+would be Option B), so apps cannot be granted it. Built when the render server (V6) exists; nothing to build now.
+**Also answered:** "Users are a token set" (no identity). **"number of people: to be decided"** stays OPEN on
+STATE's list (it decides whether the launcher keeps a per-user token list). **New principle (VISION):** "Should have
+foolish user constrained from messing up system, but otherwise keep it simple": a person's token set never contains
+the system's own authority, so a careless user can damage only their own things.
+**Process (human):** the never-assume rule commit was made on a branch a PR had already been made from; do not let it
+get lost. Checked 2026-11-17: the commit (61734ec) is on the session branch and in open PR #13; it is NOT in
+`master` until PR #13 merges. Nothing was lost; if the PR is merged the rule lands with it.
+**Correction of my own mistake:** I listed "the display port" as work I could do alone. It depends on D3 (who may own
+the display, docs/proposals/render_server_v6.md), which the human has not ruled; it is an ABI change to display
+v1/v2. Moved to the Awaiting list as a question and removed from the independent leaves.

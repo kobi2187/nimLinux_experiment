@@ -116,6 +116,11 @@ without changing it. Details: `docs/proposals/core_design.md`, `capabilities.md`
   of cap tokens".) What this does NOT yet settle is recorded in STATE.md's Awaiting list: whether a per-user
   grant list exists in the launcher at all, and how a user grants the capture token.
 
+- **A foolish user must not be able to mess up the system; otherwise keep it simple (human, 2026-11-17).** A
+  person's token set never includes the system's own authority (the root handles, the system files, the
+  policy files), so a careless user can damage only their own things. No account hierarchy, no privilege
+  prompts, no per-file permission bits: the constraint is what the user's tokens do not contain.
+
 ## Rendering model and budgets (human, 2026-11-03)
 
 **The server-provides model is the default and the experiment; exceptions are

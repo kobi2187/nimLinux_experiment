@@ -40,3 +40,11 @@ The one official way to use a device module (the hardware-facing code). Rules, e
 ## What this does not decide
 How the device module is *placed* (kernel or server) per kernel model: that is the residency map and a measured
 choice; the port is what makes it a one-line change. The contract/IDL (K1) will generate what is hand-written here.
+
+## Display port and screen capture (design record; build blocked on D3 and the render server)
+**Decided 2026-11-17 (human: "Yes, option A")**: whole-screen capture is a right held only by the compositor
+(the render server). The user triggers it with a key chord that only the holder of the input port can see; the
+image goes to the app the user chooses as a sealed read-only buffer; an app may capture its OWN window (it owns
+that buffer). No manifest name grants whole-screen capture. Today no call can read the screen back (the display
+calls are info/present/modes/set-mode), and other apps' memory is isolated, so nothing needs closing now; the
+overlay hole (first present wins) is closed by the display port, which waits on D3 (who may own the display).

@@ -15,13 +15,14 @@ states of this file are in git history; this file holds the CURRENT state only.
 ## Awaiting human (decisions only the human can make; **unanswered means OPEN: nothing is built on a recommendation**)
 | asked | question | blocks | my recommendation (NOT a decision) |
 |-------|----------|--------|--------------------------------------|
-| 2026-11-17 | **Screen capture**: who may see the whole screen, and how the user grants it (the human proposed a user-only permission plus a special capture token) | the display port's capture operation; any screenshot feature | options A/B/C in the 2026-11-17 answer; I lean A (the compositor holds the right, the user triggers it with a key chord) |
-| 2026-11-17 | **(narrowed by your answer)** capture mechanism A/B/C: you ruled the *user* is just a set of cap tokens, not an identity; the choice of mechanism is still yours | the display port's capture operation | I lean A; undecided |
-| 2026-11-17 | **Users, narrowed**: Unix-style users are ruled out (a user is a set of cap tokens). Still open: does the launcher keep a per-user token list (manifest ∩ system policy ∩ user tokens), or only manifest ∩ system policy; more than one person per machine? | a user-token file in the launcher; per-user home scopes | the per-user list only when a second person exists; nothing built until you rule |
+| 2026-11-17 | **D3, who may own the display** (render_server_v6.md): an explicit display capability moved by the launcher on `grant display` (like input), and whether a program may still claim the display when no render server runs ("direct mode") | the display port (M1), V6a, removing first-present display; it is an ABI change to display v1/v2 | handle-based like input; direct mode: your call, I do not assume |
+| 2026-11-17 | **Number of people**: you said "to be decided". It decides whether the launcher keeps a per-user token list (manifest ∩ system policy ∩ user tokens) or only manifest ∩ system policy. (Ruled: no user identity; a user is a token set; a careless user cannot touch the system's own authority.) | a user-token file in the launcher; per-user home scopes | the per-user list only when a second person exists; nothing built until you rule |
 | 2026-11-15 | K1 contract/IDL: how a server's API is described and how client libraries are produced | K2 dispatcher stage 2, generated client libraries | a proposal with options comes first |
 | 2026-11-15 | `main` is stale: fast-forward it to `master` or delete it | nothing | fast-forward, then delete later; left as is meanwhile |
 | 2026-11-15 | AGENTS.md revision is an experiment: judge it from the Process log below | nothing | revert from `docs/archive/` if it does not help |
 | 2026-11-14 | S8c: language domains (checked safe Nim subset) for the SASOS model | S8c only | keep PROPOSED |
+
+**Decided 2026-11-17 (see DECISIONS):** screen capture = Option A (held by the compositor, triggered by the user's key chord, built with the render server V6); users are a token set.
 
 ## Built (the foundation, by layer; details in BACKLOG status table and DECISIONS)
 - **Authority:** per-task handle tables with generations, rights that only narrow, badges, move/duplicate/
@@ -53,7 +54,7 @@ states of this file are in git history; this file holds the CURRENT state only.
 5. V7c: actor-backed `background`/`mailbox` behind RUI's API (threads off).
 6. V4b: measure arena sizing and per-class budgets, then set them from the numbers.
 7. V2c: sub-tick timer (S4).
-0. ~~K3 layers 2-4~~ **DONE 2026-11-17 (result b delivered for input).** Follow-ups I can do alone: route PS/2 into the input port (R3b); the display port (M1) the same way (single-client bind replaces first-present display); migrate `isotest`'s local helpers to the shared `launchProgram/waitTaskGone`.
+0. ~~K3 layers 2-4~~ **DONE 2026-11-17 (result b delivered for input).** Independent follow-ups: ASan/UBSan on the new libraries (manifest, evdev decoder, ports); migrate `isotest`'s local helpers to the shared `launchProgram/waitTaskGone`; a second static-checking pass. NOT independent (blocked on questions): the display port (needs D3); routing PS/2 into the input port is possible but I cannot test it end to end (QEMU feeds the virtio keyboard) and it could double keys, so it waits for a way to test it.
 8. **Static-checking audit** (first pass DONE 2026-11-15 on the foundation code: 2 enum catch-alls made exhaustive, 4 silent discards made assertions; still to audit: bare `int`s standing for handles/sizes/addresses outside the ABI boundary, and the older drivers/shell code). Original scope: find `case` statements over enums that end in a catch-all `else`, bare `int`s standing for handles/sizes/addresses/states, and silent `discard`s of results that can fail; fix them or add the missing compile-time checks. Local and reversible; I take it early because every later step benefits.
 
 **3. Needs direction** (each will be asked in the question template; first = blocks the most)
