@@ -58,3 +58,5 @@ gcc -O2 -Wall -Wextra -I"$ROOT/libnimix" -I"$RL" -o "$OUT/test_keymap" "$ROOT/te
 # 6. libnimix's pointer helpers (tablet scaling, clamping, button codes) and raylib's MouseButton enum
 gcc -O2 -Wall -Wextra -I"$ROOT/libnimix" -I"$RL" -o "$OUT/test_pointer" "$ROOT/tests/libnimix/test_pointer.c"
 "$OUT/test_pointer"
+gcc -O2 -Wall -Wextra -I"$ROOT/libnimix" -I"$ROOT/kernel/abi" -o "$OUT/test_input" "$ROOT/tests/libnimix/test_input.c"
+"$OUT/test_input"

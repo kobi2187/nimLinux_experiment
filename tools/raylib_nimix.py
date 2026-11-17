@@ -22,7 +22,7 @@ What changes, relative to the memory platform:
     kernel call per frame;
   - SetWindowPosition places the window on the display;
   - the terminal-polling input (termios/fcntl) is dropped; keys arrive from the event
-    bus: evdev events on the "input" topic, mapped to raylib's KeyboardKey and to
+    port: typed events on the input port (libnimix/nimix_input.h), mapped to raylib's KeyboardKey and to
     characters by libnimix/nimix_keymap.h (V5c); mouse and tablet events (EV_REL, EV_ABS,
     buttons, wheel) become raylib's mouse position, buttons and wheel (V5e,
     libnimix/nimix_pointer.h).
@@ -58,6 +58,7 @@ def adapt(text):
 #include "nimix_abi.h"
 #include "nimix_keymap.h"
 #include "nimix_pointer.h"
+#include "nimix_input.h"
 ''', "include block")
 
     text = sub_once(text, '''typedef struct {
@@ -66,7 +67,7 @@ def adapt(text):
     unsigned int *pixels;   // Pointer to pixel data buffer (RGBA8888 format; B8G8R8X8 once swizzled)
     unsigned int bufHandle; // NimixOS: the owned buffer pixels live in (what nimixDisplayPresent reads)
     int posX, posY;         // NimixOS: where the window sits on the display
-    unsigned int inputTok;  // NimixOS: our subscription to the "input" event topic (0 = none)
+    unsigned int inputPort; // NimixOS: our handle to the input port (0 = this program was not given one)
     NimixKeyState keys;     // NimixOS: modifier state for turning key events into characters
     unsigned char releaseNext[MAX_KEYBOARD_KEYS];   // NimixOS: a tap's release, held back one frame
     int cursorX, cursorY;   // NimixOS: the pointer on the display (a mouse moves it; a tablet sets it)
@@ -132,47 +133,50 @@ static char getch(void) { return getchar(); }   // Get pressed character
         if (key == 27) CORE.Window.shouldClose = true; // KEY_ESCAPE
     }
 ''', '''
-    // NimixOS: keys arrive on the "input" event topic as evdev triples (type, code, value),
-    // 8 bytes each. Drain everything pending: while this program owns the display the
-    // kernel console ignores key events, so they are ours alone.
+    // NimixOS: input arrives as typed events on the input port this program was given at spawn
+    // (ipc/ports; libnimix/nimix_input.h). Drain everything pending: while this program owns the
+    // display the kernel console ignores key events, and it holds the only port handle, so they are ours alone.
     // A tap delivers press and release together. If both land in one poll the key would
     // end the frame "up" and IsKeyPressed() would never see it, so a release of a key
     // that went down in this same poll is applied at the start of the NEXT poll.
     for (int i = 0; i < MAX_KEYBOARD_KEYS; i++)
         if (platform.releaseNext[i]) { CORE.Input.Keyboard.currentKeyState[i] = 0; platform.releaseNext[i] = 0; }
 
-    unsigned char ev[8];
-    while (platform.inputTok != 0 && nimixEventPoll(platform.inputTok, ev, sizeof(ev)) == (int)sizeof(ev))
+    NimixInputEvent ie;
+    while (platform.inputPort != 0 && nimix_input_next(platform.inputPort, &ie) > 0)
     {
-        unsigned int type = (unsigned int)ev[0] | ((unsigned int)ev[1] << 8);
-        unsigned int code = (unsigned int)ev[2] | ((unsigned int)ev[3] << 8);
-        int value = (int)((unsigned int)ev[4] | ((unsigned int)ev[5] << 8) | ((unsigned int)ev[6] << 16) | ((unsigned int)ev[7] << 24));
-        if (type == NIMIX_EV_REL || type == NIMIX_EV_ABS)       // mouse motion/wheel, tablet position
+        unsigned int code = ie.code;
+        int value = ie.value;
+        if (ie.kind == NIMIX_IN_LOST) { platform.keys = (NimixKeyState){ 0 }; continue; }   // events were lost: forget held modifiers
+        if (ie.kind == NIMIX_IN_MOTION || ie.kind == NIMIX_IN_WHEEL)   // mouse motion/wheel, tablet position
         {
             int dw = CORE.Window.display.width, dh = CORE.Window.display.height;
-            if (type == NIMIX_EV_ABS)
+            if (ie.kind == NIMIX_IN_WHEEL) CORE.Input.Mouse.currentWheelMove.y += (float)ie.y;
+            else if (ie.absolute)
             {
-                if (code == NIMIX_ABS_X) platform.cursorX = nimix_abs_to_px(value, dw);
-                else if (code == NIMIX_ABS_Y) platform.cursorY = nimix_abs_to_px(value, dh);
+                platform.cursorX = nimix_abs_to_px(ie.x, dw);
+                platform.cursorY = nimix_abs_to_px(ie.y, dh);
             }
-            else if (code == NIMIX_REL_X) platform.cursorX = nimix_clamp_px((int64_t)platform.cursorX + value, dw);
-            else if (code == NIMIX_REL_Y) platform.cursorY = nimix_clamp_px((int64_t)platform.cursorY + value, dh);
-            else if (code == NIMIX_REL_WHEEL) CORE.Input.Mouse.currentWheelMove.y += (float)value;
+            else
+            {
+                platform.cursorX = nimix_clamp_px((int64_t)platform.cursorX + ie.x, dw);
+                platform.cursorY = nimix_clamp_px((int64_t)platform.cursorY + ie.y, dh);
+            }
             CORE.Input.Mouse.currentPosition = (Vector2){ (float)(platform.cursorX - platform.posX), (float)(platform.cursorY - platform.posY) };
             CORE.Input.Mouse.cursorOnScreen = (platform.cursorX >= platform.posX) && (platform.cursorX < platform.posX + CORE.Window.screen.width) &&
                                               (platform.cursorY >= platform.posY) && (platform.cursorY < platform.posY + CORE.Window.screen.height);
             continue;
         }
-        int mb = (type == NIMIX_EV_KEY)? nimix_button_to_raylib(code) : -1;
-        if (mb >= 0)                                            // BTN_LEFT / RIGHT / MIDDLE
+        if (ie.kind == NIMIX_IN_BUTTON)
         {
+            int mb = nimix_button_to_raylib(code);
+            if (mb < 0) continue;
             if (value == 0 && CORE.Input.Mouse.previousButtonState[mb] == 0 && CORE.Input.Mouse.currentButtonState[mb] == 1)
                 platform.btnReleaseNext[mb] = 1;                // a click: show it down for one frame
             else
                 CORE.Input.Mouse.currentButtonState[mb] = (value != 0)? 1 : 0;
             continue;
         }
-        if (type != NIMIX_EV_KEY) continue;
 
         int ch = nimix_key_feed(&platform.keys, code, value);   // also tracks shift/ctrl/caps
         int key = nimix_evdev_to_raylib(code);
@@ -218,7 +222,7 @@ static char getch(void) { return getchar(); }   // Get pressed character
             return -1;
         }
         platform.bufHandle = (unsigned int)handle;
-        platform.inputTok = nimixEventSubscribe("input");
+        platform.inputPort = nimix_find_port(NIMIX_PORT_INPUT);   // given at spawn by the manifest (`grant input`), or not at all
 ''', "framebuffer allocation")
 
     text = sub_once(text, '''    RL_FREE(platform.pixels);

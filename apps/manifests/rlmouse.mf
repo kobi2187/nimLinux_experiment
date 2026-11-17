@@ -1,0 +1,2 @@
+# rlmouse: a raylib program that reads the mouse and tablet
+grant input

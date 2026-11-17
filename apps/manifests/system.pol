@@ -1,3 +1,4 @@
 # what this machine allows apps to be granted (launch/manifest.nim)
 allow spawn
 allow files
+allow input

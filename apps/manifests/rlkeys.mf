@@ -1,0 +1,2 @@
+# rlkeys: a raylib program that reads the keyboard
+grant input
