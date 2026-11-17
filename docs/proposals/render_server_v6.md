@@ -169,6 +169,8 @@ block-on-wake as a separate kernel slice (BACKLOG "Phase E"), then swap the func
 
 ### D3. Who is allowed to own the display?
 
+> **ANSWERED 2026-11-17 (human: "Sure, go with A.") and BUILT** as the strict handle-only variant of option B below, with NO direct-mode fallback: the display is a device port whose handle the launcher moves to a program granted `display` (docs/proposals/device_ports.md, DECISIONS 2026-11-17 D3). Read the rest as history.
+
 **The problem.** Ownership is implicit: whoever presents first owns the screen until it exits. With a
 server this is a hole in two directions: any program started before the server owns the screen and the
 server gets "busy"; any program started after cannot get in, which is the intended behaviour only if the

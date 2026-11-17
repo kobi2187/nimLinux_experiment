@@ -2493,3 +2493,35 @@ get lost. Checked 2026-11-17: the commit (61734ec) is on the session branch and 
 **Correction of my own mistake:** I listed "the display port" as work I could do alone. It depends on D3 (who may own
 the display, docs/proposals/render_server_v6.md), which the human has not ruled; it is an ABI change to display
 v1/v2. Moved to the Awaiting list as a question and removed from the independent leaves.
+
+
+## 2026-11-17 — D3 answered: the display is a device port, handle-only (Option A)
+
+**Asked (2026-11-17):** who may own the display; A = handle only (strict), B = handle plus a direct-mode fallback.
+**Answered (human, verbatim): "Sure, go with A."** Recorded as: only a program granted the display port can draw;
+no direct-mode fallback; every graphical app needs `grant display`.
+
+**Built (K3 pattern, second device; typed port, Option 2):**
+- `ipc/ports/display_port.nim`: ops info/modes/setMode/present as typed payloads; no operation reads the screen back
+  (capture stays the compositor's right, decided Option A earlier today).
+- `kernel/display/display.nim`: the display device module is a handler behind the port (exhaustive `case` over the
+  ops); the pointer-checking code is gone because no user pointer reaches it. The module installs itself with
+  `kportInstallModule` (hook inversion, so `kports` does not import the display).
+- `kernel/ports/kports.nim` generalized to several ports (per-kind link, module, console handle); a port's
+  `onReleased` hook hands the screen back to the console when the holder closes the handle or dies.
+- Launcher: `grant display` MOVES the console's display handle to the program (rights read/write/wait, not transfer).
+  If another program holds it the grant is refused and logged ("display: held by another program").
+- **Syscalls 37-40 retired**, not renumbered: the numbers stay reserved and refuse with -1 (`scRetired37..40`, one
+  shared refusing vtable entry), so existing numbering and anything that hard-codes it stay valid. The C functions
+  `nimixDisplayInfo/Present/Modes/SetMode` now live in `libnimix/nimix_display.h` over the port (same signatures,
+  old return codes; -4 = this program holds no display port).
+- Manifests: `gfxtest`, `rldemo`, `rlbench` grant display; `rlkeys`, `rlmouse` grant display and input;
+  `system.pol` allows display.
+- `overlay` (no manifest) is the attacker: it tries info/modes/setMode/present (with a buffer it owns) and raw port
+  calls on guessed handles; all refused (`display-isolation`).
+
+**Cost of the ABI change:** gfxtest's four "hostile pointer" checks ("request pointing into the kernel", ...) were
+removed: they tested kernel-side validation of user pointers that the display no longer has; the generic gate
+check on `portCall` buffers covers the same ground (user_args specs 52/53, abifuzz portCall/portEvent lines).
+
+**Still open (human):** screen capture is decided (A) but built with the render server; number of people; K1.
