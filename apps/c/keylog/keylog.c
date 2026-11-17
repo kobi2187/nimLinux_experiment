@@ -19,14 +19,17 @@ int main(void) {
         NimixWaitItem w = { guesses[i], 0 };
         if (nimixWait(&w, 1, 1) >= 0) { printf("keylog: LEAK waited on %x\n", guesses[i]); leaked++; }
     }
-    unsigned tok = nimixEventSubscribe("input");          /* the old way: a global topic anyone could read */
+    const char *topics[] = { "input", "key.down", "mouse.move", "mouse.click" };   /* the old way: global topics anyone could read */
+    unsigned toks[4];
+    for (int i = 0; i < 4; i++) toks[i] = nimixEventSubscribe(topics[i]);
     int seen = 0;
     for (int tick = 0; tick < 40; tick++) {                /* ~4 s */
-        unsigned char ev[8];
-        while (tok && nimixEventPoll(tok, ev, sizeof ev) == (int)sizeof ev) seen++;
+        unsigned char ev[64];
+        for (int i = 0; i < 4; i++)
+            while (toks[i] && nimixEventPoll(toks[i], ev, sizeof ev) > 0) seen++;
         nimixSleep(10);
     }
-    if (seen) { printf("keylog: LEAK %d events on the old input topic\n", seen); leaked++; }
+    if (seen) { printf("keylog: LEAK %d events on the old global topics\n", seen); leaked++; }
     printf(leaked ? "keylog: LEAKED\n" : "keylog: got nothing\n");
     return leaked != 0;
 }

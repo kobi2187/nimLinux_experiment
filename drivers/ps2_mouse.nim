@@ -2,7 +2,7 @@
 ## PS/2 Mouse Driver
 ##
 ## Handles IRQ12, decodes the 3-byte PS/2 mouse packet protocol, and publishes
-## mouse.move / mouse.click events to the event_server.
+## packets to `ps2MouseHook` (not to a global event topic).
 ##
 ## Port map:
 ##   0x60 = data port  (read byte from 8042 output buffer)
@@ -143,10 +143,12 @@ let ps2MouseDriver* = DriverVTable(
   irq:    nil
 )
 
+var ps2MouseHook*: proc(dx, dy: int; buttons: uint8) {.nimcall.}
+  ## Where a PS/2 mouse packet goes. nil = dropped; never a global event topic (see ps2_keyboard.nim).
+
 when defined(kernelFull):
   import ../kern/interrupts
   import ../drivers/pic
-  import ../kernel/event_server
 
   proc mouseIrqHandler*(ctx: ptr ExceptionContext) {.nimcall.} =
     ## IRQ12 handler — accumulates 3-byte packet, then publishes events.
@@ -155,12 +157,7 @@ when defined(kernelFull):
     let pkt = mouseReassemble(b)
     if not pkt.valid:
       return
-    if pkt.dx != 0 or pkt.dy != 0:
-      var mv = MouseMoveEvent(dx: pkt.dx, dy: pkt.dy)
-      eventPublish("mouse.move", addr mv, sizeof(MouseMoveEvent))
-    if pkt.buttons != 0:
-      var cl = MouseClickEvent(buttons: pkt.buttons)
-      eventPublish("mouse.click", addr cl, sizeof(MouseClickEvent))
+    if ps2MouseHook != nil: ps2MouseHook(pkt.dx, pkt.dy, pkt.buttons)
 
   proc mouseRegisterHandler*() =
     ## Enable the mouse port and register the IRQ12 handler.
