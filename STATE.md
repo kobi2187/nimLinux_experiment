@@ -12,14 +12,15 @@ states of this file are in git history; this file holds the CURRENT state only.
 - Gate before any push: all four test targets green, run once and alone (AGENTS.md, VERIFY).
 - Last gate (2026-11-15, head 26da1d0): `make test` pass; `test-devices` 39/39 on all three kernels; `test-qemu-models` 16/16 x3; `test-structured` 47/47.
 
-## Awaiting human (decisions only the human can make)
-| asked | question | my recommendation |
-|-------|----------|-------------------|
-| 2026-11-14 | S8c: language domains (checked safe Nim subset, Singularity style) for the SASOS model | keep PROPOSED; build after the contract layer, when a second isolation kind has a user |
-| 2026-11-15 | `main` is stale: fast-forward it to `master` or abandon it | fast-forward, or delete and make `master` the only branch |
-| 2026-11-15 | AGENTS.md revision is an experiment: judge it from the Process log below | none needed; revert from `docs/archive/` if it does not help |
-| 2026-11-17 | **Users**: should access be app manifest ∩ system policy ∩ a user policy computed once at launch (Option A, no kernel users), or Unix-style users, or runtime double checks | Option A; add no user concept until the machine has more than one human |
-| 2026-11-15 | K1 contract/IDL: how a server's API is described and how client libraries are produced | a proposal comes first (options and a pick) |
+## Awaiting human (decisions only the human can make; **unanswered means OPEN: nothing is built on a recommendation**)
+| asked | question | blocks | my recommendation (NOT a decision) |
+|-------|----------|--------|--------------------------------------|
+| 2026-11-17 | **Screen capture**: who may see the whole screen, and how the user grants it (the human proposed a user-only permission plus a special capture token) | the display port's capture operation; any screenshot feature | options A/B/C in the 2026-11-17 answer; I lean A (the compositor holds the right, the user triggers it with a key chord) |
+| 2026-11-17 | **Users**: access = app manifest ∩ system policy ∩ a user policy at launch (no kernel users), or Unix-style users, or runtime double checks | a user-policy file in the launcher; per-user home scopes | Option A; nothing built until you rule |
+| 2026-11-15 | K1 contract/IDL: how a server's API is described and how client libraries are produced | K2 dispatcher stage 2, generated client libraries | a proposal with options comes first |
+| 2026-11-15 | `main` is stale: fast-forward it to `master` or delete it | nothing | fast-forward, then delete later; left as is meanwhile |
+| 2026-11-15 | AGENTS.md revision is an experiment: judge it from the Process log below | nothing | revert from `docs/archive/` if it does not help |
+| 2026-11-14 | S8c: language domains (checked safe Nim subset) for the SASOS model | S8c only | keep PROPOSED |
 
 ## Built (the foundation, by layer; details in BACKLOG status table and DECISIONS)
 - **Authority:** per-task handle tables with generations, rights that only narrow, badges, move/duplicate/

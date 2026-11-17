@@ -282,9 +282,18 @@ the human stays in the loop at decomposition time.
   3. **The options (two or three)**, each with: what it means, **pros**, **cons**, and **what it
      implies later** (what becomes easier, harder, or impossible to change).
   4. **My pick and why**, and what would change my mind.
-  5. **What happens if they do not answer** (the default I will use, and whether it can be undone).
+  5. **What stays blocked if they do not answer**, and what I will do meanwhile (see the rule below: an
+     unanswered question is never decided by me).
   Keep it to one screen. One question at a time unless they are really one decision. If the options
   cannot be explained simply, the question is not ready: research more or split it.
+- **Never assume an implicit decision (human, 2026-11-15).** When I need a ruling and the human does not
+  answer, the decision stays OPEN: silence is not consent, a default is not an answer, and "my pick unless
+  you object" is not a decision. I do not build on it, I do not pick a quiet default, and I do not phrase
+  the question so that doing nothing counts as yes. The question stays on STATE's Awaiting-human list with
+  the date it was asked, for the human to consider properly when they have time. **Meanwhile I do every task
+  that I know and am confident about and that does not depend on that decision** (the independent leaves of
+  STEP BACK part 2, hygiene, tests, records), and I say plainly which work is blocked on which question.
+  If a task is only partly dependent, I do the independent part and stop at the dependent edge.
 - **Capture principles when they are stated.** The human steers by principle ("the design dictates what
   is possible and fast", "stubs are scaffolding, not precedent", "avoid hurting performance"). Write each
   into VISION.md's structural principles in the turn it is said, with their wording; later choices are

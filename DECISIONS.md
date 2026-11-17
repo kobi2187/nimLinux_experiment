@@ -2446,3 +2446,15 @@ is what will generate both from one description.
 
 **Static memory:** kports adds one 16-slot event ring of 256-byte messages (~4 KB) plus small state: negligible
 against the low-memory budget (the kernel image ends near 29 MB; regions start at 32 MB).
+
+
+## 2026-11-17 — Human's standing rule: never assume an implicit decision
+
+**Human (2026-11-15/17):** "Never assume an implicit decision. When you need a ruling, if I don't answer, leave
+the resolution for later, when I take time to consider it properly. In the meantime do all tasks you know and are
+confident about, that aren't dependent on that decision."
+**Written into** AGENTS.md (Working with the human; question template item 5 now says what stays blocked, not what
+default I would use). **Consequence for earlier questions:** the "if you don't answer, I do X" lines I wrote in
+earlier questions (K3, users, result order) were not decisions and are not treated as such; STATE's Awaiting list now
+records, per question, what it BLOCKS, and my recommendation is labelled "NOT a decision". Nothing built so far
+depended on an unanswered question (K3 was answered "Yes option 2" before I built it).
