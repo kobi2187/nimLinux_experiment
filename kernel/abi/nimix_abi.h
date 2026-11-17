@@ -158,6 +158,18 @@ int nimixKernelCalls(void);
  * the i-th arrives in the child as NIMIX_BOOTSTRAP_HANDLE + i. The child has nothing else.
  * Returns the child's pid, or -1 bad handle/argument, -30 no such file, -31 not loadable, -32 out of
  * regions or tasks, -33 busy. */
+/* Device ports (docs/proposals/device_ports.md). A port handle is given at spawn (manifest `grant input`);
+ * it names ONE device module and cannot be duplicated. A message is the port wire form:
+ *   byte 0 class (0 request, 1 reply, 2 event), 1 status, 2-3 op, 4-7 seq, 8-9 payload length, 10-11 zero,
+ *   then the payload. Buffers passed to the two calls must hold a whole message (NIMIX_PORT_MSG bytes).
+ * nimixPortCall sends the request in buf[0..len) and overwrites buf with the reply; it returns the reply
+ * length, or -1 (bad handle or argument) or -(40 + status). nimixPortEvent returns the next event's
+ * length, 0 if none is waiting, or < 0. nimixWait accepts a port handle: ready bit 0 = an event waits. */
+#define NIMIX_PORT_MSG 256
+#define NIMIX_PORT_DESCRIBE_OP 0xFFFEu     /* request every port answers: payload byte = port kind (0 = input) */
+int nimixPortCall(NimixHandle h, void* buf, int len, int cap);
+int nimixPortEvent(NimixHandle h, void* buf, int cap);
+
 #define NIMIX_SPAWN_MAX 8
 typedef struct { unsigned n; unsigned handle[NIMIX_SPAWN_MAX]; unsigned rights[NIMIX_SPAWN_MAX]; } NimixSpawnReq;
 int nimixSpawn(NimixHandle launcher, const char* path, const char* args, const NimixSpawnReq* req);

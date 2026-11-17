@@ -83,7 +83,9 @@ const ArgSpecs* = [
   b(47, 0, 1, elem = 8, wr = true),            # wait(items, n, ticks): n x (handle, ready)
   b(48, 1, 2),                                 # chanWriteBatch(h, buf, len, count): records read
   b(49, 1, 2, wr = true), st(49, 3, 16, optional = true, wr = true),  # chanReadBatch(h, buf, cap, info)
-  ss(51, 1), ss(51, 2), st(51, 3, SpawnReqBytes)]                       # spawn(launcher, path, args, req)                       # displayModes(out, max): max x (w, h)
+  ss(51, 1), ss(51, 2), st(51, 3, SpawnReqBytes),
+  b(52, 1, 3, wr = true),                      # portCall(h, buf, len, cap): the reply is written back, up to cap
+  b(53, 1, 2, wr = true)]                      # portEvent(h, buf, cap)                       # spawn(launcher, path, args, req)                       # displayModes(out, max): max x (w, h)
 
 func refusedResult*(nr: uint64): uint64 =
   ## What a refused call returns: -1, except where the syscall's failure value is 0 (those that

@@ -26,6 +26,8 @@ import ../../mm/region_allocator
 import ../../mm/sip_heap
 import ../../core/log
 import ../../launch/manifest
+import ../ports/kports
+import ../../ipc/ports/port
 
 const
   SpawnGrantMax* = 8
@@ -160,6 +162,16 @@ proc manifestGrants*(spawner: int; launcherH: Handle; program: cstring;
       if launcherH != NoHandle and hsDuplicate(gHs, spawner, launcherH, rtSpawn or rtTransfer, dup) == heOk:   # transferable here, narrowed to spawn for the child
         grants[result] = Grant(h: dup, rights: rtSpawn); inc result
         line.add " " & nameOf(g)
+    elif g == gnInput:
+      # the input port is held by ONE task; granting it MOVES the shell's handle to the program (it cannot
+      # be duplicated). If the shell no longer holds it (an earlier program has it) the grant is refused.
+      let ih = kportConsoleHandle()
+      if kportHolds(spawner, ih):
+        grants[result] = Grant(h: ih, rights: rtRead or rtWrite or rtWait)    # not rtTransfer: it cannot pass it on
+        inc result
+        line.add " " & nameOf(g)
+      else:
+        line.add " (input: held by another program)"
     else:
       line.add " (" & nameOf(g) & " not available yet)"
   if result == 0 and line[^1] == ':': line.add " none"

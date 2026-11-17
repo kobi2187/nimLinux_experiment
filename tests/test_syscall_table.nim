@@ -93,6 +93,8 @@ proc fillStubVtable() =
   v.chanStatus     = proc(h: uint32): int {.nimcall.} = 0
   v.wait           = proc(items: pointer; n: int; ticks: uint32): int {.nimcall.} = 0
   v.chanWriteBatch = proc(h: uint32; buf: pointer; len: int; count: int): int {.nimcall.} = 0
+  v.portCall = proc(h: uint32; b: pointer; len: int; cap: int): int {.nimcall.} = 0
+  v.portEvent = proc(h: uint32; b: pointer; cap: int): int {.nimcall.} = 0
   v.spawn = proc(l: uint32; p: cstring; a: cstring; r: pointer): int {.nimcall.} = 0
   v.chanReadBatch  = proc(h: uint32; buf: pointer; cap: int; info: pointer): int {.nimcall.} = 0
   v.kernelCalls    = proc(): int {.nimcall.} = 0
@@ -142,7 +144,9 @@ proc testEnumOrdinals() =
   assert ord(scChanReadBatch)  == 49
   assert ord(scKernelCalls)    == 50
   assert ord(scSpawn)          == 51
-  assert NimixSyscallCount == 52
+  assert ord(scPortCall)       == 52
+  assert ord(scPortEvent)      == 53
+  assert NimixSyscallCount == 54
   echo "PASS: syscall enum ordinals"
 
 proc testTableFilled() =

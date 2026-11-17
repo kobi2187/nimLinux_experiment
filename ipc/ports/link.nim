@@ -163,6 +163,7 @@ proc nextEvent*(l: var Link; hs: var HandleSpace; ch: var ChannelStore; ev: var 
   result = pop(l.ring, ev)
   if l.localLost > 0 and tryPush(l.ring, lostMsg(l.localLost)):   # now there is room: mark the gap, after what was kept
     l.localLost = 0
+proc eventsQueued*(l: Link): int = l.ring.count   ## events ready without reading the channel
 proc peerGone*(l: var Link; hs: var HandleSpace; ch: var ChannelStore): bool =
   drain(l, hs, ch)
   l.peerGone

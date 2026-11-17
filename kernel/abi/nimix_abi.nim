@@ -158,6 +158,11 @@ type
       ## The queued handle-free messages as records, in one call; returns how many.
     kernelCalls*:    proc(): int {.nimcall.}
       ## Syscalls the caller has made so far, including this one.
+    portCall*:       proc(h: uint32; buf: pointer; len: int; cap: int): int {.nimcall.}
+      ## One request through a device-port handle (wire form, `len` bytes); the reply is written back to
+      ## `buf` (cap >= 256) and its length returned. Negative: -1 bad handle/argument, -(40 + status).
+    portEvent*:      proc(h: uint32; buf: pointer; cap: int): int {.nimcall.}
+      ## The next event of a device port (wire form, cap >= 256): its length, 0 if none, < 0 on error.
     spawn*:          proc(launcher: uint32; path: cstring; args: cstring; req: pointer): int {.nimcall.}
       ## Start the program at `path` with the handles listed in `req` (moved from the caller's table;
       ## the i-th arrives as the bootstrap handle + i). Needs a process handle with the spawn right.

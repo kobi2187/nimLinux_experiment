@@ -20,6 +20,10 @@ const
   PortHeaderBytes* = 12
   PortInline* = ChMsgBytes - PortHeaderBytes      ## payload bytes of one port message
 
+const PortDescribeOp* = 0xFFFE'u16
+  ## Reserved request op every port answers (by the transport, not the device): "which port are you?".
+  ## Reply payload: one byte, the PortKind ordinal. How a program finds the port among its handles.
+
 type
   PortKind* = enum
     pkInput          ## keyboards, mice, tablets (the first port)

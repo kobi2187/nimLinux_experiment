@@ -73,4 +73,6 @@ __attribute__((weak)) int  nimixWait(void* items, int n, unsigned ticks) { STUB_
 __attribute__((weak)) int  nimixChanWriteBatch(unsigned h, const void* r, int len, int count) { STUB_PAD; (void)h; (void)r; (void)len; (void)count; return -1; }
 __attribute__((weak)) int  nimixChanReadBatch(unsigned h, void* r, int cap, void* info) { STUB_PAD; (void)h; (void)r; (void)cap; (void)info; return -1; }
 __attribute__((weak)) int  nimixKernelCalls(void) { STUB_PAD; return 0; }
+__attribute__((weak)) int  nimixPortCall(unsigned h, void* b, int len, int cap) { STUB_PAD; (void)h; (void)b; (void)len; (void)cap; return -1; }
+__attribute__((weak)) int  nimixPortEvent(unsigned h, void* b, int cap) { STUB_PAD; (void)h; (void)b; (void)cap; return -1; }
 __attribute__((weak)) int  nimixSpawn(unsigned l, const char* p, const char* a, const void* r) { STUB_PAD; (void)l; (void)p; (void)a; (void)r; return -1; }

@@ -84,8 +84,10 @@ type NimixSyscall* = enum
   scChanReadBatch  = 49
   scKernelCalls    = 50
   scSpawn          = 51
+  scPortCall       = 52
+  scPortEvent      = 53
 
-const NimixSyscallCount* = 52   ## total number of syscalls
+const NimixSyscallCount* = 54   ## total number of syscalls
 
 const NimixSyscallSymbol*: array[NimixSyscall, cstring] = [
   ## App-side ABI symbol for each syscall — the ONE list the ELF loader patches
@@ -115,7 +117,8 @@ const NimixSyscallSymbol*: array[NimixSyscall, cstring] = [
   scChanPair: "nimixChanPair", scChanWrite: "nimixChanWrite", scChanRead: "nimixChanRead",
   scHandleClose: "nimixHandleClose", scHandleDup: "nimixHandleDup", scChanStatus: "nimixChanStatus",
   scWait: "nimixWait", scChanWriteBatch: "nimixChanWriteBatch",
-  scChanReadBatch: "nimixChanReadBatch", scKernelCalls: "nimixKernelCalls", scSpawn: "nimixSpawn"]
+  scChanReadBatch: "nimixChanReadBatch", scKernelCalls: "nimixKernelCalls", scSpawn: "nimixSpawn",
+  scPortCall: "nimixPortCall", scPortEvent: "nimixPortEvent"]
 
 # ── Dispatch table ────────────────────────────────────────────────────────────
 # Raw function pointers indexed by NimixSyscall ordinal.
@@ -178,6 +181,8 @@ proc syscallTableInit*() =
   syscallTable[49] = cast[uint64](v.chanReadBatch)
   syscallTable[50] = cast[uint64](v.kernelCalls)
   syscallTable[51] = cast[uint64](v.spawn)
+  syscallTable[52] = cast[uint64](v.portCall)
+  syscallTable[53] = cast[uint64](v.portEvent)
 
 var syscallArgsCheck*: proc(nr: uint64; a: array[4, uint64]): bool {.nimcall.}
   ## Set at boot (kernel/abi/user_args_gate.nim): may the caller's pointer arguments be touched?
