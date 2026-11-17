@@ -2458,3 +2458,19 @@ default I would use). **Consequence for earlier questions:** the "if you don't a
 earlier questions (K3, users, result order) were not decisions and are not treated as such; STATE's Awaiting list now
 records, per question, what it BLOCKS, and my recommendation is labelled "NOT a decision". Nothing built so far
 depended on an unanswered question (K3 was answered "Yes option 2" before I built it).
+
+
+## 2026-11-17 — Human on screen capture and identity: "it's just a set of cap tokens"
+
+**Asked (2026-11-17):** who may capture the whole screen (options A compositor-held + user chord, B manifest grant
+`screenshot`, C = B + per-use trusted prompt), and does a "user" identity exist. **Human replied (verbatim):**
+"Wrt screen tokens: exactly, instead of the user identify, it's just a set of cap tokens".
+**Taken as a ruling on exactly this and no more:** no user identity concept; the user's authority is a set of
+capability tokens. **Still OPEN (not assumed):** which of A/B/C is the mechanism for capture; whether the launcher
+keeps a per-user grant list (the earlier "Users" question's Option A/B/C, now narrowed: Option B, Unix-style
+users, is ruled out by this answer; A vs "no user policy at all" remains); whether more than one person uses a
+machine. Both stay on the Awaiting list with this narrowing.
+
+**Also (2026-11-17), process:** the human opened PR #13 (open, head 61734ec at the time) for the work after PR #12
+merged and offered: keep adding to it, or merge now and restart clean. Left to the human; meanwhile pushes to the
+session branch update PR #13, and I do not merge.

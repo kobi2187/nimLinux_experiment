@@ -108,6 +108,14 @@ without changing it. Details: `docs/proposals/core_design.md`, `capabilities.md`
   authority); the details, which are the leaves of the tree, wait or come at a later stage. Every stage is
   backed by unit tests, so we advance gradually and know the parts work.
 
+## Identity and authority (human, 2026-11-17)
+
+- **There is no user identity in the system; a "user" is a set of capability tokens.** Authority is only
+  what a program holds (handles, rights); what a person may do is the set of tokens granted on their behalf,
+  not an account the kernel checks. (Said about screen capture: "instead of the user identify, it's just a set
+  of cap tokens".) What this does NOT yet settle is recorded in STATE.md's Awaiting list: whether a per-user
+  grant list exists in the launcher at all, and how a user grants the capture token.
+
 ## Rendering model and budgets (human, 2026-11-03)
 
 **The server-provides model is the default and the experiment; exceptions are

@@ -16,7 +16,8 @@ states of this file are in git history; this file holds the CURRENT state only.
 | asked | question | blocks | my recommendation (NOT a decision) |
 |-------|----------|--------|--------------------------------------|
 | 2026-11-17 | **Screen capture**: who may see the whole screen, and how the user grants it (the human proposed a user-only permission plus a special capture token) | the display port's capture operation; any screenshot feature | options A/B/C in the 2026-11-17 answer; I lean A (the compositor holds the right, the user triggers it with a key chord) |
-| 2026-11-17 | **Users**: access = app manifest ∩ system policy ∩ a user policy at launch (no kernel users), or Unix-style users, or runtime double checks | a user-policy file in the launcher; per-user home scopes | Option A; nothing built until you rule |
+| 2026-11-17 | **(narrowed by your answer)** capture mechanism A/B/C: you ruled the *user* is just a set of cap tokens, not an identity; the choice of mechanism is still yours | the display port's capture operation | I lean A; undecided |
+| 2026-11-17 | **Users, narrowed**: Unix-style users are ruled out (a user is a set of cap tokens). Still open: does the launcher keep a per-user token list (manifest ∩ system policy ∩ user tokens), or only manifest ∩ system policy; more than one person per machine? | a user-token file in the launcher; per-user home scopes | the per-user list only when a second person exists; nothing built until you rule |
 | 2026-11-15 | K1 contract/IDL: how a server's API is described and how client libraries are produced | K2 dispatcher stage 2, generated client libraries | a proposal with options comes first |
 | 2026-11-15 | `main` is stale: fast-forward it to `master` or delete it | nothing | fast-forward, then delete later; left as is meanwhile |
 | 2026-11-15 | AGENTS.md revision is an experiment: judge it from the Process log below | nothing | revert from `docs/archive/` if it does not help |
