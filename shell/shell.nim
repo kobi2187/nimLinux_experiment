@@ -591,7 +591,7 @@ proc cmdIsotest() =
   ## Keeps a victim alive and sends attackers at its memory, each running at the same time on its own
   ## page tables. Prints "isotest-kernel: ..." for tests/qemu_devices.py. The victim's secrets are
   ## read here too, from the kernel's tables (where every region is mapped), to prove they are intact.
-  const Offset = 0x300000'u64
+  const Offset = 0x200000'u64                       # the heap area of the region (the top 1 MB is the stack reserve)
   const Magic = 0x4E494D4958495351'u64
   var bad = 0
   proc fail(what: string) =
