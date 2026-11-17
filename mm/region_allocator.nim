@@ -23,6 +23,10 @@ const
   RegionBase* = 0x2000000'u64      ## First app starts here (32 MB mark)
   RegionSize* = 4 * 1024 * 1024'u64  ## Each slot is 4 MB
   MaxRegions* = 16                ## Max simultaneous loaded apps
+  UserStackReserve* = 1024 * 1024'u64
+    ## The top of every app region is the program's STACK, and the heap never reaches it. The bottom page of
+    ## this reserve is a guard page that no user access can touch: a stack overflow is a page fault at a known
+    ## address (the program is killed with a report), not silent corruption of the heap or the ELF image.
   RegionsEnd* = RegionBase + uint64(MaxRegions) * RegionSize   ## 96 MB
   ArenaBase*  = RegionsEnd         ## buffer arena (ipc/buffers) follows the regions
 

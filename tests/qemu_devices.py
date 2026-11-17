@@ -922,6 +922,40 @@ def test_display_isolation(tmp, iso, bios) -> list:
     return results
 
 
+def test_stack_guard(tmp, iso, bios) -> list:
+    """A program that overflows its own stack hits the guard page and is killed by a page fault (and the
+    kernel survives); a program that uses a lot of stack legitimately (about 400 KB) is not disturbed."""
+    results = []
+    g = boot(tmp, iso=iso, bios=bios, devices=("blk",))
+    try:
+        try:
+            mark = len(g.out)
+            g.type("stackbomb ok")
+            assert g.wait("stackbomb: ok, reached", 40, mark), "the control did not finish: " + g.text(mark)[-500:]
+            assert "reached 100 frames" in g.text(mark)
+            g.wait(PROMPT, 10, mark)
+            results.append(("stack-deep-ok", True, "100 frames of 4 KB (about 400 KB of stack) run normally"))
+        except Exception as e:                 # noqa: BLE001
+            results.append(("stack-deep-ok", False, str(e)))
+        try:
+            mark = len(g.out)
+            g.type("stackbomb bomb")
+            assert g.wait("stackbomb: recursing", 40, mark), g.text(mark)[-300:]
+            assert g.wait("=== killed pid", 40, mark), "the overflowing program was not killed: " + g.text(mark)[-600:]
+            time.sleep(1.0)
+            out = g.text(mark)
+            assert "survived" not in out, "the overflow was not stopped"
+            assert "KERNEL PANIC" not in out, "the kernel died: " + out[-600:]
+            g.wait(PROMPT, 10, mark)
+            assert "NimixOS" in g.run("version"), "the shell is dead after the overflow"
+            results.append(("stack-guard", True, "an endless recursion was killed by a page fault at the guard page; the kernel and shell are fine"))
+        except Exception as e:                 # noqa: BLE001
+            results.append(("stack-guard", False, str(e)))
+    finally:
+        g.close()
+    return results
+
+
 def test_user_faults(tmp, iso, bios, kernel) -> list:
     """Ring-3 faults kill only the faulting task: one boot survives them all."""
     results = []
@@ -979,6 +1013,7 @@ def main():
             results += test_spawn(tmp, a.iso, a.bios)
             results += test_keyboard_isolation(tmp, a.iso, a.bios)
             results += test_display_isolation(tmp, a.iso, a.bios)
+            results += test_stack_guard(tmp, a.iso, a.bios)
             results += test_crashes(tmp, a.iso, a.bios, a.kernel)
     for name, ok, msg in results:
         print(f"{'PASS' if ok else 'FAIL'}: {name:12} {msg}")

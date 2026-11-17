@@ -12,7 +12,7 @@ const
 type
   SipHeap* = object
     bump*:  uint64   ## next free byte (absolute address)
-    limit*: uint64   ## one past end of region
+    limit*: uint64   ## one past the heap: the region's end minus the stack reserve
     slot*:  int      ## which region slot this heap belongs to
 
 var gSipHeaps*: array[MaxRegions, SipHeap]
@@ -21,7 +21,7 @@ proc sipHeapInit*(slot: int) =
   ## Initialise the bump heap for a freshly allocated region slot.
   ## Starts the heap at slot base + SipHeapHeaderSize.
   let base  = regionBase(RegionHandle(slot))
-  let limit = base + RegionSize
+  let limit = base + RegionSize - UserStackReserve      # the top of the region is the stack, with its guard page
   gSipHeaps[slot] = SipHeap(
     bump:  base + uint64(SipHeapHeaderSize),
     limit: limit,

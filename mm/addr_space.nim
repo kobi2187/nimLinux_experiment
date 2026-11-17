@@ -50,6 +50,8 @@ type
     pdpt*: PageTable
     pd*: PageTable
     pts*: array[ArenaPds, PageTable]
+    regionPt*: PageTable            ## splits ONE 2 MB step of the app's region, to carry the stack's guard page
+    guarded*: bool                  ## regionPt is in use
 
   PageAccess* = tuple[present, user, writable: bool]
 
@@ -152,6 +154,25 @@ proc spaceSetPages*(m: ptr SpaceMem; va, bytes: uint64; user, writable: bool): b
       if alike:
         m.pd[idx] = leaf(stepBase, (e0 and PteUser) != 0, (e0 and PteWritable) != 0, true)
     cur = stepEnd
+  true
+
+proc spaceGuardPage*(m: ptr SpaceMem; va: uint64): bool =
+  ## Make ONE 4 KB page of this task's own region unreachable from ring 3 (a stack guard): the 2 MB step
+  ## that holds it is split into a page table whose other 511 pages keep the user rights they had, and
+  ## this page stays present for the kernel but loses the User bit. At most one guard per space; the step
+  ## must currently be a user huge page (the region window, granted). False otherwise; nothing changes then.
+  if m.guarded or va mod PageSize != 0 or va < RegionBase or va >= RegionsEnd: return false
+  let idx = int(va div HugePage)
+  let e = m.pd[idx]
+  if (e and PtePresent) == 0 or (e and PteHuge) == 0 or (e and PteUser) == 0: return false
+  let stepBase = uint64(idx) * HugePage
+  let w = (e and PteWritable) != 0
+  for i in 0 ..< PtesPerPd:
+    m.regionPt[i] = leaf(stepBase + uint64(i) * PageSize, true, w, false)
+  let g = int((va - stepBase) div PageSize)
+  m.regionPt[g] = leaf(va, false, true, false)           # present for the kernel, no User bit
+  m.pd[idx] = (phys(addr m.regionPt) and AddrMask) or PtePresent or PteWritable or PteUser
+  m.guarded = true
   true
 
 proc spaceSetBlock*(m: ptr SpaceMem; va: uint64; user, writable: bool): bool =

@@ -182,6 +182,31 @@ proc testPages() =
             "space " & $w & " page " & $i & " disagrees with the model"
   echo "PASS: ownership is page-granular: neighbouring pages of one 2 MB block belong to different spaces; whole blocks stay huge; split/merge keep the model"
 
+proc testGuard() =
+  initMaster()
+  assert spaceBuild(sp(0), rp()) and spaceBuild(sp(1), rp())
+  assert spaceGrantWindow(sp(0), regionVa(3), RegionSize, true) and spaceGrantWindow(sp(1), regionVa(5), RegionSize, true)
+  let guard = regionVa(3) + RegionSize - UserStackReserve
+  assert guard mod 4096 == 0
+  assert not spaceGuardPage(sp(1), guard), "a guard in a region this space does not own is refused (not a user window)"
+  assert not spaceGuardPage(sp(0), guard + 1), "unaligned"
+  assert not spaceGuardPage(sp(0), 0x1000), "outside the regions"
+  assert spaceGuardPage(sp(0), guard)
+  assert not spaceGuardPage(sp(0), guard + 4096), "one guard per space"
+  # the guard page: there for the kernel, closed to ring 3; its neighbours and the rest of the region stay user
+  let g = acc(0, guard)
+  assert g.present and not g.user, "the guard page is not reachable from ring 3"
+  assert acc(0, guard - 4096).user and acc(0, guard - 4096).writable, "the page below it (heap side) is user"
+  assert acc(0, guard + 4096).user and acc(0, guard + 4096).writable, "the page above it (the stack) is user"
+  for off in [0'u64, 4096, HugePage - 4096, HugePage, regionVa(3) + RegionSize - 4096 - regionVa(3)]:
+    if regionVa(3) + off != guard: assert acc(0, regionVa(3) + off).user, "the rest of the region stays user-accessible"
+  # nothing leaked into another space or the master
+  assert not acc(1, guard).user and acc(1, regionVa(5)).user
+  assert (master.pd[int(guard div HugePage)] and PteHuge) != 0 and (master.pd[int(guard div HugePage)] and PteUser) == 0, "the master is untouched"
+  # the 2 MB step really was split (the guard is a page-table entry, not a flag)
+  assert (spaces[0].pd[int(guard div HugePage)] and PteHuge) == 0
+  echo "PASS: a stack guard page is closed to ring 3 and nothing else changes"
+
 proc testSync() =
   initMaster()
   assert spaceBuild(sp(0), rp()) and spaceBuild(sp(1), rp())
@@ -210,4 +235,5 @@ when isMainModule:
   testIsolation()
   testSync()
   testPages()
+  testGuard()
   echo "All address space tests passed."

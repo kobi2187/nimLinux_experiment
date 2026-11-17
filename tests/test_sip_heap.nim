@@ -33,7 +33,7 @@ proc testExhaustion() =
   let slot = int(h)
   sipHeapInit(slot)
   # Allocate almost everything
-  let bigAlloc = sipAlloc(slot, int(RegionSize) - SipHeapHeaderSize - 64)
+  let bigAlloc = sipAlloc(slot, int(RegionSize - UserStackReserve) - SipHeapHeaderSize - 64)
   assert bigAlloc != nil
   # Next alloc should fail
   let p = sipAlloc(slot, 1024)
@@ -69,7 +69,8 @@ proc testHostileSizes() =
     assert gSipHeaps[slot].bump == before, "a refused size must not move the heap (" & $bad & ")"
   let p = sipAlloc(slot, 64)
   assert p != nil and cast[uint64](p) == before, "the heap still works after the refusals"
-  assert sipAlloc(slot, int(RegionSize) - SipHeapHeaderSize - 64) != nil, "exactly the rest is fine"
+  assert sipAlloc(slot, int(RegionSize - UserStackReserve) - SipHeapHeaderSize - 64) != nil, "exactly the rest of the heap is fine"
+  assert gSipHeaps[slot].bump == gSipHeaps[slot].limit and gSipHeaps[slot].limit == regionBase(RegionHandle(slot)) + RegionSize - UserStackReserve, "the heap ends where the stack reserve begins"
   assert sipAlloc(slot, 1) == nil, "and then it is full"
   echo "PASS: hostile sizes refused, heap untouched"
 
