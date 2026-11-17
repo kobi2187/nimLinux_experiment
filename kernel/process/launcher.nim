@@ -157,12 +157,13 @@ proc manifestGrants*(spawner: int; launcherH: Handle; program: cstring;
   var line = "launcher: " & $program & " grants:"
   for g in GrantName:
     if g notin eff: continue
-    if g == gnSpawn:
+    case g                                   # exhaustive: a new GrantName will not compile until it is decided here
+    of gnSpawn:
       var dup: Handle
       if launcherH != NoHandle and hsDuplicate(gHs, spawner, launcherH, rtSpawn or rtTransfer, dup) == heOk:   # transferable here, narrowed to spawn for the child
         grants[result] = Grant(h: dup, rights: rtSpawn); inc result
         line.add " " & nameOf(g)
-    elif g == gnInput or g == gnDisplay:
+    of gnInput, gnDisplay:
       # a device port is held by ONE task; granting it MOVES the shell's handle to the program (it cannot
       # be duplicated). If the shell no longer holds it (an earlier program has it) the grant is refused.
       let kind = if g == gnInput: pkInput else: pkDisplay
@@ -172,7 +173,7 @@ proc manifestGrants*(spawner: int; launcherH: Handle; program: cstring;
         line.add " " & nameOf(g)
       else:
         line.add " (" & nameOf(g) & ": held by another program)"
-    else:
+    of gnDispatcher, gnFiles, gnNet:
       line.add " (" & nameOf(g) & " not available yet)"
   if result == 0 and line[^1] == ':': line.add " none"
   klog(llInfo, line)

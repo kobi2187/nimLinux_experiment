@@ -571,6 +571,22 @@ proc cmdChantest() =
   discard chClose(gHs, gCh, me, dB)
   if bad == 0: kprint("chan-kernel: ok\n")
 
+proc waitTaskGone(slot: int; pid: uint32; maxTicks: uint64): bool =
+  let until = pitTicks() + maxTicks
+  while pitTicks() < until:
+    if not procTable.tasks[slot].used or procTable.tasks[slot].pid != pid: return true
+    sti(); hlt()
+  false
+
+proc launchProgram(name: cstring; args: cstring): tuple[slot: int, pid: uint32, region: int] =
+  ## Start a program from disk (its manifest decides what it is granted). slot -1 if it did not start.
+  gLastSpawnSlot = -1
+  let n = loadFile(name)
+  if n < 0: return (-1, 0'u32, -1)
+  launchLoaded(name, n, args)
+  if gLastSpawnSlot < 0: return (-1, 0'u32, -1)
+  (gLastSpawnSlot, procTable.tasks[gLastSpawnSlot].pid, gLastSpawnRegion)
+
 proc cmdIsotest() =
   ## Keeps a victim alive and sends attackers at its memory, each running at the same time on its own
   ## page tables. Prints "isotest-kernel: ..." for tests/qemu_devices.py. The victim's secrets are
@@ -581,17 +597,6 @@ proc cmdIsotest() =
   proc fail(what: string) =
     inc bad
     kprint("isotest-kernel: FAIL "); kprint(what); kprint("\n")
-  proc waitGone(slot: int; pid: uint32; maxTicks: uint64): bool =
-    let until = pitTicks() + maxTicks
-    while pitTicks() < until:
-      if not procTable.tasks[slot].used or procTable.tasks[slot].pid != pid: return true
-      sti(); hlt()
-    false
-  proc launch(name: cstring; args: cstring): tuple[slot: int, pid: uint32, region: int] =
-    let n = loadFile(name)
-    if n < 0: return (-1, 0'u32, -1)
-    launchLoaded(name, n, args)
-    (gLastSpawnSlot, procTable.tasks[gLastSpawnSlot].pid, gLastSpawnRegion)
   proc hex(v: uint64): string =
     const digits = "0123456789abcdef"
     var started = false
@@ -601,7 +606,7 @@ proc cmdIsotest() =
         started = true
         result.add digits[d]
 
-  let victim = launch("isotest.elf", "victim")
+  let victim = launchProgram("isotest.elf", "victim")
   if victim.slot < 0: fail("isotest.elf not on disk"); return
   let vbase = RegionBase + uint64(victim.region) * RegionSize
   let secret = cast[ptr uint64](vbase + Offset)
@@ -614,8 +619,8 @@ proc cmdIsotest() =
 
   # positive control: an app can use its OWN region and buffer while the victim is alive
   block:
-    let a = launch("isotest.elf", "own")
-    if a.slot < 0 or not waitGone(a.slot, a.pid, 500): fail("the control app did not finish")
+    let a = launchProgram("isotest.elf", "own")
+    if a.slot < 0 or not waitTaskGone(a.slot, a.pid, 500): fail("the control app did not finish")
     else: kprint("isotest-kernel: control finished\n")
 
   # the attacks: each runs as its own app, concurrently with the victim
@@ -626,9 +631,9 @@ proc cmdIsotest() =
     args[k] = ' '; inc k
     for c in hex(target): args[k] = c; inc k
     args[k] = '\0'
-    let a = launch("isotest.elf", cast[cstring](addr args[0]))
+    let a = launchProgram("isotest.elf", cast[cstring](addr args[0]))
     if a.slot < 0: fail("could not start the attacker " & label); return
-    if not waitGone(a.slot, a.pid, 500): fail("the attacker " & label & " is still running")
+    if not waitTaskGone(a.slot, a.pid, 500): fail("the attacker " & label & " is still running")
     elif secret[] != Magic: fail("the secret changed after " & label)
     else:
       kprint("isotest-kernel: "); kprint(label); kprint(" contained\n")
@@ -642,24 +647,8 @@ proc cmdIsotest() =
   # the sharpest case: the attacker owns the very next page of the victim's 2 MB block
   attack("read of the victim's page from the next page of its block", "neighbor", ArenaBase)
   # the victim is untouched and finishes by itself
-  if not waitGone(victim.slot, victim.pid, 800): fail("the victim did not finish")
+  if not waitTaskGone(victim.slot, victim.pid, 800): fail("the victim did not finish")
   if bad == 0: kprint("isotest-kernel: ok\n")
-
-proc waitTaskGone(slot: int; pid: uint32; maxTicks: uint64): bool =
-  let until = pitTicks() + maxTicks
-  while pitTicks() < until:
-    if not procTable.tasks[slot].used or procTable.tasks[slot].pid != pid: return true
-    sti(); hlt()
-  false
-
-proc launchProgram(name: cstring; args: cstring): tuple[slot: int, pid: uint32] =
-  ## Start a program from disk (its manifest decides what it is granted). slot -1 if it did not start.
-  gLastSpawnSlot = -1
-  let n = loadFile(name)
-  if n < 0: return (-1, 0'u32)
-  launchLoaded(name, n, args)
-  if gLastSpawnSlot < 0: return (-1, 0'u32)
-  (gLastSpawnSlot, procTable.tasks[gLastSpawnSlot].pid)
 
 proc cmdKeytest() =
   ## Who sees the keyboard? A keylogger with no grant, a legitimate client granted the input port, and a

@@ -92,7 +92,8 @@ proc displayRelease*(pid: uint32) =
   if gOwnerPid != 0 and gOwnerPid == pid:
     gOwnerPid = 0
     if virtioGpuWidth() != virtioGpuBootWidth() or virtioGpuHeight() != virtioGpuBootHeight():
-      discard virtioGpuSetMode(virtioGpuBootWidth(), virtioGpuBootHeight())   # the console's mode
+      if not virtioGpuSetMode(virtioGpuBootWidth(), virtioGpuBootHeight()):   # the console's mode
+        klog(llWarn, "display: could not restore the boot mode")
     consoleInputGrab(false)
     fbConsoleSuspend(false)
     klogInt(llInfo, "display: released by pid ", int64(pid))
