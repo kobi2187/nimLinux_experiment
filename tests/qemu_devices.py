@@ -784,7 +784,7 @@ def test_channels(tmp, iso, bios) -> list:
 
 def test_spawn(tmp, iso, bios) -> list:
     """S3: spawn authority. The launcher reads the program's manifest and the system policy and gives
-    it the intersection (spawntest asks for spawn and display; the policy allows spawn): one process
+    it the intersection (spawntest asks for spawn and net; the policy allows spawn): one process
     handle. That program spawns a child with exactly one channel end, and every way of cheating the
     grant list (forged, widened, duplicated, non-transferable, too many, no process handle) is refused.
     The child holds only that end: it cannot spawn and no other handle value works. A program with no
@@ -804,7 +804,7 @@ def test_spawn(tmp, iso, bios) -> list:
             assert not fails, "\n".join(fails)
             assert ok and "spawntest: parent ok" in out, "the parent did not finish: " + out[-700:]
             assert "spawntest: child ok" in out, "the child did not finish: " + out[-700:]
-            assert "launcher: spawntest.elf grants: spawn" in out and "display" not in \
+            assert "launcher: spawntest.elf grants: spawn" in out and "net" not in \
                 out.split("launcher: spawntest.elf grants:")[1].split("\n")[0], \
                 "the policy did not narrow the manifest: " + out[-700:]
             results.append(("spawn-authority", True, "forged/widened/duplicated/non-transferable grants refused; child holds exactly one end and cannot spawn"))

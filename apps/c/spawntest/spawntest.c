@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0
  * spawntest — spawn authority and what a child is given (S3).
  * `spawntest parent` is started by the shell; its manifest (spawntest.mf) asks for `spawn` and
- * `display`, the system policy (system.pol) allows only `spawn`, so the launcher gives it ONE handle:
+ * `net`, the system policy (system.pol) allows only `spawn`, so the launcher gives it ONE handle:
  * a process handle with the spawn right and nothing else (bootstrap handle + 0).
  *   parent: makes a channel, spawns `spawntest child` giving it ONE end, talks to it through the other,
  *           and checks every way of cheating the grant list is refused
@@ -50,7 +50,7 @@ static int parent(void) {
     const NimixHandle launcher = NIMIX_BOOTSTRAP_HANDLE;
     /* the policy gave us the spawn right and only that */
     chk(nimixChanStatus(launcher) < 0, "the launcher handle is not a channel");
-    chk(nimixChanStatus(NIMIX_BOOTSTRAP_HANDLE + 1) < 0, "the policy-denied grant (display) did not arrive");
+    chk(nimixChanStatus(NIMIX_BOOTSTRAP_HANDLE + 1) < 0, "the policy-denied grant (net) did not arrive");
     NimixHandle dup = (NimixHandle)nimixHandleDup(launcher, NIMIX_RIGHT_READ);
     chk((int)dup < 0, "the spawn right cannot be duplicated (the policy granted it without that right)");
 
