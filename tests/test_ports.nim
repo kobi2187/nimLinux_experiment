@@ -74,9 +74,9 @@ suite "port wire form":
 
 suite "input port":
   test "every event kind survives encode/decode":
-    let evs = [InputEvent(kind: ikKey, code: 30, down: true),
+    let evs = [InputEvent(kind: ikKey, code: 30, action: kaDown),
                InputEvent(kind: ikMotion, dx: -5, dy: 700, absolute: true),
-               InputEvent(kind: ikButton, button: 2, pressed: true),
+               InputEvent(kind: ikButton, button: 273, pressed: true),
                InputEvent(kind: ikWheel, wheelX: -1, wheelY: 3),
                InputEvent(kind: ikLost, lost: 12345)]
     for ev in evs:
@@ -87,7 +87,7 @@ suite "input port":
       check decode(m, back) == psOk
       check back.kind == ev.kind
       case ev.kind
-      of ikKey:    check back.code == ev.code and back.down == ev.down
+      of ikKey:    check back.code == ev.code and back.action == ev.action
       of ikMotion: check back.dx == ev.dx and back.dy == ev.dy and back.absolute == ev.absolute
       of ikButton: check back.button == ev.button and back.pressed == ev.pressed
       of ikWheel:  check back.wheelX == ev.wheelX and back.wheelY == ev.wheelY
@@ -164,7 +164,7 @@ proc scenario(l: var Link; em: var Emitter; pump: Pump; dev: ptr DeviceState) =
   check takeReply(l, hs, ch, rep) == psOk and rep.status == psOk and rep.len == 0
   check dev.infoCalls == 1 and dev.flushes == 1
   # events arrive in order, and all of them
-  let evs = [InputEvent(kind: ikKey, code: 30, down: true), InputEvent(kind: ikKey, code: 30, down: false),
+  let evs = [InputEvent(kind: ikKey, code: 30, action: kaDown), InputEvent(kind: ikKey, code: 30, action: kaUp),
              InputEvent(kind: ikMotion, dx: 3, dy: -4), InputEvent(kind: ikWheel, wheelY: 1)]
   for ev in evs:
     var m: PortMsg
@@ -181,7 +181,7 @@ proc scenario(l: var Link; em: var Emitter; pump: Pump; dev: ptr DeviceState) =
   const Sent = 100
   for i in 0 ..< Sent:
     var m: PortMsg
-    encode(InputEvent(kind: ikKey, code: uint16(i), down: true), m)
+    encode(InputEvent(kind: ikKey, code: uint16(i), action: kaDown), m)
     emit(em, hs, ch, m)
   var received, lost = 0
   var m1: PortMsg

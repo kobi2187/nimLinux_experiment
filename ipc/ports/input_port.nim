@@ -16,6 +16,9 @@ type
     keyboards*, pointers*: uint8
     queueSize*: uint16
 
+  KeyAction* = enum
+    kaUp, kaDown, kaRepeat       ## evdev value 0, 1, 2 (a held key repeats)
+
   InputKind* = enum
     ikKey, ikMotion, ikButton, ikWheel
     ikLost           ## events were lost (the queue was full): `lost` says how many; resync
@@ -24,12 +27,12 @@ type
     case kind*: InputKind
     of ikKey:
       code*: uint16            ## evdev key code
-      down*: bool
+      action*: KeyAction
     of ikMotion:
-      dx*, dy*: int32          ## relative, or absolute position when `absolute`
+      dx*, dy*: int32          ## relative motion, or the absolute position (0..32767 per axis) when `absolute`
       absolute*: bool
     of ikButton:
-      button*: uint8
+      button*: uint16          ## evdev button code (BTN_LEFT = 272, ...)
       pressed*: bool
     of ikWheel:
       wheelX*, wheelY*: int16
@@ -39,12 +42,12 @@ type
   # the wire payloads: flat, packed, one per event kind
   KeyWire {.packed.} = object
     code: uint16
-    down: bool
+    action: uint8
   MotionWire {.packed.} = object
     dx, dy: int32
     absolute: bool
   ButtonWire {.packed.} = object
-    button: uint8
+    button: uint16
     pressed: bool
   WheelWire {.packed.} = object
     x, y: int16
@@ -53,7 +56,7 @@ proc encode*(ev: InputEvent; m: var PortMsg) =
   ## Make an event message (class event, op = the kind).
   m = PortMsg(cls: mcEvent, status: psOk, op: uint16(ord(ev.kind)))
   case ev.kind
-  of ikKey:    putPayload(m, KeyWire(code: ev.code, down: ev.down))
+  of ikKey:    putPayload(m, KeyWire(code: ev.code, action: uint8(ord(ev.action))))
   of ikMotion: putPayload(m, MotionWire(dx: ev.dx, dy: ev.dy, absolute: ev.absolute))
   of ikButton: putPayload(m, ButtonWire(button: ev.button, pressed: ev.pressed))
   of ikWheel:  putPayload(m, WheelWire(x: ev.wheelX, y: ev.wheelY))
@@ -72,8 +75,8 @@ proc decode*(m: PortMsg; ev: var InputEvent): PortStatus =
   case InputKind(m.op)
   of ikKey:
     var w: KeyWire
-    if not getPayload(m, w): return psBadArg
-    ev = InputEvent(kind: ikKey, code: w.code, down: w.down)
+    if not getPayload(m, w) or int(w.action) > ord(high(KeyAction)): return psBadArg
+    ev = InputEvent(kind: ikKey, code: w.code, action: KeyAction(w.action))
   of ikMotion:
     var w: MotionWire
     if not getPayload(m, w): return psBadArg
