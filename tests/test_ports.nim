@@ -6,6 +6,7 @@ import ../ipc/handles/handle_table
 import ../ipc/handles/channel
 import ../ipc/ports/port
 import ../ipc/ports/input_port
+import ../ipc/ports/display_port
 import ../ipc/ports/link
 
 var
@@ -263,3 +264,41 @@ suite "one scenario, two transports":
     var m: PortMsg
     check not nextEvent(l, hs, ch, m)
     check l.malformed == 1
+
+suite "display port":
+  test "every operation names itself; hostile ops are refused":
+    for op in DisplayOp:
+      var m = displayRequest(op)
+      var back: DisplayOp
+      check displayOpOf(m, back) == psOk and back == op
+    var m = PortMsg(cls: mcRequest, op: 99)
+    var back: DisplayOp
+    check displayOpOf(m, back) == psBadOp
+    m = PortMsg(cls: mcReply, op: 0)
+    check displayOpOf(m, back) == psBadArg
+
+  test "payloads fit one message and round-trip":
+    var m = PortMsg(cls: mcReply)
+    var modes: DisplayModesWire
+    modes.count = 3
+    modes.modes[0] = ModeWire(w: 800, h: 600)
+    modes.modes[2] = ModeWire(w: 1280, h: 800)
+    putPayload(m, modes)
+    var back: DisplayModesWire
+    check getPayload(m, back) and back.count == 3 and back.modes[2].w == 1280
+    var p = PortMsg(cls: mcRequest)
+    putPayload(p, PresentWire(handle: 7, strideBytes: 2560, sx: 0, sy: 0, w: 640, h: 400, dx: 10, dy: -1))
+    var pw: PresentWire
+    check getPayload(p, pw) and pw.handle == 7 and pw.dy == -1 and pw.w == 640
+
+  test "a display handle and an input handle are different ports (exclusive separately)":
+    fresh()
+    var hi, hd, hd2: Handle
+    check portBind(hs, reg, pkInput, 0, hi) == psOk
+    check portBind(hs, reg, pkDisplay, 1, hd) == psOk               # the input holder does not block the display
+    check portBind(hs, reg, pkDisplay, 0, hd2) == psBusy
+    check portUse(hs, 1, hd, pkInput, rtRead) == psBadArg           # a display handle is not an input handle
+    check portUse(hs, 1, hd, pkDisplay, rtRead) == psOk
+    check checkInvariants(reg, hs) == ""
+    hsCloseAll(hs, 1, onDestroyed)
+    check not portHeld(reg, pkDisplay) and portHeld(reg, pkInput)

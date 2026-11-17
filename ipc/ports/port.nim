@@ -27,9 +27,11 @@ const PortDescribeOp* = 0xFFFE'u16
 type
   PortKind* = enum
     pkInput          ## keyboards, mice, tablets (the first port)
+    pkDisplay        ## the screen (human, 2026-11-17, D3 option A: only a holder of this handle may draw)
 
   PortStatus* = enum
-    psOk, psPending, psBadOp, psBadArg, psTooBig, psBusy, psNotBound, psPeerGone, psFull, psNoResource
+    psOk, psPending, psBadOp, psBadArg, psTooBig, psBusy, psNotBound, psPeerGone, psFull, psNoResource,
+    psNoDevice       ## the hardware behind the port is not there
 
   MsgClass* = enum
     mcRequest, mcReply, mcEvent
