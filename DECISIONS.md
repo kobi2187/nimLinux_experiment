@@ -2579,3 +2579,5 @@ VERIFY now says when to run these.
 ## 2026-11-18 — K1 asked in full (no answer yet; OPEN)
 
 Asked the human for the contract mechanism with three options (Nim types as the contract plus a generator for the C mirror and vectors; a separate schema language with its own generator; hand-written with shared test vectors). Evidence used: the input and display ports each exist twice by hand (`ipc/ports/*_port.nim` and `libnimix/nimix_*.h`), the dispatcher's two-field MsgPack message needs a 47-line strict decoder, and the draw protocol is hand-encoded in `bridge/`. Also surfaced a vision-level tension (VISION says control plane = MsgPack; the ports use packed binary records) as the NEXT question. Nothing is built on either; K2 stays blocked on K1.
+
+**Human on my writing (2026-11-18):** "You speak strangely. Talk directly like a human being. Which handwritten, what is we lived this? Too vague, be plain." Added to AGENTS.md (question template): write plainly, name the real file and line, show the actual code or numbers. The K1 question was re-explained with the real code.

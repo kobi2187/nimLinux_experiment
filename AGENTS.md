@@ -289,6 +289,10 @@ the human stays in the loop at decomposition time.
   4. **My pick and why**, and what would change my mind.
   5. **What stays blocked if they do not answer**, and what I will do meanwhile (see the rule below: an
      unanswered question is never decided by me).
+  **Write like a person talking, not like a spec** (human, 2026-11-18: "talk directly like a human being ...
+  too vague, be plain"). Short sentences. Name the actual file and line instead of "we lived this" or "the hand-written
+  copies". Show the real code or numbers when explaining a problem. No metaphors, no insider shorthand the human
+  was never told.
   Keep it to one screen. One question at a time unless they are really one decision. If the options
   cannot be explained simply, the question is not ready: research more or split it.
 - **Never assume an implicit decision (human, 2026-11-15).** When I need a ruling and the human does not
