@@ -2575,3 +2575,7 @@ gate. After adding the ports, evdev decoder, manifest, guard-page and display te
 50fef08: all exit 0 ("ASan/UBSan: clean", "valgrind: clean", ARC and WASM suites pass). `test-v2` cannot run here
 (meson missing); the two new C header tests (`test_input.c`, `test_display.c`) were run directly with gcc. AGENTS.md
 VERIFY now says when to run these.
+
+## 2026-11-18 — K1 asked in full (no answer yet; OPEN)
+
+Asked the human for the contract mechanism with three options (Nim types as the contract plus a generator for the C mirror and vectors; a separate schema language with its own generator; hand-written with shared test vectors). Evidence used: the input and display ports each exist twice by hand (`ipc/ports/*_port.nim` and `libnimix/nimix_*.h`), the dispatcher's two-field MsgPack message needs a 47-line strict decoder, and the draw protocol is hand-encoded in `bridge/`. Also surfaced a vision-level tension (VISION says control plane = MsgPack; the ports use packed binary records) as the NEXT question. Nothing is built on either; K2 stays blocked on K1.
