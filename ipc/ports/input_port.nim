@@ -40,17 +40,17 @@ type
       lost*: uint32
 
   # the wire payloads: flat, packed, one per event kind
-  KeyWire {.packed.} = object
-    code: uint16
-    action: uint8
-  MotionWire {.packed.} = object
-    dx, dy: int32
-    absolute: bool
-  ButtonWire {.packed.} = object
-    button: uint16
-    pressed: bool
-  WheelWire {.packed.} = object
-    x, y: int16
+  KeyWire* {.packed.} = object
+    code*: uint16
+    action*: uint8
+  MotionWire* {.packed.} = object
+    dx*, dy*: int32
+    absolute*: bool
+  ButtonWire* {.packed.} = object
+    button*: uint16
+    pressed*: bool
+  WheelWire* {.packed.} = object
+    x*, y*: int16
 
 proc encode*(ev: InputEvent; m: var PortMsg) =
   ## Make an event message (class event, op = the kind).

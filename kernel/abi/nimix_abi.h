@@ -139,7 +139,7 @@ int nimixKernelCalls(void);
  * length, or -1 (bad handle or argument) or -(40 + status). nimixPortEvent returns the next event's
  * length, 0 if none is waiting, or < 0. nimixWait accepts a port handle: ready bit 0 = an event waits. */
 #define NIMIX_PORT_MSG 256
-#define NIMIX_PORT_DESCRIBE_OP 0xFFFEu     /* request every port answers: payload byte = port kind (0 = input) */
+/* NIMIX_PORT_DESCRIBE_OP (the request every port answers: payload byte = port kind) is in the generated libnimix/nimix_contract.h */
 int nimixPortCall(NimixHandle h, void* buf, int len, int cap);
 int nimixPortEvent(NimixHandle h, void* buf, int cap);
 

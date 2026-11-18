@@ -45,6 +45,12 @@ KERNEL_OUT = build/main
 ISO_OUT    = nimixos.iso
 ISO_ALL_OUT = nimixos-all-kernels.iso
 
+.PHONY: gen-contract
+gen-contract:
+	$(NIM) c $(TEST_FLAGS_ARC) --hints:off --warnings:off -o:build/gen_contract tools/gen_contract.nim
+	./build/gen_contract header libnimix/nimix_contract.h
+	./build/gen_contract vectors tests/libnimix/port_vectors.txt
+
 .PHONY: all build apps nim-apps wasm-apps test-wasm iso iso-all qemu qemu-all qemu-gui qemu-debug gdb-attach symbolize run clean test test-valgrind test-asan test-qemu test-qemu-models test-devices test-arc test-p0 test-v7 test-v2 picolibc c-apps
 
 # Default target: full cycle
@@ -362,6 +368,7 @@ HOST_TESTS = \
   tests/test_ports.nim \
   tests/test_evdev_decode.nim \
   tests/test_no_ambient_input.nim \
+  tests/test_contract.nim \
   tests/test_buffers_arena.nim \
   tests/test_gfx.nim \
   tests/test_term.nim \

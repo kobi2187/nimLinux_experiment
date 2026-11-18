@@ -74,8 +74,8 @@ proc getPayload*[T](m: PortMsg; v: var T): bool =
 
 const EventLostOp* = 0xFFFF'u16
 
-type LostWire {.packed.} = object
-  count: uint32
+type LostWire* {.packed.} = object
+  count*: uint32
 
 proc lostMsg*(count: uint32): PortMsg =
   result = PortMsg(cls: mcEvent, status: psOk, op: EventLostOp)
