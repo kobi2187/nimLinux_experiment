@@ -3,7 +3,7 @@
 ## Tests Nim wrapper logic; no actual disk I/O.
 ##
 ## Compile with:
-##   nim c -r --skipParentCfg --mm:refc --path:/home/kl/prog/nimLinux_experiment \
+##   nim c -r --skipParentCfg --mm:refc --path:<repo-root> \
 ##     -d:noSignalHandler -d:noKernelHardware tests/test_fatfs_write.nim
 
 import ../fs/fatfs        # fsMounted

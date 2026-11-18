@@ -2,7 +2,7 @@
 ## Unit tests for servers/dispatch/dispatch_logic.nim
 ##
 ## Compile: nim c -r --skipParentCfg --mm:arc --panics:on \
-##            --path:/home/kl/prog/nimLinux_experiment \
+##            --path:<repo-root> \
 ##            -d:noSignalHandler tests/test_dispatch_logic.nim
 
 import servers/dispatch/dispatch_logic
@@ -188,16 +188,13 @@ block test_aging_boundary:
 # ── Actor-pipeline tests: full deliver → ingest → drain → send path ──────────
 
 var gSent: seq[(string, uint32)]   ## (target channel, decoded op)
-var gPayloads: seq[string]         ## decoded payloads, same order as gSent
 var gSendOk = true
 
 proc recSend(channel: cstring; data: pointer; len: int): int {.nimcall.} =
   if not gSendOk: return -1
   var wire = newString(len)
   copyMem(addr wire[0], data, len)
-  let req = decodeRequest(wire)
-  gSent.add(($channel, req.op))
-  gPayloads.add(req.payload)
+  gSent.add(($channel, decodeRequest(wire).op))
   len
 
 let recIface = DispatchIface(
@@ -260,46 +257,103 @@ block test_actor_tick_aging:
   assert ds.queue.heap[0].class == rcNormal, "Background aged up to Normal while waiting"
   echo "PASS: test_actor_tick_aging"
 
-# ── Test 11: dispatchPump — recv → ingest → tick → drain (no-CPS transport) ──
+# ── Pump tests: inbound channel → actor → tick ───────────────────────────────
 
-var gInbox: seq[string]
+var gInbox: seq[string]   ## raw messages waiting on the "dispatch" channel
+var gLogs: seq[string]
 
 proc queueRecv(channel: cstring; buf: pointer; len: int): int {.nimcall.} =
+  ## Mimics abiChanRecv: -1 when empty, else bytes copied (truncated to len).
+  assert $channel == DispatchChannel, "pump must read the dispatch channel"
   if gInbox.len == 0: return -1
-  let wire = gInbox[0]
+  let m = gInbox[0]
   gInbox.delete(0)
-  copyMem(buf, unsafeAddr wire[0], wire.len)
-  wire.len
+  result = min(m.len, len)
+  copyMem(buf, unsafeAddr m[0], result)
 
-block test_pump:
+proc recLog(msg: cstring) {.nimcall.} = gLogs.add($msg)
+
+let pumpIface = DispatchIface(
+  send: recSend, recv: queueRecv, sleep: mockSleep, log: recLog)
+
+# ── Test 11: pump delivers every queued request in arrival order, then ticks ─
+
+block test_pump_delivers:
   var ds: DispatchState
-  dispatchInit(ds, DispatchIface(
-    send: recSend, recv: queueRecv, sleep: mockSleep, log: mockLog))
+  dispatchInit(ds, pumpIface)
   gSent = @[]; gSendOk = true
-  gInbox = @[encodeRequest(0x02000001'u32, 5),   # media → rcRealtime
-             encodeRequest(0x04000002'u32, 6)]   # log   → rcBackground
+  gInbox = @[encodeRequest(0x00000001'u32, 1), encodeRequest(0x01000002'u32, 2)]
 
-  let n = dispatchPump(ds)
-  assert n == 2, "pump should ingest both queued requests"
-  assert ds.tickNow == 1, "pump advances one tick"
-  assert gSent == @[("media", 0x02000001'u32), ("log", 0x04000002'u32)],
-         "pump drains in QoS order"
-  assert ds.queue.count == 0
-  assert dispatchPump(ds) == 0, "empty channel ingests nothing"
-  echo "PASS: test_pump"
+  var a = newDispatcher(addr ds)
+  assert dispatchPump(addr ds, a) == 2, "both requests delivered"
+  assert gSent == @[("fs", 0x00000001'u32), ("net", 0x01000002'u32)]
+  assert ds.tickNow == 1, "one tick per pump"
+  assert gInbox.len == 0 and a.isSuspended
+  echo "PASS: test_pump_delivers"
 
-# ── Test 12: payload survives ingest → queue → route re-encode ───────────────
+# ── Test 12: empty channel still ticks ───────────────────────────────────────
 
-block test_payload_roundtrip:
+block test_pump_empty_ticks:
   var ds: DispatchState
-  dispatchInit(ds, DispatchIface(
-    send: recSend, recv: queueRecv, sleep: mockSleep, log: mockLog))
-  gSent = @[]; gPayloads = @[]; gSendOk = true
-  gInbox = @[encodeRequest(0x00000001'u32, 7, "/fat/hello.txt")]
+  dispatchInit(ds, pumpIface)
+  gInbox = @[]
+  var a = newDispatcher(addr ds)
+  for _ in 0 ..< 3:
+    assert dispatchPump(addr ds, a) == 0
+  assert ds.tickNow == 3, "ticks advance with no traffic"
+  echo "PASS: test_pump_empty_ticks"
 
-  discard dispatchPump(ds)
-  assert gSent == @[("fs", 0x00000001'u32)]
-  assert gPayloads == @["/fat/hello.txt"], "payload must reach the target server intact"
-  echo "PASS: test_payload_roundtrip"
+# ── Test 13: per-quantum bound leaves the rest for the next pump ─────────────
+
+block test_pump_bounded:
+  var ds: DispatchState
+  dispatchInit(ds, pumpIface)
+  gSent = @[]; gSendOk = true
+  gInbox = @[]
+  for i in 0 ..< PumpMaxPerQuantum + 5:
+    gInbox.add(encodeRequest(0x00000001'u32, uint32(i)))
+  var a = newDispatcher(addr ds)
+  assert dispatchPump(addr ds, a) == PumpMaxPerQuantum
+  assert gInbox.len == 5, "excess left on the channel"
+  assert dispatchPump(addr ds, a) == 5
+  assert gSent.len == PumpMaxPerQuantum + 5
+  echo "PASS: test_pump_bounded"
+
+# ── Test 14: oversize and malformed requests are dropped, not fatal ──────────
+
+block test_pump_drops_bad_input:
+  var ds: DispatchState
+  dispatchInit(ds, pumpIface)
+  gSent = @[]; gSendOk = true; gLogs = @[]
+  gInbox = @[newString(MailMsgMax + 10),          # truncated by recv → dropped
+             "\xc1garbage",                         # 0xc1 = never-used msgpack byte
+             encodeRequest(0x00000007'u32, 7)]      # good one still gets through
+  var a = newDispatcher(addr ds)
+  assert dispatchPump(addr ds, a) == 2, "oversize skipped before delivery"
+  assert gSent == @[("fs", 0x00000007'u32)], "valid request routed after bad ones"
+  assert gLogs == @["dispatch: dropped oversize request\n",
+                    "dispatch: dropped malformed request\n"]
+  assert a.isSuspended, "dispatcher survived bad input"
+  echo "PASS: test_pump_drops_bad_input"
+
+# ── Test 15: strict decoder agrees with msgpack4nim, rejects all malformed ───
+
+block test_try_decode_request:
+  const vals = [0'u32, 1, 0x7f, 0x80, 0xff, 0x100, 0xffff, 0x10000, high(uint32)]
+  for op in vals:
+    for pid in vals:
+      let wire = encodeRequest(op, pid)
+      var r: WireRequest
+      assert tryDecodeRequest(wire, r), "valid encoding accepted"
+      assert r.op == op and r.pid == pid, "decoded values match encoder"
+      for cut in 0 ..< wire.len:                   # every truncation rejected
+        assert not tryDecodeRequest(wire[0 ..< cut], r)
+      assert not tryDecodeRequest(wire & "\x00", r), "trailing bytes rejected"
+  var r: WireRequest
+  assert not tryDecodeRequest("\x93\x01\x02\x03", r), "3-element array rejected"
+  assert not tryDecodeRequest("\x92\xcf\0\0\0\0\0\0\0\x01\x02", r), "uint64 rejected"
+  assert not tryDecodeRequest("\x92\xff\x01", r), "negative fixint rejected"
+  assert not tryDecodeRequest("\x92\xa1x\x01", r), "string field rejected"
+  echo "PASS: test_try_decode_request"
 
 echo "All dispatch_logic tests passed."

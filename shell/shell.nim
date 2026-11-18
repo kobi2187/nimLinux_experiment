@@ -19,6 +19,10 @@ import ../fs/fatfs
 import ../apps/ping/ping_embedded
 import ../apps/pingpong/pingpong_embedded
 import ../kernel/abi/app_args
+import ../mm/user_window
+import devtest
+import ../core/klog_ring
+import ../kernel/console/console_input
 import ../arch/x86_64/syscall_gate
 import ../mm/region_allocator
 import ../mm/sip_heap
@@ -42,15 +46,13 @@ type
     scModel
     scLoadPing      ## load ping — embedded WASM
     scLoadPingpong  ## load pingpong — actor mailbox demo
-    scLs            ## ls — list files on disk
     scMount         ## mount — mount FAT disk
     scRun           ## run <file> — load WASM from disk and execute
     scExec          ## exec <file> — load ELF from disk and jump to entry
-    scPs            ## ps — list all tasks with pid/class/state/cpu
-    scKill          ## kill <pid> — terminate task by PID
-    scStats         ## stats — scheduler stats + uptime
     scLspci         ## lspci — list PCI devices
     scNetinfo       ## netinfo — virtio-net MAC and packet counts
+    scDmesg         ## dmesg — kernel log ring (boot + driver messages)
+    scDevtest       ## devtest <gpu|snd|net|input> — exercise a virtio device
 
 # ── String helpers ─────────────────────────────────────────────────────────
 
@@ -85,22 +87,20 @@ proc parseCommand*(buf: openArray[char], len: int): ShellCommand =
   if bufEq(buf, first, last, "version"):   return scVersion
   if bufEq(buf, first, last, "meminfo"):   return scMeminfo
   if bufEq(buf, first, last, "clear"):     return scClear
+  if bufEq(buf, first, last, "dmesg"):     return scDmesg
   if bufEq(buf, first, last, "model"):     return scModel
   if bufEq(buf, first, last, "load ping"):      return scLoadPing
   if bufEq(buf, first, last, "load pingpong"):  return scLoadPingpong
   if bufEq(buf, first, last, "mount"):   return scMount
-  if bufEq(buf, first, last, "ls"):    return scLs
-  if bufEq(buf, first, last, "ps"):    return scPs
-  if bufEq(buf, first, last, "stats"):  return scStats
   if bufEq(buf, first, last, "lspci"):   return scLspci
   if bufEq(buf, first, last, "netinfo"): return scNetinfo
+  if last - first >= 7 and bufEq(buf, first, first + 7, "devtest "): return scDevtest
+  if bufEq(buf, first, last, "devtest"): return scDevtest
   # "run <file>", "exec <file>", "kill <pid>" — prefix match
   if last - first >= 3 and buf[first] == 'r' and buf[first+1] == 'u' and
      buf[first+2] == 'n' and buf[first+3] == ' ':  return scRun
   if last - first >= 4 and buf[first] == 'e' and buf[first+1] == 'x' and
      buf[first+2] == 'e' and buf[first+3] == 'c' and buf[first+4] == ' ':  return scExec
-  if last - first >= 4 and buf[first] == 'k' and buf[first+1] == 'i' and
-     buf[first+2] == 'l' and buf[first+3] == 'l' and buf[first+4] == ' ':  return scKill
   scUnknown
 
 # ── Command implementations ────────────────────────────────────────────────
@@ -115,14 +115,14 @@ proc cmdHelp() =
   kprint("  mount            - mount FAT disk\n")
   kprint("  load ping        - run embedded ping WASM app\n")
   kprint("  load pingpong    - run embedded pingpong demo\n")
-  kprint("  ls               - list files on disk\n")
+  kprint("  <name> [args]    - run name / name.elf (system, servers) / name.wasm (apps)\n")
+  kprint("                     e.g. ls /, ps, top, stats, kill <pid>, hello\n")
   kprint("  run <file.wasm>  - load and run WASM from disk\n")
   kprint("  exec <file.elf>  - load and execute ELF from disk\n")
-  kprint("  ps               - list all tasks\n")
-  kprint("  kill <pid>       - terminate task by PID\n")
-  kprint("  stats            - scheduler statistics and uptime\n")
   kprint("  lspci            - list PCI devices\n")
   kprint("  netinfo          - virtio-net MAC and packet counts\n")
+  kprint("  dmesg            - kernel log (last 16 KB of klog output)\n")
+  kprint("  devtest <dev>    - exercise gpu|snd|net|input (host-verifiable)\n")
 
 proc cmdVersion() =
   kprint("NimixOS v0.1.0\n")
@@ -137,6 +137,11 @@ proc cmdModel() =
     kprint("  (Microkernel - hardware-isolated servers)\n")
   else:
     kprint("  (Monolithic - direct in-kernel calls)\n")
+
+proc cmdDmesg() =
+  if klogRingDropped() > 0:
+    kprint("[... "); kprintInt(int64(klogRingDropped())); kprint(" earlier bytes dropped]\n")
+  for c in klogRingChars(): defaultSerial.putChar(c)
 
 proc cmdClear() =
   for i in 0..39: defaultSerial.putChar('\n')
@@ -224,31 +229,13 @@ proc cmdRun(filename: cstring) =
   if r != wasmOk:
     kprint("WASM execution failed\n")
 
-proc buildAbiPatches(): array[20, AbiPatch] =
-  ## Build the ABI patch table — each entry maps a weak stub name to its
-  ## NimixSyscall ordinal. The ELF loader overwrites stubs with
-  ## `movabs rax, <nr>; syscall` so apps issue the right syscall number.
-  proc p(name: cstring; nr: uint64): AbiPatch = AbiPatch(name: name, nr: nr)
-  result[0]  = p("nimixWrite",          ord(scWrite).uint64)
-  result[1]  = p("nimixExit",           ord(scExit).uint64)
-  result[2]  = p("nimixAllocRegion",    ord(scAllocRegion).uint64)
-  result[3]  = p("nimixFreeRegion",     ord(scFreeRegion).uint64)
-  result[4]  = p("nimixChanSend",       ord(scChanSend).uint64)
-  result[5]  = p("nimixChanRecv",       ord(scChanRecv).uint64)
-  result[6]  = p("nimixEventPublish",   ord(scEventPublish).uint64)
-  result[7]  = p("nimixEventSubscribe", ord(scEventSubscribe).uint64)
-  result[8]  = p("nimixEventPoll",      ord(scEventPoll).uint64)
-  result[9]  = p("nimixGetArgs",        ord(scGetArgs).uint64)
-  result[10] = p("nimixProcList",       ord(scProcList).uint64)
-  result[11] = p("nimixSchedStats",     ord(scSchedStats).uint64)
-  result[12] = p("nimixProcKillPid",    ord(scProcKillPid).uint64)
-  result[13] = p("nimixFsReadDir",      ord(scFsReadDir).uint64)
-  result[14] = p("nimixFsRead",         ord(scFsRead).uint64)
-  result[15] = p("nimixFsWrite",        ord(scFsWrite).uint64)
-  result[16] = p("nimixUptimeSecs",     ord(scUptimeSecs).uint64)
-  result[17] = p("nimixWallClock",      ord(scWallClock).uint64)
-  result[18] = p("nimixMapAnon",        ord(scMapAnon).uint64)
-  result[19] = p("nimixFreeAnon",       ord(scFreeAnon).uint64)
+proc buildAbiPatches(): array[NimixSyscallCount, AbiPatch] =
+  ## Build the ABI patch table — every syscall's weak stub name mapped to its
+  ## NimixSyscall ordinal, from the single NimixSyscallSymbol table. The ELF
+  ## loader overwrites stubs with `movabs rax, <nr>; syscall`. (A hand-kept
+  ## list here once covered 20 of 28 calls: nimixSleep/Yield silently no-op'd.)
+  for sc in NimixSyscall:
+    result[ord(sc)] = AbiPatch(name: NimixSyscallSymbol[sc], nr: ord(sc).uint64)
 
 proc runPieElf(filename: cstring; dataBuf: ptr byte; nbytes: int; appArgs: cstring) =
   ## Load and run a PIE (ET_DYN) ELF. Allocates a region, patches ABI stubs,
@@ -276,8 +263,11 @@ proc runPieElf(filename: cstring; dataBuf: ptr byte; nbytes: int; appArgs: cstri
   # User stack: top 64 KB of the 4 MB region (above ELF + heap).
   let userStackTop = base + RegionSize - 16
   setAppArgs(int(slot), appArgs)
+  if not appRegionUserAccess(slot, true):
+    kprint("Region not user-mappable\n"); regionFree(slot); return
   let procSlot = procSpawnRing3(filename, loaded.appMain, userStackTop, int32(slot))
   if procSlot < 0:
+    discard appRegionUserAccess(slot, false)
     kprint("procSpawnRing3 failed\n"); regionFree(slot); return
   kprint("App spawned in ring 3\n")
   # Shell returns immediately; app runs in parallel via the preemptive scheduler.
@@ -326,41 +316,63 @@ proc extractArg[N: static int](buf: openArray[char]; first, last, skip: int;
     dst[di] = buf[si]; inc di; inc si
   dst[di] = '\0'
 
-# ── App exec helper ────────────────────────────────────────────────────────
+proc loadFile(name: cstring): int =
+  ## Read a disk file into diskFileBuf without printing. Bytes read, or -1.
+  if not fsMounted and not fsMount(): return -1
+  let (res, n) = fsReadInto(name, cast[ptr byte](addr diskFileBuf[0]),
+                            diskFileBuf.len)
+  if res != fOk: -1 else: n
 
-proc execApp(name: cstring; args: cstring) =
-  ## Load a PIE ELF app from disk with given args string.
-  cmdExec(name, args)
+proc launchLoaded(name: cstring; nbytes: int; args: cstring) =
+  ## Start what diskFileBuf holds, chosen by magic — not by extension:
+  ## ELF  = system tool or server (its own ring-3 task),
+  ## WASM = regular app (sandboxed; only the capabilities it is given).
+  let p = cast[ptr UncheckedArray[byte]](addr diskFileBuf[0])
+  if nbytes >= 4 and p[0] == 0x7f'u8 and p[1] == byte('E') and
+     p[2] == byte('L') and p[3] == byte('F'):
+    let dataBuf = cast[ptr byte](addr diskFileBuf[0])
+    if isPieElf(dataBuf): runPieElf(name, dataBuf, nbytes, args)
+    else: runExecElf(dataBuf, nbytes)
+  elif nbytes >= 4 and p[0] == 0'u8 and p[1] == byte('a') and
+       p[2] == byte('s') and p[3] == byte('m'):
+    let caps = [CapIpc, CapEvents]
+    wasmSetArgs(args)
+    if wasmRun(cast[ptr byte](addr diskFileBuf[0]), nbytes, caps) != wasmOk:
+      kprint("WASM execution failed\n")
+  else:
+    kprint("not an ELF or WASM file\n")
+
+proc withSuffix(dst: var array[128, char]; name: openArray[char]; n: int;
+                suffix: string) =
+  ## dst = name[0..<n] & suffix, NUL-terminated (no heap).
+  var k = 0
+  while k < n and k < dst.len - suffix.len - 1:
+    dst[k] = name[k]; inc k
+  for c in suffix:
+    dst[k] = c; inc k
+  dst[k] = '\0'
 
 proc cmdUnknown(buf: openArray[char], first, last: int) =
-  ## Try to execute as filename from disk. Detect .elf vs .wasm.
-  if not fsMounted and not fsMount():
-    kprint("No disk mounted\n")
-    return
-
-  var fname: array[128, char]
-  var flen = 0
+  ## `name [args]`: run a program from disk. Tries `name` as given, then
+  ## `name.elf` (system tools + servers), then `name.wasm` (regular apps).
+  var word: array[128, char]
+  var n = 0
   var i = first
-  while i <= last and flen < 127:
-    if buf[i] == ' ': break
-    fname[flen] = buf[i]
-    inc flen
-    inc i
-  fname[flen] = '\0'
-
-  let isElf = flen > 4 and fname[flen-4] == '.' and fname[flen-3] == 'e' and
-              fname[flen-2] == 'l' and fname[flen-1] == 'f'
-  let isWasm = flen > 5 and fname[flen-5] == '.' and fname[flen-4] == 'w' and
-               fname[flen-3] == 'a' and fname[flen-2] == 's' and fname[flen-1] == 'm'
-
-  if isElf:
-    cmdExec(cast[cstring](addr fname[0]))
-  elif isWasm:
-    cmdRun(cast[cstring](addr fname[0]))
-  else:
-    kprint("Unknown command: '")
-    for j in first..last: defaultSerial.putChar(buf[j])
-    kprint("' (not .elf or .wasm)\n")
+  while i <= last and buf[i] != ' ' and n < 100:
+    word[n] = buf[i]; inc n; inc i
+  var args: array[128, char]
+  extractArg(buf, i, last, 0, args)
+  var cand: array[128, char]
+  for suffix in ["", ".elf", ".wasm"]:
+    withSuffix(cand, word, n, suffix)
+    let nbytes = loadFile(cast[cstring](addr cand[0]))
+    if nbytes >= 0:
+      launchLoaded(cast[cstring](addr cand[0]), nbytes,
+                   cast[cstring](addr args[0]))
+      return
+  kprint("Unknown command: '")
+  for j in first..last: defaultSerial.putChar(buf[j])
+  kprint("' (no such program, .elf or .wasm)\n")
 
 # ── Shell input helpers ────────────────────────────────────────────────────
 
@@ -389,11 +401,6 @@ proc runWasmWithCaps(label: string; data: ptr byte; len: int) =
   let caps = [CapIpc, CapEvents]
   if wasmRun(data, len, caps) != wasmOk: wasmLog("error running", label)
 
-proc execArg[N: static int](buf: openArray[char]; first, last, skip: int; app: cstring) =
-  var dst: array[N, char]
-  extractArg(buf, first, last, skip, dst)
-  execApp(app, cast[cstring](addr dst[0]))
-
 proc dispatchCmd(cmd: ShellCommand; buf: openArray[char];
                  first, last: int; physMgr: PhysicalMemManager) =
   case cmd
@@ -401,26 +408,24 @@ proc dispatchCmd(cmd: ShellCommand; buf: openArray[char];
   of scVersion:     cmdVersion()
   of scMeminfo:     cmdMeminfo(physMgr)
   of scClear:       cmdClear()
+  of scDmesg:       cmdDmesg()
   of scModel:       cmdModel()
   of scMount:       cmdMount()
   of scLoadPing:
     runWasm("ping",    cast[ptr byte](unsafeAddr pingWasm[0]),     pingWasm.len)
   of scLoadPingpong:
     runWasmWithCaps("pingpong", cast[ptr byte](unsafeAddr pingpongWasm[0]), pingpongWasm.len)
-  of scLs:     execApp("ls.elf", "/")
-  of scPs:     execApp("ps.elf", "")
-  of scStats:  execApp("stats.elf", "")
   of scLspci:  cmdLspci()
   of scNetinfo: cmdNetinfo()
+  of scDevtest:
+    var dev: array[16, char]
+    extractArg(buf, first, last, 7, dev); devtest(dev)
   of scRun:
     var fname: array[128, char]
     extractArg(buf, first, last, 4, fname); cmdRun(cast[cstring](addr fname[0]))
   of scExec:
     var fname: array[128, char]
     extractArg(buf, first, last, 5, fname); cmdExec(cast[cstring](addr fname[0]))
-  of scKill:
-    var pidBuf: array[32, char]
-    extractArg(buf, first, last, 5, pidBuf); execApp("kill.elf", cast[cstring](addr pidBuf[0]))
   of scEmpty:   discard
   of scUnknown: cmdUnknown(buf, first, last)
 
@@ -448,7 +453,7 @@ proc runShell*(physMgr: PhysicalMemManager) =
   var inputLen = 0
   kprint(ShellPrompt)
   while true:
-    let c = defaultSerial.getChar()
+    let c = consoleGetChar()         # serial or keyboard; flushes the display
     case c
     of '\r', '\n':       handleEnter(inputBuf, inputLen, physMgr)
     of '\b', char(127):  handleBackspace(inputBuf, inputLen)

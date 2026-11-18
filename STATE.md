@@ -1,64 +1,84 @@
 # STATE.md — Current Status
 
-Last updated: 2026-07-16 (session 9, Phase A: gpu boot verified + doc audit)
+Last updated: 2026-10-27 (session 9e, branch `ccr-56330414-wo65nx`)
 
-## Just landed
+## Just landed — roadmap B step 1: graphics libs + framebuffer console (session 9e)
 
-- **Roadmap Phase A DONE**: virtio-gpu boot verified — serial shows
-  `virtio-gpu(pci): ready` once the device is attached; root cause of earlier
-  "not found" was QEMU cmdline (no `-device virtio-gpu-pci`), not the driver.
-  Makefile qemu/qemu-all/qemu-gui/qemu-debug now attach `$(GPU_DEVICE)`.
-  Doc audit: ARCHITECTURE updated — virtio gpu/snd/input BUILT (4d028b9),
-  audio_server PARTIAL (385f410), mpsc_ring + littlefs wear-leveling landed
-  unwired (ccfeb6d). Note: `build/kernel-%` has no source deps — force rebuild
-  with `rm build/kernel-monolithic` when sources change.
+- `gfx/` canvas + Spleen 8x16 bitmap font, `term/` VT100 subset + incremental
+  renderer, `input/` evdev keymap — pure libraries, host-tested.
+- Kernel framebuffer console: everything on serial also shows on the
+  virtio-gpu display; the shell takes keys from the QEMU window
+  (`make qemu-gui`). Verified pixel-exact against a host replay.
+- Ring-3 faults kill only the task; trap-frame register order fixed.
 
-- **CPS actor primitive** (`runtime/actor.nim` + `tests/test_actor.nim`) —
-  idiomatic suspend/plant/resume; `{.cursor.}` on the self-ref kills the ARC
-  leak. Test in `make test-arc`. See DECISIONS §CPS actor idiom (2026-07-03).
-  Unblocks: dispatcher CPS run loop (`servers/dispatch/dispatch_logic.nim`)
-  can now be built on actor + `ipc/mailbox.nim` (MPSC ring, 2c1484d).
-- **virtio PCI transport** effectively BUILT — blk/gpu/net migrated (4d028b9).
-  ARCHITECTURE table updated from SPAWNED.
+## Just landed — QEMU integration + debugging (session 9d)
+
+- **One QEMU launcher** `tools/nimix_qemu.py` (devices, gdb, QMP, log, pcap,
+  wav) behind every test and `make qemu|qemu-gui|qemu-debug`.
+- **virtio gpu/snd/net/input verified on the host** — `make test-devices`.
+  Fixed: gpu response wait, snd spec rewrite + completion, 64-entry queues
+  stated to devices, shared PCI IRQ lines (cascade, ELCR, INTx-disable).
+- **Serial debugging**: crash report + backtrace for all CPU exceptions and
+  panics → `tools/symbolize.py`; `dmesg` klog ring; `devtest crash-*`.
+- **Native debugging**: `make test-valgrind`, `make test-asan` (clean;
+  fixed misaligned kernel stack), `make gdb-attach` with nimix-* helpers.
+
+## Earlier — "make it all work" (session 9c)
+
+- Regular apps WASM, system tools + servers ELF; `cat` (WASM) → fs_server
+  (ELF) → FAT → virtio-blk; exit/kill cleanup; all three models pass.
+
+## Verified (Nim 2.2.4, QEMU 8.2.2 TCG, OVMF)
+
+`make test` ✅ · `test-arc` ✅ · `test-valgrind` ✅ · `test-asan` ✅ ·
+`test-wasm` ✅ · `test-devices` **11/11** · `test-structured` **41/41** ·
+`test-qemu-models` **16/16 × 3 models**.
 
 ## Now / Next
 
-- [x] Dispatcher Stage 1: single-actor run loop in `dispatch_logic.nim`
-  (deliver-driven; peek-then-pop drain preserves aging under backpressure).
-  Bench: 377 ns/req pipeline. Tests 8–10 in test_dispatch_logic. Unblocks:
-  transport wiring (kmod/elf deliver on chan recv + tick).
-- [→] casfs brainstorm (see HANDOFF for full state): ecosystem survey blocked
-  on web-limit, resume with namespace question. Roadmap A–E approved:
-  gpu verify → rasterizer/font → GUI terminal → input/app_server → media →
-  scheduler block/wake — network last.
-- [x] Roadmap Phase A: gpu boot verified + doc audit (2026-07-16, see Just landed).
-  Audit also found BUILT-but-undocumented: ps2_mouse (TW#49), rtc (TW#50),
-  arp/dhcp/font_render (untested, 20b52b8) — Layer 1 effectively done.
-- [x] Dispatcher ELF transport wired: `dispatchPump` in dispatch_logic
-  (recv→ingest→tick→drain, test 11); ELF main loop pumps; kernel pre-creates
-  well-known channels (dispatch/fs/net/media/input/log) in initIPC. Boot
-  verified: `Well-known channels created` on serial. Remaining: kmod variant
-  (TW#28) + end-to-end app→dispatch→fs_server test (TW#33, needs fs_server
-  channel wiring).
-- [→] Roadmap Phase B: software rasterizer + font onto `virtioGpuFbPtr()` seam
-  (TW#60/#61), then GUI terminal.
-- [ ] Wire dispatcher actor into kmod/elf transports (taskwarrior task added).
-- [ ] Verify TW#72 V10 boot corruption status (RIP=0x802/0x101e after
-  dispatcher init) — **likely stale per user (2026-07-03); verify with
-  `make debug-log` / `make debug-gdb` before treating as real.** Blocks open
-  question #1 (boot-from-disk) if real.
-- [x] virtio-gpu done-check: `virtio-gpu(pci): ready` confirmed (2026-07-16).
-- [ ] raylib/naylib PLATFORM_CUSTOM wiring onto `virtioGpuFbPtr()` /
-  `virtioGpuPresent()` seam.
+Roadmap A–E (approved 8b): A) reality audit + virtio-gpu verify → B) rasterizer
++ font → GUI terminal → C) input_server + app_server → D) media demo → E)
+block-on-mailbox/wake-on-deliver + dispatcher transport — network last.
+
+- [x] Phase A: virtio-gpu verified (screendump pixels) — plus snd/net/input.
+- [x] Phase B step 1: rasterizer + font + VT → framebuffer console (shell on screen, keyboard).
+- [x] Bulk-data API FROZEN (`ipc/buffers.nim`, spec docs/proposals/bulk_data.md v2); `subprojects/buffers` SPAWNED (first task: SURVEY). VISION Q6 resolved.
+- [→] buffers sub-project: B1 SURVEY ✅, B2 ownership state machine ✅, B3 arena ✅, B4 session rings ✅, B5 Stage A enforcement live ✅ (ring-3 violations fault and kill only that task; `buftest` in `make test-devices`); next SASOS/mono enforcement, ring + WASM ABI, fs_server lent buffers → enforcement → ABI/WASM.
+- [ ] SPAWN app_server on top of buffers (protocol agreed, freeze at spawn).
+- [→] Residency migrations R0–R10 (BACKLOG; ARCHITECTURE residency map): historical kernel components to their proper homes; R0 device caps unblocks the drivers.
+- [x] P0 host loopback: bridge (`bridge/`, raylib 6.2 + rlsw headless) remote pixels == direct; steady frame 19 records / 424 B; command path ≈ noise (~7%), rlsw raster dominates → damage-limited compositing first (`make test-p0`).
+- [x] V7a: RUI's counter example, unchanged, runs headless on the bridge's direct backend: adapted naylib (`tools/naylib_adapt.py`) → raylib 6.2 + rlsw; Pixie text engine behind a new RUI text-engine seam; `ruiNoGlfw` (`make test-v7`; RUI changes in `patches/rui2/`).
+- [x] V7b: RUI's counter, unchanged, through the **remote** bridge (draw calls → commands → loopback server): pixels byte-identical to direct after 3 clicks; steady frames ≤ 86 records / 1 KB (`make test-v7`).
+- [x] V3: fine clock — TSC calibrated against PIT channel 2 (`core/tsc_clock.nim`, `drivers/tsc.nim`); 100 PIT ticks = 999-1000 ms on the TSC; structured suite 47/47 (+6), 3 models 16/16. App exposure (V3b) needs a decision.
+- [x] V2: libc/libm = picolibc 1.8.12 (`vendor/picolibc`, `make test-v2`): raylib + rlsw link against it needing exactly 31 OS-layer symbols; libm ≤ 1 ULP over 7,600 samples. Next V2b (libnimix, the OS layer under it).
+- [x] V3b: the clock reaches ring 3 through a read-only time page (`core/tsc_clock.nim` TimePage, `mm/memory_windows.nim` publishTimePage, `apps/nim/nimix_time.nim`): `clocktest` measures 3 s of ticks as 2998 ms with no syscall; a write to the page faults and kills only the writer (`make test-devices` 19/19). Needs a VM with ≥ 226 MB RAM.
+- [x] V2b: **C programs run on NimixOS**: libnimix (appMain, stdio, heap = an owned buffer, time page clock, whole-file files/dirs, refusals) under picolibc; `libctest a b` passes 42 checks under QEMU (`make test-devices` 20/20); raylib + rlsw + picolibc + libnimix link with nothing unresolved. Found and fixed two real bugs: ring-3 entry stack was 8 bytes misaligned (any C `printf` faulted), and the file-read ABI could not say "buffer too small" (-2 now). Next: V5 (raylib on NimixOS).
+- [x] V14: **syscall arguments are checked at the gate** (`kernel/abi/user_args.nim`): a ring-3 program can no longer make the kernel read or write kernel memory or another task's memory through any syscall; `abifuzz` passes 339 hostile and legitimate calls; two kernel-crash bugs found by it fixed (`mapAnon` assert, `sipAlloc` negative size) (`make test-devices` 35/35). Next: V6 the render server (design), V5d, V2c, V4b.
+- [x] V5e: **mouse and tablet into raylib**: every virtio-input device is driven (the driver found only the first), the launcher passes keyboard + mouse + tablet; raylib gets mouse position, buttons and wheel (`rlmouse`); a kernel panic on a negative relative move found and fixed (`make test-devices` 34/34). Next: V6 the render server.
+- [x] V5f: **display modes** (ABI v2, syscalls 39-40): a graphics program lists modes and switches to one (800x600 in the test); the screen is cleared; the boot mode and a repainted console return when it ends (`make test-devices` 30/30, test-qemu-models 16/16 x3, structured 47/47). Next: V6 the render server.
+- [x] V5c: **keyboard input into raylib**: real key events injected through QEMU's virtio keyboard move a square on the NimixOS screen, reach the program as raylib key codes and characters, and do not leak into the shell (`make test-devices` 28/28). Next: V6 the render server.
+- [x] V5b: **raylib 6.2 (rlsw) runs on NimixOS** in a ring-3 C program (`rldemo`): the QMP screendump of the virtio-gpu equals the host render of the same scene for all 256,000 pixels, with real colours asserted independently (`make test-devices` 25/25). Next: V5c keyboard input; then V6 the render server.
+- [x] V5a: **display ABI v1**: a ring-3 program presents a rectangle of an owned buffer on the virtio-gpu (`nimixDisplayInfo`/`nimixDisplayPresent`); `gfxtest` region == host pattern pixel for pixel; bad requests (kernel pointers too) refused; console steps aside and returns (`make test-devices` 23/23). Next: V5b raylib platform + demo.
+- [x] Test runner: a failing host test now fails the build (`tools/check_run.sh`); `test_syscall_table` had been failing silently since V2b.
+- [x] Kernel fix (found by CI): the kernel clobbered ring-3 xmm registers on timer ticks and new tasks inherited the previous task's FPU state; now `-mgeneral-regs-only` (0 SSE insns in all three kernels) + a default FPU image per new task; `fputest` (`make test-devices` 21/21) proves xmm0-15 + x87 survive ~8 ticks.
+- [x] V4: large memory = buffers (a server's heap is one owned arena buffer): `buftest big` creates, touches and verifies 32 MB from ring 3; budget enforced and returned (`make test-devices` 17/17). Sizing (arena, per-class budgets) deferred to measurements (V4b).
+- [→] Vertical slice raylib + RUI2 (BACKLOG V1–V13): next V7c (actor-backed background/mailbox), V4, then V5 (needs V2).
+- [x] Region capability holes fixed (any-task minting, use-after-free on owner exit, leaked caps) — tests/test_zerocopy.nim.
+- [x] User-mode CPU faults kill the task (system continues); kernel faults halt.
+- [ ] Dispatcher in the app path: apps → `dispatch` → servers (today WASM apps
+  talk to servers directly; route via dispatcher with QoS + cap-gating, M2).
+- [ ] Larger file reads for WASM apps (region caps into linear memory, or
+  chunked replies) — fs replies are ≤508 B inline today.
+- [ ] Re-verify kernel strings/seqs with the aligned heap (metadata_db bypass).
+- [→] casfs brainstorm (HANDOFF §8b): ecosystem survey, namespace question 1.
+- [ ] Phase E: block-on-mailbox replaces interim `waitForTick` + server polling.
 
 ## Known sharp edges
 
-- nim-cps needs `--mm:arc --panics:on` — actor/dispatch tests live in
-  `make test-arc`, not `make test` (refc).
+- WASM apps run in the in-kernel wasm3 interpreter (shell context); moving the
+  runtime into a userspace ELF host is the microkernel-pure follow-up.
+- All ELF apps share one address space (per-region User windows); per-app CR3
+  is VISION open question 6.
+- `cat` after a server dies waits the full 5 s event timeout.
 - Loader/spawn path not interrupt-safe (cli/sti scoped fix in testMode only).
-- metadata_db kernel-only seq/string corruption — FAT-only mount bypass active.
-- Ring-3 user_tests don't execute after spawn (TW#65 thread).
-
-## Open threads (unchanged)
-
-Dispatcher cap-gating (M2), DHCP → net_server, VFS drivers (littlefs/lwext4).
+- nim-cps needs `--mm:arc --panics:on`; actor/dispatch tests in `make test-arc`.

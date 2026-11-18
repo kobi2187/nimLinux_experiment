@@ -1,10 +1,12 @@
 # NimixOS top — system monitor. Loops: clear screen, print sysinfo, sleep 1s.
 import nimix_common
+import nimix_entry
 
 proc nimixSysInfo(buf: pointer; len: int): int {.importc, cdecl.}
 proc nimixSleep(ticks: uint64) {.importc, cdecl.}
 
 proc appMain*() {.exportc.} =
+  nimixAppInit()   # module init first: --noMain skips it (nimix_entry)
   var buf: array[8192, char]
   # Loop 10 times then exit (no infinite loop — shell is synchronous)
   var i = 0

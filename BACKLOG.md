@@ -38,8 +38,8 @@ Tags: CLEAR = path obvious | FUZZY = outcome known, path uncertain | OPEN = unde
 | 8 | CLEAR | ELF loader: validate segment fits within allocated region before mapping | oversized segment returns error, no silent overwrite |
 | 6 | CLEAR | ELF loader: R_X86_64_GLOB_DAT + R_X86_64_JUMP_SLOT relocations | dynamically-linked ELF loads and runs |
 | 7 | CLEAR | ELF loader: strip PT_INTERP silently | ELF with PT_INTERP loads without error |
-| 60 | CLEAR | Software rasterizer: drawRect/Line/fillRect/putPixel/blitBitmap/fillTriangle into uint32* framebuffer | visual output in QEMU VGA |
-| 61 | CLEAR | Font rendering: stb_truetype + bitmap fallback → drawText(fb, x, y, str, size, color) | text renders in framebuffer |
+| 60 | DONE 2026-10-27 | Software rasterizer `gfx/canvas.nim` (fillTriangle still open) | screendump == host render (`make test-devices`) |
+| 61 | DONE 2026-10-27 | Bitmap font (Spleen 8x16) + drawText; TTF via stb_truetype deferred to userspace | text renders in framebuffer |
 | 24 | CLEAR | stdlib shim: osenv.nim — stub getenv/putenv (return nil/false) | msgpack4nim compiles under --os:nimix |
 
 ## Layer 4 — IPC encoding
@@ -72,6 +72,9 @@ Tags: CLEAR = path obvious | FUZZY = outcome known, path uncertain | OPEN = unde
 
 | TW# | Tag | Description | Done-check |
 |-----|-----|-------------|-----------|
+| 70 | SPAWN 2026-10-27 | **buffers** — frozen bulk-data API `ipc/buffers.nim` (owned/sealed, move/lend, session rings, budgets); see `subprojects/buffers/` | sub-project done-checks (spec §11) |
+| 71 | PARENT | Stage B: per-app CR3 (VISION Q6 resolved) — next kernel milestone after buffers Stage A | per-task page tables; switch = CR3 load |
+| 72 | SPAWN (next) | **app_server** — agreed protocol (docs/proposals/app_server_api.md) on top of buffers; freeze when spawned | two terminal windows, focus routing, pixel test |
 | 29 | CLEAR | nimixos/net.nim — thin Nim app API: download/connect → MsgPack → dispatcher | app can call net.download() |
 | 30 | CLEAR | nimixos/media.nim — thin Nim app API: play/pause/stop → MsgPack → dispatcher | app can call media.play() |
 | 31 | CLEAR | nimixos.h C header — maps thin API to MsgPack IPC for WASM/C apps | WASM app can call fs/net/media via C header |
@@ -98,13 +101,13 @@ Tags: CLEAR = path obvious | FUZZY = outcome known, path uncertain | OPEN = unde
 | 12 | CLEAR | app_server skeleton: register window handles, route input to focused app | window creation request succeeds |
 | 45 | CLEAR | audio_server ELF (duplicate detail entry; see layer5 task 57) | |
 | 62 | CLEAR | app_server (full compositor): create/destroy windows, z-order, focus, route input; 'app' channel | two windows, correct input routing |
-| 64 | CLEAR | Terminal emulator window: VT100 subset in GUI window, based on stb_truetype | shell runs in a window |
+| 64 | PARTIAL | VT100 subset + renderer DONE (`term/`), shell on the fb console; the *window* waits on app_server | shell runs in a window |
 
 ## Layer 8 — GUI + raylib
 
 | TW# | Tag | Description | Done-check |
 |-----|-----|-------------|-----------|
-| 15 | CLEAR | virtio-gpu linear framebuffer init: set mode, clear screen | framebuffer appears in qemu-gui |
+| 15 | DONE 2026-10-27 | virtio-gpu framebuffer + damaged-rect present | framebuffer appears in qemu-gui |
 | 16 | CLEAR | (see layer3 task 60 — software rasterizer) | |
 | 17 | CLEAR | (see layer3 task 61 — font rendering) | |
 | 18 | CLEAR | Window manager: title bar, z-order, drag, basic compositor | windows draggable |
@@ -123,6 +126,68 @@ Tags: CLEAR = path obvious | FUZZY = outcome known, path uncertain | OPEN = unde
 | 46 | CLEAR | raylib: hello-raylib.elf demo — draw coloured rect + text, prove graphics stack end-to-end | coloured rect + text visible in QEMU |
 | 21 | FUZZY | net_server ELF — userspace network stack, cap-gated socket API | app can open socket via net_server |
 | 20 | CLEAR | TFTP client — load ELF/WASM from QEMU TFTP server | ELF loads from network |
+
+## Vertical slice — raylib render server + RUI2 apps (2026-11-03) [PARENT]
+
+Critical path: P0 → V2 (picolibc) → V3 (clock) → V4 (big memory) → V5 (raylib on
+NimixOS) → R0 (device caps) → V6 (render server, takes the GPU = R2) → V9.
+Parallel tracks: V7 bridge on RUI (after P0); V8 WASM host (= R1) with the
+buffers ring ABI; V10 audio (after R0).
+
+Outcome: a WASM app built on RUI2 (vendor/rui2) shows a working window through
+the raylib render server, within VISION's budgets, and is benchmarked against
+in-process raylib. Proposals: docs/proposals/render_server.md and
+draw_protocol.md (PROPOSED, awaiting agreement); survey docs/surveys/rui2.md.
+
+| # | Tag | Task | Done-check | Depends |
+|---|-----|------|-----------|---------|
+| V1 | DONE | vendor rui2 (submodule @0038051) + SURVEY | docs/surveys/rui2.md | — |
+| **P0** | DONE (`make test-p0`) | **host loopback prototype (first, answers the perf question early):** vendor raylib **6.2** (rlsw + `rcore_memory`, headless); the bridge = our naylib-compatible binding to 6.2 (direct) + command encoder (remote) + decoder; the same screen through both paths in one process | (1) remote pixels == direct pixels (protocol conformance); (2) per-frame time and records/frame for both, reported; no NimixOS dependency | — |
+| V2 | DONE (`make test-v2`) | libc/libm for the render-server ELF: **picolibc 1.8.12** (vendor/picolibc, shallow submodule; `tools/picolibc_build.sh`, cross file `tools/nimix-x86_64.cross`) | raylib + rlsw compile against picolibc's headers and link needing exactly the 31 OS-layer symbols in `tests/v2/expected_os_symbols.txt`; libm ≤ 1 ULP over 7,600 samples | — |
+| V2b | DONE (`make test-v2`, `libc` in `make test-devices`) | **libnimix** (`libnimix/`, ~500 lines): `appMain`, stdio, heap = one owned arena buffer, time from the time page, whole-file `open/read/write/stat/opendir`, refusing stubs; **C programs run on NimixOS** (`apps/c/libctest`: 42 checks) | raylib + rlsw + picolibc + libnimix link with nothing unresolved; `libctest a b` passes on QEMU; the C clock reader == the Nim one on 63 golden vectors | V2 V3b V4 |
+| V2c | PARKED | libnimix files over **fs_server with lent buffers** (replaces the ambient-path whole-file ABI; program-facing shapes unchanged); a one-shot timer for sub-tick `nanosleep` | `libctest` unchanged and green on the new back end | B10, R-series |
+| V3 | DONE (kernel side) | fine monotonic clock: TSC calibrated against PIT channel 2 (median of 5 × 30 ms windows); pure math in `core/tsc_clock.nim`, driver `drivers/tsc.nim` (`tscNanos()` = one rdtsc + two multiplies) | host test (exact 128-bit reference, ~1 ppb); QEMU: 100 PIT ticks measure 999-1000 ms on the TSC (`make test-structured`, `tsc_*`) | — |
+| V3b | DONE (`clocktest` in `make test-devices`; layout in `make test`) | the clock reaches apps through a **read-only time page** (`TimePage`, 40 bytes, versioned, at 224 MB in its own 2 MB window, user read-only for every task, written once at boot); apps use their own `rdtsc` + `clockNanos` (`apps/nim/nimix_time.nim`: `nanoTime()`); coarse fallback = `nimixUptimeSecs` (no new syscall) | `clocktest`: 3 s of PIT ticks measured 2998 ms from ring 3; a write to the page faults and kills only the writer | V3 |
+| V4 | DONE (`buftest big` in `make test-devices`) | large memory for servers/apps: **memory is buffers**: a heap is one contiguous owned arena buffer (a 32 MB buffer written and verified end to end from ring 3, budget enforced and returned); no separate "large region" class. App regions unchanged | `buftest big`: 32 MB create/map/touch every page/verify; a second create refused; budget back after close | buffers |
+| V4b | PARKED (measure first) | **sizing**: arena size (128 MB today, 256 MB VM) and per-class budgets (every task gets 32 MB today). Set from the real render server's numbers in V5/V9, not guessed; likely wants a larger default VM and per-class budgets | V9 shows the render server's heap + buffer high-water mark | V5 V9 |
+| V5a | DONE (`display-*` in `make test-devices`) | **display ABI v1** (docs/proposals/display_abi.md): `nimixDisplayInfo` + `nimixDisplayPresent(owned buffer, rect)`; implicit ownership (console steps aside, returns on exit); every request checked (`display_checks`, host-tested) | a ring-3 C program (`gfxtest`) presents 640x400; the screendump region == the host-computed pattern (256,000 pixels); 10 bad requests refused (kernel pointers included); console repaints after exit | V2 V3b V4 |
+| V5b | DONE (`raylib-render`, `raylib-colours` in `make test-devices`) | **raylib 6.2 + rlsw run on NimixOS** (`PLATFORM_NIMIX`): `tools/raylib_nimix.py` generates the platform from the pinned `rcore_memory.c` (9 exact-once substitutions: owned-buffer framebuffer, present through the display ABI, window position, no terminal polling); `apps/c/rldemo` draws a scene with plain raylib C calls | the guest screendump == the host render of the same scene, all 256,000 pixels; real colours asserted independently | V5a |
+| V5f | DONE (`display-mode-*` in `make test-devices`) | **display modes** (ABI v2): list + set mode for the display owner; boot mode and console restored on release; limited to the boot framebuffer size (larger modes: V4b) | screendump is the new size with only the program's frame; afterwards equals the console replay | V5a |
+| V14 | DONE (`abi-hostile` in `make test-devices`, `tests/test_user_args.nim`, `tests/test_sip_heap.nim`) | **syscall argument validation**: every ring-3 pointer argument is checked at the gate from one table (region + arena rights, read vs write), cross-checked against the ABI by reflection; hostile-argument program `abifuzz` (339 checks); fixed `mapAnon` assert and `sipAlloc` negative-size wrap | kernel survives and refuses every hostile call | V5 |
+| V5d | PARKED | present only the damaged rectangle (today a full frame per `EndDrawing`: raylib tracks no damage; the V6 render server knows it from the command stream); clear the display when taking ownership; raise the shell's 512 KB program buffer if images outgrow it | V6 | V5b |
+| V5c | DONE (`keys-*` in `make test-devices`) | **keyboard input into raylib**: the platform subscribes to the `input` event topic, maps evdev events to raylib keys and characters (`libnimix/nimix_keymap.h`: golden-tested against the Nim keymap and raylib's own enum), and **input follows display ownership** (the console drops keys while a program owns the screen) | injected key events move a square on the screen; the exact key sequence and characters reach the program; none reach the shell | V5b |
+| V5e | DONE for mouse/tablet (`pointer`, `mouse-*` in `make test-devices`); touch and the focus model PARKED | mouse and tablet into raylib (done: every virtio-input device driven; mouse position, buttons, wheel; remaining: touch/gestures, `SetMousePosition`, and a focus model beyond "the display owner gets the keys" once there are windows (V6) | V6 | V5c |
+| V6 | SPAWN | **render server** (app_server's second face): sessions, command-ring execution, targets, composite, present; **first optimisation: damage-limited compositing** (P0: raster dominates, the protocol costs ~nothing) | draw_protocol conformance tests (host) + QEMU pixel test | V5, buffers rings ABI, protocol agreed |
+| V7 | PARENT | app side: the **raylib bridge** (naylib-compatible `raylib`/`rlgl`; backends direct / remote / hybrid with counted fallback), actor-backed `background`/`mailbox`, RUI text via the `text_*` host imports | RUI + a stock raylib example build unchanged against the bridge; direct = zero-cost (codegen equal to naylib); remote stream decoded on host | protocol agreed |
+| V7a | DONE (`make test-v7`) | direct: **adapted naylib** (`tools/naylib_adapt.py` over pinned `vendor/naylib` v25.51.1 → raylib 6.2 memory platform + rlsw, 6.2 ABI fixes) + RUI text-engine seam with a **Pixie engine** + `ruiNoGlfw` (patches/rui2) | RUI's counter example, unchanged, paints headless with Pixie text | P0 |
+| V7b | DONE (`make test-v7`) | remote: draw ops routed at the **C-symbol level**: `tools/naylib_adapt.py` also emits `build/bridge/naylib_remote/`, where every symbol with an `nxr_<Name>` in `bridge/rl_route.nim` (45: shapes, text, targets, textures, blend, scissor, the rlgl calls RUI makes) imports the encoder instead of raylib; types, CPU images, queries and window/input stay naylib. Raw rlgl framebuffers answer 0 (RUI falls back to `loadRenderTexture`); shaders invalid (as on rlsw); `LoadImageFromScreen` = counted sync point | RUI counter, 3 clicks through RUI's router: remote pixels == direct (byte-identical, repeatable); steady frames ≤ 86 records / 1,016 B | V7a |
+| V7c | CLEAR | actor-backed `background`/`mailbox` behind RUI's API (threads off) | RUI builds `--threads:off` on the bridge | V7a |
+| V7d | CLEAR | RUI2 for WASM (`--mm:orc`), text via `text_*` host imports | host test decodes the WASM build's command stream | V7b V8 |
+| V8 | CLEAR | **userspace WASM host (ELF)**: move wasm3 out of the kernel; per-app host process granting host imports (buffers/rings, and the native text helper: Pixie `text_*`); ORC, larger linear memory | counter example runs in the ELF host; a text import measures at native speed (host test) | buffers B8 |
+| V9 | CLEAR | **benchmark**: same RUI screen in-process (RUI + raylib/rlsw, ELF) vs server path (WASM → commands → server) | report: frame time, key-to-pixel, commands/frame, kernel calls/frame; CI gates the counts | V6 V7 V8 |
+| V10 | CLEAR | audio: thread-free miniaudio backend → virtio-snd via session ring (audio server) | 440 Hz test tone through the ring (existing wav check) | buffers rings |
+| V12 | PARKED | AOT for app code (wasm2c, RLBox-style isolation) | only if V9 shows the interpreter alone misses the app budget | V9 |
+| V13 | PARKED | GPU acceleration: rlgl → virgl backend in the render server (VISION Q7) | server frame time within budget on a GPU host; rlsw output still the test reference | V6 V9 + VISION Q7 signal |
+| V11 | CLEAR | upstream to rui2: **text-backend seam (Pango, Pixie)**; SDF/backdrop backend hook; `{.cursor.}` parent or ORC note; optional rui_scripting / rui_shaped | PRs to kobi2187/rui2; RUI desktop runs on the Pixie backend | V7 + **stabilized** (human, 2026-11-03: push only after we stabilize; until then `patches/rui2/`) |
+
+## Residency migrations (2026-11-03) [PARENT]: components to their proper home
+
+Outcome: the kernel holds only inherent mechanism (ARCHITECTURE residency
+map). Order follows dependencies and the vertical slice.
+
+| # | Tag | Task | Done-check | Depends |
+|---|-----|------|-----------|---------|
+| R0 | FUZZY | device-capability mechanisms: `irqSubscribe` → mailbox, MMIO caps, DMA buffer caps, PCI-config caps | a userspace test driver gets an IRQ and does DMA through caps only | buffers (DMA buffers) |
+| R1 | CLEAR | wasm3 → per-app userspace ELF WASM host (= slice V8) | WASM apps run with no wasm3 code in the kernel image | V8 |
+| R2 | CLEAR | virtio-gpu + display → render server (= slice V6) | no gpu driver in the kernel image; screendump tests pass | R0, V6 |
+| R3 | CLEAR | virtio-input + PS/2 → input_server | keys reach apps via input_server; kernel has no input driver | R0 |
+| R4 | CLEAR | virtio-snd → audio server (= slice V10) | wav test passes via the server | R0, V10 |
+| R5 | CLEAR | fb console/VT → console server; kernel keeps a serial (+ minimal panic) console | shell output on screen via the console server | R2 |
+| R6 | CLEAR | shell → `shell.elf` (+ a spawn syscall) | the QEMU suite drives the userspace shell | R5 |
+| R7 | CLEAR | virtio-blk + VFS/FatFs → blk + fs servers | `cat` through fs_server with no FS code in the kernel | R0, buffers B10 |
+| R8 | CLEAR | virtio-net + IP stack → net_server | pcap test via net_server | R0 |
+| R9 | CLEAR | retire ping/dispatch kmods in the micro model (ELF servers exist) | microkernel image links neither | — |
+| R10 | CLEAR | event topic registry → event server; kernel keeps notify | pub/sub tests via the server | Phase E |
 
 ## Compiler target (long-term)
 

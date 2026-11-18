@@ -55,7 +55,29 @@ proc testInvalidToken() =
   assert eventPoll(badTok).isNone, "poll on invalid token returns none"
   echo "PASS: invalid token handling"
 
+proc testUnsubscribeReusesSlots() =
+  ## Released subscriptions are reused: far more than MaxSubscribers
+  ## subscribe/unsubscribe cycles never exhaust the table.
+  eventServerInit()
+  for i in 0 ..< MaxSubscribers * 4:
+    let tok = eventSubscribe("app.reply")
+    assert tok.isValid, "subscription slot available after release"
+    eventUnsubscribe(tok)
+  echo "PASS: unsubscribe reuses slots"
+
+proc testReleaseOwner() =
+  eventServerInit()
+  let mine   = eventSubscribe("t", 42)
+  let theirs = eventSubscribe("t", 7)
+  eventReleaseOwner(42)
+  eventPublish("t", "x", 1)
+  assert eventPoll(mine).isNone, "dead owner's subscription gets nothing"
+  assert eventPoll(theirs).isSome, "other owners unaffected"
+  echo "PASS: release by owner"
+
 when isMainModule:
+  testUnsubscribeReusesSlots()
+  testReleaseOwner()
   testSubscribePublishPoll()
   testFanOut()
   testTopicFiltering()

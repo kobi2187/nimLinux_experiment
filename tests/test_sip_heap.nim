@@ -58,7 +58,23 @@ proc testSetBump() =
   assert gSipHeaps[slot].bump mod uint64(MinAllocAlign) == 0
   echo "PASS: sipHeapSetBump places bump after ELF"
 
+proc testHostileSizes() =
+  ## nimixMapAnon / nimixAllocRegion pass the caller's size straight through.
+  regionAllocInit()
+  let slot = int(regionAlloc(RegionSize))
+  sipHeapInit(slot)
+  let before = gSipHeaps[slot].bump
+  for bad in [0, -1, -16, -4096, low(int), high(int), int(RegionSize) * 2, int(RegionSize)]:
+    assert sipAlloc(slot, bad) == nil, "size " & $bad & " must be refused"
+    assert gSipHeaps[slot].bump == before, "a refused size must not move the heap (" & $bad & ")"
+  let p = sipAlloc(slot, 64)
+  assert p != nil and cast[uint64](p) == before, "the heap still works after the refusals"
+  assert sipAlloc(slot, int(RegionSize) - SipHeapHeaderSize - 64) != nil, "exactly the rest is fine"
+  assert sipAlloc(slot, 1) == nil, "and then it is full"
+  echo "PASS: hostile sizes refused, heap untouched"
+
 when isMainModule:
+  testHostileSizes()
   testBasicAlloc()
   testAlignment()
   testExhaustion()

@@ -7,7 +7,7 @@
 ## This file must be compiled with --mm:arc (see note below).
 ##
 ## Compile: nim c -r --skipParentCfg --mm:arc --panics:on \
-##            --path:/home/kl/prog/nimLinux_experiment \
+##            --path:<repo-root> \
 ##            -d:noSignalHandler tests/test_cps_eval.nim
 
 import cps

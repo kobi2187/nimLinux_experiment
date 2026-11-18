@@ -38,11 +38,15 @@ proc sipHeapSetBump*(slot: int; afterElf: uint64) =
 
 proc sipAlloc*(slot: int; size: int): pointer =
   ## Bump-allocate `size` bytes from the SIP's region heap.
-  ## Returns nil if out of space.
-  if slot < 0 or slot >= MaxRegions: return nil
-  let aligned = (uint64(size) + uint64(MinAllocAlign) - 1) and not (uint64(MinAllocAlign) - 1)
+  ## Returns nil if out of space, or if `size` is not positive. `size` comes from ring 3
+  ## (nimixMapAnon / nimixAllocRegion): a negative one used to wrap the arithmetic below and
+  ## move the bump pointer BACKWARDS, so later allocations overlapped earlier ones.
+  if slot < 0 or slot >= MaxRegions or size <= 0: return nil
   let h = addr gSipHeaps[slot]
-  if h.bump + aligned > h.limit: return nil
+  let room = h.limit - h.bump                      # h.bump <= h.limit always
+  if uint64(size) > room: return nil               # also keeps the alignment round-up below from wrapping
+  let aligned = (uint64(size) + uint64(MinAllocAlign) - 1) and not (uint64(MinAllocAlign) - 1)
+  if aligned > room: return nil
   result = cast[pointer](h.bump)
   h.bump += aligned
 

@@ -81,11 +81,22 @@ typedef struct { int _dummy; } FILE;
 static FILE __stderr_storage;
 FILE *stderr = &__stderr_storage;
 
+/* COM1, polled — usable before and after the Nim serial driver. */
+static void com1_putc(char c) {
+    unsigned char lsr;
+    do { __asm__ volatile("inb %1, %0" : "=a"(lsr) : "Nd"((unsigned short)0x3FD)); }
+    while (!(lsr & 0x20));
+    __asm__ volatile("outb %0, %1" :: "a"(c), "Nd"((unsigned short)0x3F8));
+}
+
+static void com1_puts(const char *s) { while (*s) com1_putc(*s++); }
+
 size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream) {
-    (void)ptr;
-    (void)size;
+    /* Nim's fatal-error text (failed checks, unhandled exceptions) arrives
+     * here: send it to the serial console instead of dropping it. */
     (void)stream;
-    /* Kernel: silently ignore stderr writes */
+    const char *p = (const char *)ptr;
+    for (size_t i = 0; i < size * nmemb; i++) com1_putc(p[i]);
     return nmemb;
 }
 
@@ -94,12 +105,23 @@ int fflush(FILE *stream) {
     return 0;
 }
 
+/* core/backtrace.nim: frame-pointer walk in the serial crash-report format. */
+extern void nimixPrintBacktraceHere(void);
+
+static void fatal_halt(const char *what) {
+    com1_puts("\n=== KERNEL PANIC (");
+    com1_puts(what);
+    com1_puts(") ===\n");
+    nimixPrintBacktraceHere();
+    com1_puts("=== halted (symbolize: tools/symbolize.py <serial log>) ===\n");
+    for (;;) __asm__ volatile("cli; hlt");
+}
+
 void exit(int status) {
     (void)status;
-    /* Kernel cannot exit — halt the CPU forever */
-    for (;;) {
-        __asm__ volatile("hlt");
-    }
+    /* Kernel cannot exit — a fatal Nim runtime error (failed check,
+     * unhandled exception; text already printed) ends here. */
+    fatal_halt("fatal runtime error, see above");
 }
 
 /* ── Debug serial output ───────────────────────────────────────── */
@@ -194,7 +216,7 @@ unsigned long long strtoull(const char *s, char **end, int base) {
 
 /* abort: wasm3 calls this on fatal internal error — we halt */
 void abort(void) {
-    for (;;) __asm__ volatile("cli; hlt");
+    fatal_halt("abort");
 }
 
 /* __popcountdi2: used by wasm3's compile phase for bitmask ops */

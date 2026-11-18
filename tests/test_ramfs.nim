@@ -1,28 +1,28 @@
 # SPDX-License-Identifier: GPL-2.0
-## Host-side test for LittleFS wear-leveling driver
+## Host-side test for the ramfs VFS driver
 import fs/vfs
-import fs/littlefs_wearleveling
+import fs/ramfs
 import unittest
 import std/strutils
 
-suite "LittleFS WearLeveling Driver":
+suite "ramfs VFS driver":
   test "Mount and File lifecycle":
-    registerLittleFSWearLeveling()
+    registerRamFs()
     
     var stripped: cstring
-    let drv = getDriver("/lfs_wl/test.txt", stripped)
+    let drv = getDriver("/ram/test.txt", stripped)
     check drv != nil
-    check drv.name == "littlefs_wl"
+    check drv.name == "ramfs"
     check $stripped == "test.txt"
     
     check drv.mount()
     
     let content = "Hello operating system developers!"
-    let writeRes = drv.writeFile("lfs_file.txt", cast[pointer](unsafeAddr content[0]), content.len)
+    let writeRes = drv.writeFile("ram_file.txt", cast[pointer](unsafeAddr content[0]), content.len)
     check writeRes == 0
     
     var readBuf: array[64, byte]
-    let readLen = drv.readInto("lfs_file.txt", addr readBuf[0], readBuf.len)
+    let readLen = drv.readInto("ram_file.txt", addr readBuf[0], readBuf.len)
     check readLen == content.len
     
     var readStr = ""
@@ -37,4 +37,4 @@ suite "LittleFS WearLeveling Driver":
     var dirStr = ""
     for i in 0..<dirLen:
       dirStr.add(char(dirBuf[i]))
-    check dirStr.contains("lfs_file.txt")
+    check dirStr.contains("ram_file.txt")

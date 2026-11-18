@@ -86,11 +86,18 @@ proc pciDeviceName*(vendor, device: uint16): cstring =
       return entry.name
   nil
 
-proc pciVirtioFind*(vendorId, deviceId: uint16): PciDevice =
-  ## Find the first (bus, slot, fn) matching vendorId:deviceId.
-  ## Returns a device with found=false if not found.
+proc pciVirtioFindNth*(vendorId, deviceId: uint16; n: int): PciDevice =
+  ## The n-th (0-based, in scan order) device matching vendorId:deviceId.
+  ## Returns a device with found=false if there are fewer than n+1.
+  var seen = 0
   for i in 0..<gPciCount:
     let d = gPciDevices[i]
     if d.vendorId == vendorId and d.deviceId == deviceId:
-      return d
+      if seen == n: return d
+      inc seen
   PciDevice(found: false, bus: 0, slot: 0, fn: 0, vendorId: 0xFFFF'u16)
+
+proc pciVirtioFind*(vendorId, deviceId: uint16): PciDevice =
+  ## Find the first (bus, slot, fn) matching vendorId:deviceId.
+  ## Returns a device with found=false if not found.
+  pciVirtioFindNth(vendorId, deviceId, 0)

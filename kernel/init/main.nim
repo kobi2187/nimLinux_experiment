@@ -17,6 +17,7 @@ import ../../kernel/models/monolithic
 import ../../kernel/models/microkernel
 import ../../kernel/models/sasos
 import boot_helpers
+import ../../kernel/process_table   # procAdoptCurrent, procSleepUntil, procTable
 import ../config
 
 when defined(amd64) or defined(x86_64):
@@ -24,6 +25,7 @@ when defined(amd64) or defined(x86_64):
 
 when defined(testMode):
   import ../../tests/kernel_tests/main as kernelTests
+  import ../../drivers/pit            # pitTicks
   const userTestsElf = staticRead("../../build/apps/user_tests.elf")
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -43,6 +45,10 @@ proc runKernel*(bootInfo: ptr BootInfo) =
   klog(llInfo, "[MAIN] Step 2: KERNEL MODEL")
   klog(llInfo, "[MAIN] ════════════════════════════════════════════════")
   klog(llInfo, "[MAIN] Selecting kernel model: " & KernelModel)
+  # The process table is the preemptive scheduler behind the PIT handler in
+  # EVERY model; only monolithic used to initialise it (micro/sasos booted
+  # with current=0 and all ring heads 0 instead of -1).
+  procTableInit()
   when IsMonolithic:
     initMonolithicModel()
   elif IsSasos:
@@ -60,6 +66,10 @@ proc runKernel*(bootInfo: ptr BootInfo) =
   klog(llInfo, "[MAIN] ════════════════════════════════════════════════")
   klog(llInfo, "[MAIN] Step 4: ENTERING SHELL")
   klog(llInfo, "[MAIN] ════════════════════════════════════════════════")
+
+  # The boot flow becomes the shell task: an ordinary app-class client, so
+  # ring-3 apps round-robin with it and the scheduler can always return here.
+  discard procAdoptCurrent("shell", tcApp)
 
   when defined(testMode):
     klog(llInfo, "[MAIN] testMode: kernel tests (ring 0)")
@@ -94,6 +104,9 @@ proc kernelMain*(magicReg: uint32, infoPtr: pointer) {.exportc.} =
 
   earlyPutString("[BOOT] Calling runKernel...\n")
   runKernel(addr bootInfo)
+  # runKernel ends in the shell loop and never returns; if it does, say so
+  # (boot_asm then halts) rather than stopping silently.
+  earlyPutString("[BOOT] runKernel returned - kernel halted\n")
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Standalone Test Entry (local testing without bootloader)
