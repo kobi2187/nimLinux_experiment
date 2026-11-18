@@ -2566,3 +2566,12 @@ bomb` (endless recursion killed by a page fault, kernel and shell fine).
 that is exactly where the reserve (and guard) now begins, so the program faulted. The offset moved to 2 MB (heap area).
 **Consequence to know:** a program that needs more than about 1 MB of stack now faults instead of silently working;
 raising `UserStackReserve` is a one-constant change.
+
+
+## 2026-11-18 — CI parity check: sanitizers and valgrind over ALL host tests are clean
+
+CI runs `test-asan`, `test-valgrind`, `test-arc`, `test-wasm` and `test-v2` in addition to the four targets in the local
+gate. After adding the ports, evdev decoder, manifest, guard-page and display tests, ran the first four locally on head
+50fef08: all exit 0 ("ASan/UBSan: clean", "valgrind: clean", ARC and WASM suites pass). `test-v2` cannot run here
+(meson missing); the two new C header tests (`test_input.c`, `test_display.c`) were run directly with gcc. AGENTS.md
+VERIFY now says when to run these.

@@ -173,6 +173,11 @@ a driver or a scheduler it does not need); a library that grows a heavy import i
 `make test` (host), `make test-devices` (QEMU, all devices), `make test-qemu-models` (all three kernel
 models), `make test-structured`; plus ASan/UBSan (and valgrind where the code is allocator-heavy) on any
 pure library touched. Rules:
+- **CI parity.** CI (`.github/workflows/test.yml`) runs more than the four targets above: `make test-asan` and
+  `make test-valgrind` (ALL host tests under sanitizers, not just the library I touched), `test-arc`, `test-wasm`
+  and `test-v2` (needs meson). I run `test-asan test-valgrind test-arc test-wasm` after any batch that adds or
+  changes host tests or pure libraries, and before a PR leaves draft; a clean local run means CI will not be the
+  first to find it. (`test-v2` cannot run where meson is missing; say so and rely on CI.)
 - Never run bare `make` (its default target opens an interactive QEMU and hangs); name the target.
 - One verification run at a time, with its own log directory; two overlapping runs report each other's results.
 - Tests count operations; they never assert wall-clock time (CI is orders of magnitude slower).

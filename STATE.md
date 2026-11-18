@@ -9,7 +9,7 @@ states of this file are in git history; this file holds the CURRENT state only.
 - Toolchain: Nim 2.2.4 at `/opt/nimtc/nim-2.2.4/bin` (put it on PATH); QEMU 8.2.2 (TCG) + OVMF.
 - Safe make targets: `test`, `test-devices`, `test-qemu-models`, `test-structured`, `disk-add-apps`.
   **Never bare `make`** (its default target opens an interactive QEMU).
-- Gate before any push: all four test targets green, run once and alone (AGENTS.md, VERIFY).
+- Gate before any push: all four test targets green, run once and alone (AGENTS.md, VERIFY). CI parity (asan, valgrind, arc, wasm) was clean on 2026-11-18; `test-v2` needs meson, absent in this container.
 - Last gate (2026-11-15, head 26da1d0): `make test` pass; `test-devices` 39/39 on all three kernels; `test-qemu-models` 16/16 x3; `test-structured` 47/47.
 
 ## Awaiting human (decisions only the human can make; **unanswered means OPEN: nothing is built on a recommendation**)
