@@ -2581,3 +2581,16 @@ VERIFY now says when to run these.
 Asked the human for the contract mechanism with three options (Nim types as the contract plus a generator for the C mirror and vectors; a separate schema language with its own generator; hand-written with shared test vectors). Evidence used: the input and display ports each exist twice by hand (`ipc/ports/*_port.nim` and `libnimix/nimix_*.h`), the dispatcher's two-field MsgPack message needs a 47-line strict decoder, and the draw protocol is hand-encoded in `bridge/`. Also surfaced a vision-level tension (VISION says control plane = MsgPack; the ports use packed binary records) as the NEXT question. Nothing is built on either; K2 stays blocked on K1.
 
 **Human on my writing (2026-11-18):** "You speak strangely. Talk directly like a human being. Which handwritten, what is we lived this? Too vague, be plain." Added to AGENTS.md (question template): write plainly, name the real file and line, show the actual code or numbers. The K1 question was re-explained with the real code.
+
+
+## 2026-11-18 — K1 answered: Nim types are the contract (option 1), kept simple
+
+**Asked:** how a service's messages are written once (1 Nim types as the contract, a small tool generates the C side
+and test vectors; 2 a separate schema language; 3 hand-written both sides with shared vectors).
+**Answered (human, verbatim): "Contract option 1. Shouldn't grow to schema, keep simple machinary"** (machinery).
+**So:** the Nim wire types (the packed payload objects and the op/kind enums) are the single source; a small generator
+writes `libnimix/nimix_contract.h` (C structs with the same fields and size checks, plus the op and kind numbers) and a
+file of test vectors (sample messages as hex, produced by the real Nim encoders); a host test fails if either generated
+file is stale. No schema language, no separate description files, no versioning framework: if a need seems to call for
+one, it comes back as a question. **Still open:** control-plane wire format (MsgPack vs the packed records); K2 is
+unblocked once the generator exists.
