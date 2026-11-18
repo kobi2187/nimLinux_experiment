@@ -2594,3 +2594,23 @@ file of test vectors (sample messages as hex, produced by the real Nim encoders)
 file is stale. No schema language, no separate description files, no versioning framework: if a need seems to call for
 one, it comes back as a question. **Still open:** control-plane wire format (MsgPack vs the packed records); K2 is
 unblocked once the generator exists.
+
+
+## 2026-11-18 — K1 built: the port contract is the Nim types; a small generator writes the C side
+
+**Built (human: option 1, "keep simple machinery"):**
+- `ipc/ports/contract.nim`: reads the Nim wire types (`KeyWire`, `MotionWire`, `PresentWire`, ...) and enums with the
+  compiler (`fieldPairs`, `sizeof`, `ord`) and writes `libnimix/nimix_contract.h`: constants, enum values and packed C
+  structs, each with a `_Static_assert` on its size. A field type with no C mapping is a compile error. It also writes
+  `tests/libnimix/port_vectors.txt`: sample messages produced by the REAL Nim encoders, as hex.
+- `tools/gen_contract.nim` + `make gen-contract` write the two files. `tests/test_contract.nim` fails, and says how to fix
+  it, when either checked-in file is stale (mutation-checked: adding a field to `KeyWire` without regenerating fails it).
+- `libnimix/nimix_input.h`, `nimix_display.h`, `nimix_port.h` no longer retype any layout or number: they copy payloads into
+  the generated structs and use the generated enum values. `tests/libnimix/test_input.c` and `test_display.c` read the
+  vectors: every event line must decode to its fields, every request line must be exactly the bytes the C library sends.
+**What it deliberately is not:** no schema language, no description files, no versioning. Adding a message means writing
+its Nim type and adding it to the lists at the bottom of `contract.nim`.
+**Scope so far:** the input and display ports. Other hand-mirrored layouts (the spawn request, the channel structs) can join
+the same lists later; that is not done yet.
+**Unblocks:** K2 (dispatcher stage 2) for what depends on message definitions. **Still open (human):** the control-plane
+wire format (MsgPack vs the packed records).
