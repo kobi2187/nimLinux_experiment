@@ -1,0 +1,2 @@
+# gfxtest: draws on the screen
+grant display

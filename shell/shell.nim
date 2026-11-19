@@ -38,6 +38,10 @@ import ../kernel/handles/khandles
 import ../kernel/buffers/kbuffers
 import ../kernel/space/kspace
 import ../kernel/process/launcher
+import ../kernel/ports/kports
+import ../input/evdev_decode
+import ../ipc/ports/input_port
+import ../ipc/ports/port
 
 const
   ShellPrompt = "nimixos> "
@@ -63,6 +67,7 @@ type
     scDevtest       ## devtest <gpu|snd|net|input> — exercise a virtio device
     scChantest      ## chantest — handles and channels between this shell and a ring-3 program
     scIsotest       ## isotest — is one app's memory out of another running app's reach?
+    scKeytest       ## keytest — only the program given the input port sees keys; a keylogger gets nothing
 
 # ── String helpers ─────────────────────────────────────────────────────────
 
@@ -108,6 +113,7 @@ proc parseCommand*(buf: openArray[char], len: int): ShellCommand =
   if bufEq(buf, first, last, "devtest"): return scDevtest
   if bufEq(buf, first, last, "chantest"): return scChantest
   if bufEq(buf, first, last, "isotest"): return scIsotest
+  if bufEq(buf, first, last, "keytest"): return scKeytest
   # "run <file>", "exec <file>", "kill <pid>" — prefix match
   if last - first >= 3 and buf[first] == 'r' and buf[first+1] == 'u' and
      buf[first+2] == 'n' and buf[first+3] == ' ':  return scRun
@@ -565,27 +571,32 @@ proc cmdChantest() =
   discard chClose(gHs, gCh, me, dB)
   if bad == 0: kprint("chan-kernel: ok\n")
 
+proc waitTaskGone(slot: int; pid: uint32; maxTicks: uint64): bool =
+  let until = pitTicks() + maxTicks
+  while pitTicks() < until:
+    if not procTable.tasks[slot].used or procTable.tasks[slot].pid != pid: return true
+    sti(); hlt()
+  false
+
+proc launchProgram(name: cstring; args: cstring): tuple[slot: int, pid: uint32, region: int] =
+  ## Start a program from disk (its manifest decides what it is granted). slot -1 if it did not start.
+  gLastSpawnSlot = -1
+  let n = loadFile(name)
+  if n < 0: return (-1, 0'u32, -1)
+  launchLoaded(name, n, args)
+  if gLastSpawnSlot < 0: return (-1, 0'u32, -1)
+  (gLastSpawnSlot, procTable.tasks[gLastSpawnSlot].pid, gLastSpawnRegion)
+
 proc cmdIsotest() =
   ## Keeps a victim alive and sends attackers at its memory, each running at the same time on its own
   ## page tables. Prints "isotest-kernel: ..." for tests/qemu_devices.py. The victim's secrets are
   ## read here too, from the kernel's tables (where every region is mapped), to prove they are intact.
-  const Offset = 0x300000'u64
+  const Offset = 0x200000'u64                       # the heap area of the region (the top 1 MB is the stack reserve)
   const Magic = 0x4E494D4958495351'u64
   var bad = 0
   proc fail(what: string) =
     inc bad
     kprint("isotest-kernel: FAIL "); kprint(what); kprint("\n")
-  proc waitGone(slot: int; pid: uint32; maxTicks: uint64): bool =
-    let until = pitTicks() + maxTicks
-    while pitTicks() < until:
-      if not procTable.tasks[slot].used or procTable.tasks[slot].pid != pid: return true
-      sti(); hlt()
-    false
-  proc launch(name: cstring; args: cstring): tuple[slot: int, pid: uint32, region: int] =
-    let n = loadFile(name)
-    if n < 0: return (-1, 0'u32, -1)
-    launchLoaded(name, n, args)
-    (gLastSpawnSlot, procTable.tasks[gLastSpawnSlot].pid, gLastSpawnRegion)
   proc hex(v: uint64): string =
     const digits = "0123456789abcdef"
     var started = false
@@ -595,7 +606,7 @@ proc cmdIsotest() =
         started = true
         result.add digits[d]
 
-  let victim = launch("isotest.elf", "victim")
+  let victim = launchProgram("isotest.elf", "victim")
   if victim.slot < 0: fail("isotest.elf not on disk"); return
   let vbase = RegionBase + uint64(victim.region) * RegionSize
   let secret = cast[ptr uint64](vbase + Offset)
@@ -608,8 +619,8 @@ proc cmdIsotest() =
 
   # positive control: an app can use its OWN region and buffer while the victim is alive
   block:
-    let a = launch("isotest.elf", "own")
-    if a.slot < 0 or not waitGone(a.slot, a.pid, 500): fail("the control app did not finish")
+    let a = launchProgram("isotest.elf", "own")
+    if a.slot < 0 or not waitTaskGone(a.slot, a.pid, 500): fail("the control app did not finish")
     else: kprint("isotest-kernel: control finished\n")
 
   # the attacks: each runs as its own app, concurrently with the victim
@@ -620,9 +631,9 @@ proc cmdIsotest() =
     args[k] = ' '; inc k
     for c in hex(target): args[k] = c; inc k
     args[k] = '\0'
-    let a = launch("isotest.elf", cast[cstring](addr args[0]))
+    let a = launchProgram("isotest.elf", cast[cstring](addr args[0]))
     if a.slot < 0: fail("could not start the attacker " & label); return
-    if not waitGone(a.slot, a.pid, 500): fail("the attacker " & label & " is still running")
+    if not waitTaskGone(a.slot, a.pid, 500): fail("the attacker " & label & " is still running")
     elif secret[] != Magic: fail("the secret changed after " & label)
     else:
       kprint("isotest-kernel: "); kprint(label); kprint(" contained\n")
@@ -636,8 +647,43 @@ proc cmdIsotest() =
   # the sharpest case: the attacker owns the very next page of the victim's 2 MB block
   attack("read of the victim's page from the next page of its block", "neighbor", ArenaBase)
   # the victim is untouched and finishes by itself
-  if not waitGone(victim.slot, victim.pid, 800): fail("the victim did not finish")
+  if not waitTaskGone(victim.slot, victim.pid, 800): fail("the victim did not finish")
   if bad == 0: kprint("isotest-kernel: ok\n")
+
+proc cmdKeytest() =
+  ## Who sees the keyboard? A keylogger with no grant, a legitimate client granted the input port, and a
+  ## second client that asks for it while the first holds it. Events are fed through the very decoder and
+  ## port the virtio driver uses. Prints "keytest-kernel: ..." for tests/qemu_devices.py.
+  var bad = 0
+  proc fail(what: string) =
+    inc bad
+    kprint("keytest-kernel: FAIL "); kprint(what); kprint("\n")
+  let me = khMe()
+  kportConsoleEnsure(me)
+  if not kportConsoleHolds(pkInput, me): fail("the console does not hold the port to begin with"); return
+  let logger = launchProgram("keylog.elf", "")
+  let c1 = launchProgram("keyclient.elf", "")
+  if logger.slot < 0 or c1.slot < 0: fail("could not start keylog or keyclient"); return
+  let c2 = launchProgram("keyclient.elf", "")          # the port is held by c1 now: this one is not given it
+  if kportConsoleHolds(pkInput, me): fail("the console still holds the port after the launcher moved it")
+  let settle = pitTicks() + 100                        # let the programs reach their read loops
+  while pitTicks() < settle: sti(); hlt()
+  kportInject(EvKey, 30, 1); kportInject(EvKey, 30, 0)                        # a key, down and up
+  kportInject(EvRel, 0, 5); kportInject(EvRel, 1, -2); kportInject(EvSyn, 0, 0)   # a mouse move
+  kportInject(EvRel, 8, 1); kportInject(EvSyn, 0, 0)                          # a wheel click
+  kportInject(EvKey, 16, 1)                                                   # 'q' down: the client finishes
+  if not waitTaskGone(c1.slot, c1.pid, 400): fail("the client did not finish")
+  if c2.slot >= 0 and not waitTaskGone(c2.slot, c2.pid, 400): fail("the second client did not finish")
+  if not waitTaskGone(logger.slot, logger.pid, 800): fail("the keylogger did not finish")
+  kportConsoleEnsure(me)                               # the holder is gone: the console takes the port back
+  if not kportConsoleHolds(pkInput, me): fail("the console did not get the port back")
+  kportInject(EvKey, 31, 1)
+  var ev: InputEvent
+  if not kportConsoleNextEvent(me, ev) or ev.kind != ikKey or ev.code != 31:
+    fail("the console did not receive a key after getting the port back")
+  else:
+    kprint("keytest-kernel: console took the port back\n")
+  if bad == 0: kprint("keytest-kernel: ok\n")
 
 proc dispatchCmd(cmd: ShellCommand; buf: openArray[char];
                  first, last: int; physMgr: PhysicalMemManager) =
@@ -656,6 +702,7 @@ proc dispatchCmd(cmd: ShellCommand; buf: openArray[char];
   of scLspci:  cmdLspci()
   of scChantest: cmdChantest()
   of scIsotest: cmdIsotest()
+  of scKeytest: cmdKeytest()
   of scNetinfo: cmdNetinfo()
   of scDevtest:
     var dev: array[16, char]

@@ -25,15 +25,27 @@ var
   gWaitN: array[HsMaxTasks, int]                    ## handles each blocked task is waiting on
   gWaitEnds: array[HsMaxTasks, array[WaitMax, int32]]
 
-proc onEndReady(endIdx: int) {.nimcall.} =
-  ## A message was queued for an end, or its peer closed: wake the tasks waiting on it.
+type
+  PortProbe* = proc(t: int; h: Handle; key: var int32; bits: var uint32): bool {.nimcall.}
+    ## Installed by kernel/ports: is h a port handle of task t that may be waited on? If so, its wait key
+    ## (a negative number naming the port, never an end index) and its readiness bits (bit 0: an event
+    ## is waiting).
+
+var gPortProbe*: PortProbe
+
+proc khWakeKey*(key: int32) =
+  ## Wake every task waiting on this key: a channel end index (>= 0) or a port (< 0). Safe from an IRQ.
   let fl = disableInterrupts()
   for t in 0 ..< HsMaxTasks:
     for k in 0 ..< gWaitN[t]:
-      if gWaitEnds[t][k] == int32(endIdx):
+      if gWaitEnds[t][k] == key:
         procWake(t)
         break
   restoreInterrupts(fl)
+
+proc onEndReady(endIdx: int) {.nimcall.} =
+  ## A message was queued for an end, or its peer closed: wake the tasks waiting on it.
+  khWakeKey(int32(endIdx))
 
 proc khInit*() =
   hsInit(gHs)
@@ -273,19 +285,29 @@ proc abiWait*(items: pointer; n: int; ticks: uint32): int {.nimcall.} =
   let forever = ticks == 0xFFFFFFFF'u32
   let deadline = pitTicks() + uint64(ticks)
   var ends: array[WaitMax, int32]
+  var isPort: array[WaitMax, bool]
   for i in 0 ..< n:
     var o: ObjId
     var b: uint64
     let h = it[i].h                          # the caller's memory: read it once
-    if hsLookup(gHs, t, Handle(h), okChannelEnd, rtWait, o, b) != heOk: return code(crBadHandle)
-    ends[i] = hsObjPayload(gHs, o)
+    if hsLookup(gHs, t, Handle(h), okChannelEnd, rtWait, o, b) == heOk:
+      ends[i] = hsObjPayload(gHs, o)
+    else:
+      var key: int32
+      var bits: uint32
+      if gPortProbe == nil or not gPortProbe(t, Handle(h), key, bits): return code(crBadHandle)
+      ends[i] = key; isPort[i] = true
   while true:
     var ready = 0
     for i in 0 ..< n:
       let h = Handle(it[i].h)
       var bits = 0'u32
-      if chReadable(gHs, gCh, t, h): bits = bits or 1
-      if chPeerClosed(gHs, gCh, t, h): bits = bits or 2
+      if isPort[i]:
+        var key: int32
+        discard gPortProbe(t, h, key, bits)  # it answered once already; the handle is still ours (IF=0)
+      else:
+        if chReadable(gHs, gCh, t, h): bits = bits or 1
+        if chPeerClosed(gHs, gCh, t, h): bits = bits or 2
       it[i].ready = bits
       if bits != 0: inc ready
     if ready > 0: return ready

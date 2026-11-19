@@ -7,9 +7,11 @@
 import nimix_abi
 import nimix_abi_impl
 import ../buffers/kbuffers
-import ../display/display
 import ../handles/khandles
 import ../process/launcher
+import ../ports/kports
+
+proc abiRetired(): int {.nimcall.} = -1   # a retired syscall number refuses, loudly, forever
 
 proc wireSharedAbi*(av: var NimixAbiVTable) =
   ## Wire all shared ABI procs into av.
@@ -52,10 +54,7 @@ proc wireSharedAbi*(av: var NimixAbiVTable) =
     abiBufMsgSend(name, data, dataLen, cast[ptr BufMsgHandles](hs))
   av.bufMsgRecv     = proc(tok: uint64; buf: pointer; bufLen: int; hs: pointer): int {.nimcall.} =
     abiBufMsgRecv(tok, buf, bufLen, cast[ptr BufMsgHandles](hs))
-  av.displayInfo    = abiDisplayInfo
-  av.displayPresent = abiDisplayPresent
-  av.displayModes   = abiDisplayModes
-  av.displaySetMode = abiDisplaySetMode
+  av.retired        = abiRetired
   av.chanPair       = abiChanPair
   av.chanWrite      = abiChanWrite
   av.chanRead       = abiChanRead
@@ -67,3 +66,5 @@ proc wireSharedAbi*(av: var NimixAbiVTable) =
   av.chanReadBatch  = abiChanReadBatch
   av.kernelCalls    = abiKernelCalls
   av.spawn          = abiSpawn
+  av.portCall       = abiPortCall
+  av.portEvent      = abiPortEvent

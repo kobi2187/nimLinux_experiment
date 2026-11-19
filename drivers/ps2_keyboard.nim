@@ -94,22 +94,24 @@ let ps2KeyboardDriver* = DriverVTable(
 
 # IRQ handler and registration — only compiled when building the full kernel
 # (i.e. kern/interrupts.nim is in scope). Host tests skip this section.
+var ps2KeyHook*: proc(scancode: uint8) {.nimcall.}
+  ## Where a PS/2 scancode goes. nil = dropped. It is NOT published on a global event topic: any program
+  ## could subscribe to that and read every key. Routing PS/2 into the input port (set-1 scancode to evdev
+  ## code, then ipc/ports) is a leaf of the roadmap (BACKLOG R3b); until then PS/2 keys reach nobody.
+
 when defined(kernelFull):
   import ../kern/interrupts
   import ../drivers/pic
-  import ../kernel/event_server
 
   proc kbdIrqHandler*(ctx: ptr ExceptionContext) {.nimcall.} =
-    ## IRQ1 handler — reads scancode, publishes key.down event.
+    ## IRQ1 handler — reads a scancode and hands it to `ps2KeyHook` (no global topic).
     let scancode = inb(Ps2DataPort)   # read from PS2 data port
     picEoi(1)                          # IRQ1 → PIC line 1
     # Also push to ring buffer for shell reads
     let ch = scancodeToAscii(scancode)
     if ch != '\0':
       kbdBufPush(ch)
-    # Publish scancode as 1-byte payload
-    var sc = scancode
-    eventPublish("key.down", addr sc, 1)
+    if ps2KeyHook != nil: ps2KeyHook(scancode)
 
   proc kbdRegisterHandler*() =
     ## Register the PS2 keyboard IRQ handler with the global interrupt manager.

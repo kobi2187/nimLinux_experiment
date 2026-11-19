@@ -9,17 +9,20 @@ states of this file are in git history; this file holds the CURRENT state only.
 - Toolchain: Nim 2.2.4 at `/opt/nimtc/nim-2.2.4/bin` (put it on PATH); QEMU 8.2.2 (TCG) + OVMF.
 - Safe make targets: `test`, `test-devices`, `test-qemu-models`, `test-structured`, `disk-add-apps`.
   **Never bare `make`** (its default target opens an interactive QEMU).
-- Gate before any push: all four test targets green, run once and alone (AGENTS.md, VERIFY).
+- Gate before any push: all four test targets green, run once and alone (AGENTS.md, VERIFY). CI parity (asan, valgrind, arc, wasm) was clean on 2026-11-18; `test-v2` needs meson, absent in this container.
 - Last gate (2026-11-15, head 26da1d0): `make test` pass; `test-devices` 39/39 on all three kernels; `test-qemu-models` 16/16 x3; `test-structured` 47/47.
 
-## Awaiting human (decisions only the human can make)
-| asked | question | my recommendation |
-|-------|----------|-------------------|
-| 2026-11-14 | S8c: language domains (checked safe Nim subset, Singularity style) for the SASOS model | keep PROPOSED; build after the contract layer, when a second isolation kind has a user |
-| 2026-11-15 | `main` is stale: fast-forward it to `master` or abandon it | fast-forward, or delete and make `master` the only branch |
-| 2026-11-15 | AGENTS.md revision is an experiment: judge it from the Process log below | none needed; revert from `docs/archive/` if it does not help |
-| 2026-11-17 | **Users**: should access be app manifest ∩ system policy ∩ a user policy computed once at launch (Option A, no kernel users), or Unix-style users, or runtime double checks | Option A; add no user concept until the machine has more than one human |
-| 2026-11-15 | K1 contract/IDL: how a server's API is described and how client libraries are produced | a proposal comes first (options and a pick) |
+## Awaiting human (decisions only the human can make; **unanswered means OPEN: nothing is built on a recommendation**)
+| asked | question | blocks | my recommendation (NOT a decision) |
+|-------|----------|--------|--------------------------------------|
+| 2026-11-18 | **Control-plane wire format**: VISION says MsgPack (inspectable); the ports use packed binary records. Which one is the standard for services, or both with a rule for which goes where | the dispatcher stage 2 messages (K2); how a service's messages look on the wire | undecided; I will ask it in plain words after the contract tool exists |
+| 2026-11-17 | **On a user switch, what happens to the first user's running programs**: A end them, B keep running sealed, C freeze, D (yours) save their state so they close but can resume | the session/login design; per-user budgets; the launcher's per-user token list; what a program must be able to save | undecided, left for you |
+| 2026-11-17 | **What proves who logs in** (nothing, a password, a device) and where a user's token set is stored | login; the user-token file format | undecided; the foolish-user rule (a user's tokens never include the system's authority) holds either way |
+| 2026-11-15 | `main` is stale: fast-forward it to `master` or delete it | nothing | fast-forward, then delete later; left as is meanwhile |
+| 2026-11-15 | AGENTS.md revision is an experiment: judge it from the Process log below | nothing | revert from `docs/archive/` if it does not help |
+| 2026-11-14 | S8c: language domains (checked safe Nim subset) for the SASOS model | S8c only | keep PROPOSED |
+
+**Decided 2026-11-17 (see DECISIONS):** screen capture = Option A (held by the compositor, triggered by the user's key chord, built with the render server V6); users are a token set, several per machine, one active at a time; display ownership = handle-only (D3 option A), BUILT.
 
 ## Built (the foundation, by layer; details in BACKLOG status table and DECISIONS)
 - **Authority:** per-task handle tables with generations, rights that only narrow, badges, move/duplicate/
@@ -41,7 +44,7 @@ states of this file are in git history; this file holds the CURRENT state only.
 | 3 | dispatcher as the QoS/concurrency hub | **weak** | Stage 1 exists but is in no app's path; K1 and K2 not started |
 | 4 | CPS coroutines for servers | partial | dispatcher only |
 | 5 | raylib graphics + audio | strong for direct rendering | pixel-exact on NimixOS; render server (V6) and audio server not started |
-| 6 | capabilities as the only access control | **mechanism strong, adoption weak** | handles, rights, spawn, per-task spaces tested; real traffic still uses ambient `chanSend`, event topics, first-present display; the shell holds every right |
+| 6 | capabilities as the only access control | **strong for input and display, partial elsewhere** | handles, rights, spawn, per-task spaces tested; keyboard/mouse (keylogger test) and the screen (overlay test) are capability-only. Still ambient: `chanSend`, the remaining event topics, the file system calls; the shell holds every right |
 
 **2. Leaves I do on my own** (CLEAR: local, reversible, no frozen API, in this order)
 1. ~~Run `test-devices` against the sasos and microkernel kernels~~ **DONE 2026-11-15: 39/39 on all three.**
@@ -51,7 +54,7 @@ states of this file are in git history; this file holds the CURRENT state only.
 5. V7c: actor-backed `background`/`mailbox` behind RUI's API (threads off).
 6. V4b: measure arena sizing and per-class budgets, then set them from the numbers.
 7. V2c: sub-tick timer (S4).
-0. **K3 layers 2-4 (design decided 2026-11-16, layer 1 DONE 2026-11-17)**: kernel glue (`kernel/ports`), the input device module behind the port, the ring-3 keylogger attack test, then retire the `input` topic. This is the first thing I take: it serves the chosen result (b), keys reach only the focused app.
+0. ~~K3 layers 2-4~~ **DONE 2026-11-17 (result b delivered for input).** Done since: K1 (the port contract is generated from the Nim types), sanitizers on the new libraries, shared launch helpers, a second static-checking pass, the stack guard page (1 MB stack reserve per region). NOT independent (blocked on questions): routing PS/2 into the input port is possible but I cannot test it end to end (QEMU feeds the virtio keyboard) and it could double keys, so it waits for a way to test it.
 8. **Static-checking audit** (first pass DONE 2026-11-15 on the foundation code: 2 enum catch-alls made exhaustive, 4 silent discards made assertions; still to audit: bare `int`s standing for handles/sizes/addresses outside the ABI boundary, and the older drivers/shell code). Original scope: find `case` statements over enums that end in a catch-all `else`, bare `int`s standing for handles/sizes/addresses/states, and silent `discard`s of results that can fail; fix them or add the missing compile-time checks. Local and reversible; I take it early because every later step benefits.
 
 **3. Needs direction** (each will be asked in the question template; first = blocks the most)
@@ -65,7 +68,7 @@ states of this file are in git history; this file holds the CURRENT state only.
 | # | what you would see | what it takes | decisions needed |
 |---|--------------------|---------------|------------------|
 | a | ~~**Three kernels, one table**~~ **DONE 2026-11-15**: 39/39 on monolithic, microkernel and SASOS | — | — |
-| b | **Keys reach only the focused app**: a "keylogger" app started beside a game gets nothing, the game gets every key; the shared `input` topic is gone | K3 device port + E1 events + S3b for input | K3, E1 |
+| b | ~~**Keys reach only the program given the port**~~ **DONE 2026-11-17**: a keylogger beside the real client gets nothing; the `input` topic is gone (`keyboard-isolation`) | — | — |
 | c | **The shell as an ordinary program**: `shell.elf` started by the launcher with only the rights its manifest grants; the kernel keeps a serial console | R5/R6 console server + userspace shell (needs b's patterns) | K3, K1 |
 | d | **Two windows on screen**, overlapping, each drawn by a different app, composed by a render server; a hostile client is refused | V6 slices (needs K1, K2, K3, M1, M2) | the 12 open V6 decisions, K1, K2, K3 |
 | e | **A WASM app (the RUI counter) running in a userspace host** with no WASM code in the kernel | V8 (needs K2) | V8 boundary |
@@ -78,4 +81,5 @@ E1 event server → S2k-b2 (one handle table for every object) → V6 render-ser
 ## Process log (AGENTS.md experiment; see AGENTS.md, last section)
 | session | rediscovered facts | pushes without gate | test-fault reds | human repeats | ORIENT lines | runtime-only bugs a static check could catch |
 |---------|-------------------|---------------------|-----------------|---------------|--------------|------|
+| 2026-11-17 (K3, display port, guard page) | 0 | 0 | 4 (spawntest's `display`, the `read` return, the wait right, isotest's offset) | 3 (never assume a decision; questions in the template; ask in plain words) | ~600 | 2 (PS/2 topics still published; a stale offset the guard exposed) |
 | 2026-11-15 (before the revision, S8b + S3a) | 3 (default branch, bare `make`, `-fPIE` link) | 0 | 4 | 2 | ~3,700 | 3 (free RAM starved by static growth; channel-read return convention; right missing on a handle) |

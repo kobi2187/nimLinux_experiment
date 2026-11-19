@@ -2404,3 +2404,213 @@ a full channel, and the client could not tell. Now one rule: the newest is lost 
 rule did its job.
 
 **Not yet:** kernel glue, the real input device, the ring-3 attack test (docs/proposals/device_ports.md, next layers).
+
+
+## 2026-11-17 — K3 layers 2-4: the keyboard goes through a typed port; the global `input` topic is gone
+
+**Result (b) delivered:** keys (and mouse, tablet, wheel) reach only the program that was given the input port.
+Evidence: `keyboard-isolation` (ring 3): a keylogger with no grant tries an input port among its handles,
+guessed handle values (read and wait) and every old global topic, and sees nothing; the legitimate client,
+granted the port by its manifest, receives key/motion/wheel events; a second program that asks for the port
+while the first holds it is refused; when the holder exits the console takes the port back. The real
+keyboard/mouse/tablet tests (`keys-*`, `mouse-*`, `input`, `pointer`) pass through the port.
+
+**Decisions made while building (inside the accepted K3 design, reversible):**
+- **Transport:** the input device module is in the kernel, so its port is the DIRECT transport; the driver's IRQ
+  handler decodes evdev (`input/evdev_decode.nim`, pure, host-tested) and pushes typed events into the holder's ring.
+- **Two syscalls for every port**, in wire form (`PortCall` 52, `PortEvent` 53), plus a reserved *describe*
+  request every port answers, so a program finds its port by asking its handles (`nimix_find_port`) instead of
+  assuming an index. `nimixWait` accepts a port handle (wake key = the port); an IRQ-fed event wakes the waiter.
+- **One holder, moved not copied:** the launcher moves the console's handle to a program whose manifest says
+  `grant input` (rights read/write/wait; NOT transfer, so it cannot be passed on). The port cannot be
+  duplicated. When the holder dies, the last close frees the port and resets the queue (the next holder never
+  sees the last one's unread events); the console takes it back at its next poll. The console is an ordinary
+  client holding an ordinary handle, not a special case.
+- **Events are lossy by rule, loudly:** newest lost, in-band `Lost{count}` (see K3 layer 1). Consumers reset held
+  modifiers on Lost rather than guess.
+- **Typed key action** (`kaUp/kaDown/kaRepeat`), button codes as evdev codes: both consumers (the shell's keymap
+  and the raylib platform) needed exactly (code, value 0/1/2), so that is the typed shape.
+- **Found by asking "what else publishes input?":** the legacy PS/2 keyboard and mouse drivers also published raw
+  scancodes on global topics (`key.down`, `mouse.move`, `mouse.click`). They now call a hook (nil = dropped); PS/2
+  input reaches nobody until it is routed into the port (leaf R3b: set-1 scancode to evdev code). Nobody used
+  those topics (the console reads virtio only). **A source-scan guard** (`tests/test_no_ambient_input.nim`,
+  mutation-checked, requires >100 files scanned) fails if any code publishes input on a global topic again.
+  First version of that guard scanned nothing (wrong relative path): it passed vacuously; fixed by anchoring to the
+  source file and asserting it really scanned.
+
+**What is NOT done:** a focus model. Only one program holds the port at a time, so two programs cannot both
+receive keys, and the console gets none while a program holds it; routing keys to the focused window among
+several is the window/render server's job (V6). The describe probe scans 8 handles. The C-side decoder in
+`libnimix/nimix_input.h` mirrors the Nim layout by hand (host-tested with hand-built bytes); K1 (contract/IDL)
+is what will generate both from one description.
+
+**Static memory:** kports adds one 16-slot event ring of 256-byte messages (~4 KB) plus small state: negligible
+against the low-memory budget (the kernel image ends near 29 MB; regions start at 32 MB).
+
+
+## 2026-11-17 — Human's standing rule: never assume an implicit decision
+
+**Human (2026-11-15/17):** "Never assume an implicit decision. When you need a ruling, if I don't answer, leave
+the resolution for later, when I take time to consider it properly. In the meantime do all tasks you know and are
+confident about, that aren't dependent on that decision."
+**Written into** AGENTS.md (Working with the human; question template item 5 now says what stays blocked, not what
+default I would use). **Consequence for earlier questions:** the "if you don't answer, I do X" lines I wrote in
+earlier questions (K3, users, result order) were not decisions and are not treated as such; STATE's Awaiting list now
+records, per question, what it BLOCKS, and my recommendation is labelled "NOT a decision". Nothing built so far
+depended on an unanswered question (K3 was answered "Yes option 2" before I built it).
+
+
+## 2026-11-17 — Human on screen capture and identity: "it's just a set of cap tokens"
+
+**Asked (2026-11-17):** who may capture the whole screen (options A compositor-held + user chord, B manifest grant
+`screenshot`, C = B + per-use trusted prompt), and does a "user" identity exist. **Human replied (verbatim):**
+"Wrt screen tokens: exactly, instead of the user identify, it's just a set of cap tokens".
+**Taken as a ruling on exactly this and no more:** no user identity concept; the user's authority is a set of
+capability tokens. **Still OPEN (not assumed):** which of A/B/C is the mechanism for capture; whether the launcher
+keeps a per-user grant list (the earlier "Users" question's Option A/B/C, now narrowed: Option B, Unix-style
+users, is ruled out by this answer; A vs "no user policy at all" remains); whether more than one person uses a
+machine. Both stay on the Awaiting list with this narrowing.
+
+**Also (2026-11-17), process:** the human opened PR #13 (open, head 61734ec at the time) for the work after PR #12
+merged and offered: keep adding to it, or merge now and restart clean. Left to the human; meanwhile pushes to the
+session branch update PR #13, and I do not merge.
+
+
+## 2026-11-17 — Human's rulings: screen capture = Option A; users are a token set; number of people OPEN
+
+**Asked:** capture mechanism A/B/C. **Answered (human, verbatim): "Yes, option A."** So: the capture right is held
+only by the compositor/render server; the user triggers a whole-screen capture with a key chord that only the holder
+of the input port sees; the result is handed to the app the user chooses as a read-only sealed buffer; an app may
+always capture its own window (it owns that buffer). There is NO manifest name for whole-screen capture (that
+would be Option B), so apps cannot be granted it. Built when the render server (V6) exists; nothing to build now.
+**Also answered:** "Users are a token set" (no identity). **"number of people: to be decided"** stays OPEN on
+STATE's list (it decides whether the launcher keeps a per-user token list). **New principle (VISION):** "Should have
+foolish user constrained from messing up system, but otherwise keep it simple": a person's token set never contains
+the system's own authority, so a careless user can damage only their own things.
+**Process (human):** the never-assume rule commit was made on a branch a PR had already been made from; do not let it
+get lost. Checked 2026-11-17: the commit (61734ec) is on the session branch and in open PR #13; it is NOT in
+`master` until PR #13 merges. Nothing was lost; if the PR is merged the rule lands with it.
+**Correction of my own mistake:** I listed "the display port" as work I could do alone. It depends on D3 (who may own
+the display, docs/proposals/render_server_v6.md), which the human has not ruled; it is an ABI change to display
+v1/v2. Moved to the Awaiting list as a question and removed from the independent leaves.
+
+
+## 2026-11-17 — D3 answered: the display is a device port, handle-only (Option A)
+
+**Asked (2026-11-17):** who may own the display; A = handle only (strict), B = handle plus a direct-mode fallback.
+**Answered (human, verbatim): "Sure, go with A."** Recorded as: only a program granted the display port can draw;
+no direct-mode fallback; every graphical app needs `grant display`.
+
+**Built (K3 pattern, second device; typed port, Option 2):**
+- `ipc/ports/display_port.nim`: ops info/modes/setMode/present as typed payloads; no operation reads the screen back
+  (capture stays the compositor's right, decided Option A earlier today).
+- `kernel/display/display.nim`: the display device module is a handler behind the port (exhaustive `case` over the
+  ops); the pointer-checking code is gone because no user pointer reaches it. The module installs itself with
+  `kportInstallModule` (hook inversion, so `kports` does not import the display).
+- `kernel/ports/kports.nim` generalized to several ports (per-kind link, module, console handle); a port's
+  `onReleased` hook hands the screen back to the console when the holder closes the handle or dies.
+- Launcher: `grant display` MOVES the console's display handle to the program (rights read/write/wait, not transfer).
+  If another program holds it the grant is refused and logged ("display: held by another program").
+- **Syscalls 37-40 retired**, not renumbered: the numbers stay reserved and refuse with -1 (`scRetired37..40`, one
+  shared refusing vtable entry), so existing numbering and anything that hard-codes it stay valid. The C functions
+  `nimixDisplayInfo/Present/Modes/SetMode` now live in `libnimix/nimix_display.h` over the port (same signatures,
+  old return codes; -4 = this program holds no display port).
+- Manifests: `gfxtest`, `rldemo`, `rlbench` grant display; `rlkeys`, `rlmouse` grant display and input;
+  `system.pol` allows display.
+- `overlay` (no manifest) is the attacker: it tries info/modes/setMode/present (with a buffer it owns) and raw port
+  calls on guessed handles; all refused (`display-isolation`).
+
+**Cost of the ABI change:** gfxtest's four "hostile pointer" checks ("request pointing into the kernel", ...) were
+removed: they tested kernel-side validation of user pointers that the display no longer has; the generic gate
+check on `portCall` buffers covers the same ground (user_args specs 52/53, abifuzz portCall/portEvent lines).
+
+**Still open (human):** screen capture is decided (A) but built with the render server; number of people; K1.
+
+
+## 2026-11-17 — Human on the number of people: desktop OS, one at a time, switchable
+
+**Asked:** does more than one person use a machine (did I mean several open sessions at once?). **Answered (human,
+verbatim):** "Num of users: do u mean at the same time a few open sessions? I think desktop os, single user working at
+a time, but can switch or login and out as different user."
+**Taken as a ruling on exactly this:** several users exist on a machine (so the launcher keeps a per-user token set:
+manifest ∩ system policy ∩ the active user's tokens); only ONE session is active at a time; a user can switch or log
+in and out. A "user" is still only a token set, no kernel identity. **Not assumed (new questions, on STATE's list):**
+what happens to the previous user's running programs on a switch; what proves who logs in (nothing, a password, a
+device); where a user's token set and home scope are stored and who may change them (the "foolish user" principle says
+a user can never hold the system's own authority).
+
+
+## 2026-11-17 — User switching: the human adds Option D; the question stays OPEN
+
+**Human (verbatim):** "There could be option D with persistent state os, so close but can resume. Leave as undecided. I
+guess we have plenty of other items that are unrelated and aren't waiting on this decision."
+**Recorded:** Option D = a persistent-state OS: closing a session saves its state and it can be resumed later (not kept
+running, not frozen in memory). Options now: A end them, B keep running sealed, C freeze, D save and resume. **Undecided,
+as instructed.** Nothing is built on any of them; the work that does not depend on it continues.
+
+
+## 2026-11-17 — Stack guard page: every app region reserves its top 1 MB for the stack
+
+**Need:** the stack started at the very end of the 4 MB region and the heap's limit was the region's very end, so a
+deep recursion could silently overwrite the heap or the program image, and the heap could even hand out the stack's
+memory. A bug like that shows up far from its cause (against "fast debugging, quick pinpointing").
+**Built (independent leaf, local to mm/ and kernel/space):** `UserStackReserve` = 1 MB at the top of each region; the
+heap limit stops below it; the page at the bottom of the reserve is a guard (`spaceGuardPage`: the 2 MB step holding it
+is split into a page table; that page is present for the kernel, closed to ring 3; one guard per space). An overflow is
+now a page fault at a known address; the program is killed with the usual report. Static memory: +8 KB per address
+space (one page table and a flag; 16 spaces = 128 KB of bss); the kernel image still ends near 29 MB.
+**Evidence:** `test_addr_space` (guard closed, neighbours open, other spaces and the master untouched), `test_sip_heap`
+(the heap ends where the reserve begins), ring 3: `stackbomb ok` (about 400 KB of stack runs normally) and `stackbomb
+bomb` (endless recursion killed by a page fault, kernel and shell fine).
+**It also caught a test of mine:** `isotest` planted its secret at offset 3 MB of the region, assumed to be unused heap;
+that is exactly where the reserve (and guard) now begins, so the program faulted. The offset moved to 2 MB (heap area).
+**Consequence to know:** a program that needs more than about 1 MB of stack now faults instead of silently working;
+raising `UserStackReserve` is a one-constant change.
+
+
+## 2026-11-18 — CI parity check: sanitizers and valgrind over ALL host tests are clean
+
+CI runs `test-asan`, `test-valgrind`, `test-arc`, `test-wasm` and `test-v2` in addition to the four targets in the local
+gate. After adding the ports, evdev decoder, manifest, guard-page and display tests, ran the first four locally on head
+50fef08: all exit 0 ("ASan/UBSan: clean", "valgrind: clean", ARC and WASM suites pass). `test-v2` cannot run here
+(meson missing); the two new C header tests (`test_input.c`, `test_display.c`) were run directly with gcc. AGENTS.md
+VERIFY now says when to run these.
+
+## 2026-11-18 — K1 asked in full (no answer yet; OPEN)
+
+Asked the human for the contract mechanism with three options (Nim types as the contract plus a generator for the C mirror and vectors; a separate schema language with its own generator; hand-written with shared test vectors). Evidence used: the input and display ports each exist twice by hand (`ipc/ports/*_port.nim` and `libnimix/nimix_*.h`), the dispatcher's two-field MsgPack message needs a 47-line strict decoder, and the draw protocol is hand-encoded in `bridge/`. Also surfaced a vision-level tension (VISION says control plane = MsgPack; the ports use packed binary records) as the NEXT question. Nothing is built on either; K2 stays blocked on K1.
+
+**Human on my writing (2026-11-18):** "You speak strangely. Talk directly like a human being. Which handwritten, what is we lived this? Too vague, be plain." Added to AGENTS.md (question template): write plainly, name the real file and line, show the actual code or numbers. The K1 question was re-explained with the real code.
+
+
+## 2026-11-18 — K1 answered: Nim types are the contract (option 1), kept simple
+
+**Asked:** how a service's messages are written once (1 Nim types as the contract, a small tool generates the C side
+and test vectors; 2 a separate schema language; 3 hand-written both sides with shared vectors).
+**Answered (human, verbatim): "Contract option 1. Shouldn't grow to schema, keep simple machinary"** (machinery).
+**So:** the Nim wire types (the packed payload objects and the op/kind enums) are the single source; a small generator
+writes `libnimix/nimix_contract.h` (C structs with the same fields and size checks, plus the op and kind numbers) and a
+file of test vectors (sample messages as hex, produced by the real Nim encoders); a host test fails if either generated
+file is stale. No schema language, no separate description files, no versioning framework: if a need seems to call for
+one, it comes back as a question. **Still open:** control-plane wire format (MsgPack vs the packed records); K2 is
+unblocked once the generator exists.
+
+
+## 2026-11-18 — K1 built: the port contract is the Nim types; a small generator writes the C side
+
+**Built (human: option 1, "keep simple machinery"):**
+- `ipc/ports/contract.nim`: reads the Nim wire types (`KeyWire`, `MotionWire`, `PresentWire`, ...) and enums with the
+  compiler (`fieldPairs`, `sizeof`, `ord`) and writes `libnimix/nimix_contract.h`: constants, enum values and packed C
+  structs, each with a `_Static_assert` on its size. A field type with no C mapping is a compile error. It also writes
+  `tests/libnimix/port_vectors.txt`: sample messages produced by the REAL Nim encoders, as hex.
+- `tools/gen_contract.nim` + `make gen-contract` write the two files. `tests/test_contract.nim` fails, and says how to fix
+  it, when either checked-in file is stale (mutation-checked: adding a field to `KeyWire` without regenerating fails it).
+- `libnimix/nimix_input.h`, `nimix_display.h`, `nimix_port.h` no longer retype any layout or number: they copy payloads into
+  the generated structs and use the generated enum values. `tests/libnimix/test_input.c` and `test_display.c` read the
+  vectors: every event line must decode to its fields, every request line must be exactly the bytes the C library sends.
+**What it deliberately is not:** no schema language, no description files, no versioning. Adding a message means writing
+its Nim type and adding it to the lists at the bottom of `contract.nim`.
+**Scope so far:** the input and display ports. Other hand-mirrored layouts (the spawn request, the channel structs) can join
+the same lists later; that is not done yet.
+**Unblocks:** K2 (dispatcher stage 2) for what depends on message definitions. **Still open (human):** the control-plane
+wire format (MsgPack vs the packed records).

@@ -6,45 +6,41 @@
 
 import std/options
 import ../../core/serial
-import ../../kernel/event_server
-import ../../kernel/traits/event
 import ../../input/evdev_keymap
+import ../../ipc/ports/input_port
+import ../ports/kports
+import ../handles/khandles
 import fb_console
 
 var
   gKeys: KeyState
-  gInputTok: EventToken
-  gSubscribed: bool
   gGrabbed: bool           ## a program owns the display: its keys are its own (see below)
 
 proc consoleInputGrab*(on: bool) =
-  ## Input follows display ownership. While a program owns the display the console
-  ## still drains the key events (so its queue cannot fill) but acts on none of them:
-  ## the program subscribes to the same "input" topic for its own copy, and keys typed
-  ## into it must not also arrive in the shell's command line. Modifier state is reset
-  ## at each hand-over so a held shift cannot stick across it.
+  ## Input follows display ownership. While a program owns the display the console acts on no key
+  ## (events that still reach it are drained, so the queue cannot fill): keys typed into the program
+  ## must not also arrive in the shell's command line. Modifier state is reset at each hand-over so a
+  ## held shift cannot stick across it. (A program that is granted `input` takes the port itself, and
+  ## the console then receives nothing at all.)
   gGrabbed = on
   gKeys = KeyState()
 
 proc keyEventChar(): int =
-  ## Next character typed on the keyboard, or NoChar.
-  if not gSubscribed:
-    gInputTok = eventSubscribe("input")
-    gSubscribed = true
-  while true:
-    let ev = eventPoll(gInputTok)
-    if ev.isNone: return NoChar
+  ## Next character typed on the keyboard, or NoChar. The console is an ordinary client of the input
+  ## port: it holds the port's handle unless the launcher has moved it to a program.
+  let me = khMe()
+  if me < 0: return NoChar
+  kportConsoleEnsure(me)
+  var ev: InputEvent
+  while kportConsoleNextEvent(me, ev):
     if gGrabbed: continue                    # drained, not acted on
-    let p = ev.get().payload.data            # virtio_input_event: type, code, value
-    let typ  = uint16(p[0]) or (uint16(p[1]) shl 8)
-    let code = uint16(p[2]) or (uint16(p[3]) shl 8)
-    # cast, not a conversion: a pointer's relative motion is negative (0xFFFFFFFD = -3), and
-    # a checked uint32 -> int32 conversion of it is a RangeDefect (a kernel panic).
-    let val  = cast[int32](uint32(p[4]) or (uint32(p[5]) shl 8) or
-                           (uint32(p[6]) shl 16) or (uint32(p[7]) shl 24))
-    if typ == EvKey:
-      let c = gKeys.keyToChar(code, val)
+    case ev.kind
+    of ikKey:
+      let c = gKeys.keyToChar(ev.code, int32(ord(ev.action)))
       if c != NoChar: return c
+    of ikLost: gKeys = KeyState()            # events were lost: forget held modifiers rather than guess
+    of ikMotion, ikButton, ikWheel: discard  # the console has no pointer
+  NoChar
 
 proc consoleGetChar*(): char =
   ## Block until a character arrives on serial or the keyboard.

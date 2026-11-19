@@ -108,6 +108,25 @@ without changing it. Details: `docs/proposals/core_design.md`, `capabilities.md`
   authority); the details, which are the leaves of the tree, wait or come at a later stage. Every stage is
   backed by unit tests, so we advance gradually and know the parts work.
 
+## Identity and authority (human, 2026-11-17)
+
+- **There is no user identity in the system; a "user" is a set of capability tokens.** Authority is only
+  what a program holds (handles, rights); what a person may do is the set of tokens granted on their behalf,
+  not an account the kernel checks. (Said about screen capture: "instead of the user identify, it's just a set
+  of cap tokens".)
+- **A desktop OS: one person works at a time, and the machine can switch, log in and log out as a different
+  user (human, 2026-11-17).** So several token sets exist on one machine, exactly one is active, and a login
+  selects which one the launcher uses. Open: what happens to the first user's programs on a switch, and what
+  proves who logs in (both on STATE.md's Awaiting list).
+- **A foolish user must not be able to mess up the system; otherwise keep it simple (human, 2026-11-17).** A
+  person's token set never includes the system's own authority (the root handles, the system files, the
+  policy files), so a careless user can damage only their own things. No account hierarchy, no privilege
+  prompts, no per-file permission bits: the constraint is what the user's tokens do not contain.
+
+- **Keep the contract machinery simple (human, 2026-11-18).** A service's messages are written once, in Nim types; a
+  small tool generates the C mirror and test vectors from them. It must NOT grow into a schema language: no new
+  syntax, no separate description files, no versioning framework. (Said when choosing option 1 for K1.)
+
 ## Rendering model and budgets (human, 2026-11-03)
 
 **The server-provides model is the default and the experiment; exceptions are

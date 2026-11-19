@@ -1,0 +1,2 @@
+# keyclient: the legitimate reader of the input port
+grant input

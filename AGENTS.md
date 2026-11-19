@@ -173,6 +173,11 @@ a driver or a scheduler it does not need); a library that grows a heavy import i
 `make test` (host), `make test-devices` (QEMU, all devices), `make test-qemu-models` (all three kernel
 models), `make test-structured`; plus ASan/UBSan (and valgrind where the code is allocator-heavy) on any
 pure library touched. Rules:
+- **CI parity.** CI (`.github/workflows/test.yml`) runs more than the four targets above: `make test-asan` and
+  `make test-valgrind` (ALL host tests under sanitizers, not just the library I touched), `test-arc`, `test-wasm`
+  and `test-v2` (needs meson). I run `test-asan test-valgrind test-arc test-wasm` after any batch that adds or
+  changes host tests or pure libraries, and before a PR leaves draft; a clean local run means CI will not be the
+  first to find it. (`test-v2` cannot run where meson is missing; say so and rely on CI.)
 - Never run bare `make` (its default target opens an interactive QEMU and hangs); name the target.
 - One verification run at a time, with its own log directory; two overlapping runs report each other's results.
 - Tests count operations; they never assert wall-clock time (CI is orders of magnitude slower).
@@ -282,9 +287,22 @@ the human stays in the loop at decomposition time.
   3. **The options (two or three)**, each with: what it means, **pros**, **cons**, and **what it
      implies later** (what becomes easier, harder, or impossible to change).
   4. **My pick and why**, and what would change my mind.
-  5. **What happens if they do not answer** (the default I will use, and whether it can be undone).
+  5. **What stays blocked if they do not answer**, and what I will do meanwhile (see the rule below: an
+     unanswered question is never decided by me).
+  **Write like a person talking, not like a spec** (human, 2026-11-18: "talk directly like a human being ...
+  too vague, be plain"). Short sentences. Name the actual file and line instead of "we lived this" or "the hand-written
+  copies". Show the real code or numbers when explaining a problem. No metaphors, no insider shorthand the human
+  was never told.
   Keep it to one screen. One question at a time unless they are really one decision. If the options
   cannot be explained simply, the question is not ready: research more or split it.
+- **Never assume an implicit decision (human, 2026-11-15).** When I need a ruling and the human does not
+  answer, the decision stays OPEN: silence is not consent, a default is not an answer, and "my pick unless
+  you object" is not a decision. I do not build on it, I do not pick a quiet default, and I do not phrase
+  the question so that doing nothing counts as yes. The question stays on STATE's Awaiting-human list with
+  the date it was asked, for the human to consider properly when they have time. **Meanwhile I do every task
+  that I know and am confident about and that does not depend on that decision** (the independent leaves of
+  STEP BACK part 2, hygiene, tests, records), and I say plainly which work is blocked on which question.
+  If a task is only partly dependent, I do the independent part and stop at the dependent edge.
 - **Capture principles when they are stated.** The human steers by principle ("the design dictates what
   is possible and fast", "stubs are scaffolding, not precedent", "avoid hurting performance"). Write each
   into VISION.md's structural principles in the turn it is said, with their wording; later choices are

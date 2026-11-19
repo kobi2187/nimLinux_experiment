@@ -16,7 +16,7 @@
 #include "nimix_abi.h"
 
 #define MAGIC   0x4E494D4958495351ull
-#define OFFSET  0x300000u                 /* 3 MB into the 4 MB region: heap area, unused by the loader */
+#define OFFSET  0x200000u                 /* 2 MB into the 4 MB region: heap area, unused by the loader (the top 1 MB is the stack, with its guard page) */
 #define REGION  (4u * 1024 * 1024)
 
 static uintptr_t my_region(void) { int x; return ((uintptr_t)&x) & ~(uintptr_t)(REGION - 1); }

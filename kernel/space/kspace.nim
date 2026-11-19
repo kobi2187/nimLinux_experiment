@@ -44,6 +44,8 @@ proc ksCreate*(regionSlot: int): uint64 =
   let sp = addr gPool[regionSlot]
   if not spaceBuild(sp, masterTables()): return 0
   if not spaceGrantWindow(sp, regionBase(RegionHandle(regionSlot)), RegionSize, true): return 0
+  # the program's stack lives in the top of its region; the page below it is a guard (an overflow faults at a known address)
+  if not spaceGuardPage(sp, regionBase(RegionHandle(regionSlot)) + RegionSize - UserStackReserve): return 0
   gLive[regionSlot] = true
   gSyncedGen[regionSlot] = gKernelMapGen
   inc gSerialCounter

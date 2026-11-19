@@ -81,10 +81,7 @@ proc fillStubVtable() =
   v.bufReturn      = proc(h: uint32): int {.nimcall.} = 0
   v.bufMsgSend     = proc(name: cstring; data: pointer; dataLen: int; hs: pointer): int {.nimcall.} = 0
   v.bufMsgRecv     = proc(tok: uint64; buf: pointer; bufLen: int; hs: pointer): int {.nimcall.} = 0
-  v.displayInfo    = proc(outp: pointer): int {.nimcall.} = 0
-  v.displayPresent = proc(req: pointer): int {.nimcall.} = 0
-  v.displayModes   = proc(outp: pointer; max: int): int {.nimcall.} = 0
-  v.displaySetMode = proc(w, h: uint32): int {.nimcall.} = 0
+  v.retired        = proc(): int {.nimcall.} = -1
   v.chanPair       = proc(req: pointer): int {.nimcall.} = 0
   v.chanWrite      = proc(h: uint32; data: pointer; len: int; send: pointer): int {.nimcall.} = 0
   v.chanRead       = proc(h: uint32; buf: pointer; cap: int; info: pointer): int {.nimcall.} = 0
@@ -93,6 +90,8 @@ proc fillStubVtable() =
   v.chanStatus     = proc(h: uint32): int {.nimcall.} = 0
   v.wait           = proc(items: pointer; n: int; ticks: uint32): int {.nimcall.} = 0
   v.chanWriteBatch = proc(h: uint32; buf: pointer; len: int; count: int): int {.nimcall.} = 0
+  v.portCall = proc(h: uint32; b: pointer; len: int; cap: int): int {.nimcall.} = 0
+  v.portEvent = proc(h: uint32; b: pointer; cap: int): int {.nimcall.} = 0
   v.spawn = proc(l: uint32; p: cstring; a: cstring; r: pointer): int {.nimcall.} = 0
   v.chanReadBatch  = proc(h: uint32; buf: pointer; cap: int; info: pointer): int {.nimcall.} = 0
   v.kernelCalls    = proc(): int {.nimcall.} = 0
@@ -131,10 +130,7 @@ proc testEnumOrdinals() =
   assert ord(scCapRecv)        == 29
   assert ord(scBufCreate)      == 30
   assert ord(scBufMsgRecv)     == 36
-  assert ord(scDisplayInfo)    == 37
-  assert ord(scDisplayPresent) == 38
-  assert ord(scDisplayModes)   == 39
-  assert ord(scDisplaySetMode) == 40
+  assert ord(scRetired37) == 37 and ord(scRetired38) == 38 and ord(scRetired39) == 39 and ord(scRetired40) == 40
   assert ord(scChanPair)       == 41
   assert ord(scChanStatus)     == 46
   assert ord(scWait)           == 47
@@ -142,7 +138,9 @@ proc testEnumOrdinals() =
   assert ord(scChanReadBatch)  == 49
   assert ord(scKernelCalls)    == 50
   assert ord(scSpawn)          == 51
-  assert NimixSyscallCount == 52
+  assert ord(scPortCall)       == 52
+  assert ord(scPortEvent)      == 53
+  assert NimixSyscallCount == 54
   echo "PASS: syscall enum ordinals"
 
 proc testTableFilled() =

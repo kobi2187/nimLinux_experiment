@@ -20,12 +20,18 @@ const
   PortHeaderBytes* = 12
   PortInline* = ChMsgBytes - PortHeaderBytes      ## payload bytes of one port message
 
+const PortDescribeOp* = 0xFFFE'u16
+  ## Reserved request op every port answers (by the transport, not the device): "which port are you?".
+  ## Reply payload: one byte, the PortKind ordinal. How a program finds the port among its handles.
+
 type
   PortKind* = enum
     pkInput          ## keyboards, mice, tablets (the first port)
+    pkDisplay        ## the screen (human, 2026-11-17, D3 option A: only a holder of this handle may draw)
 
   PortStatus* = enum
-    psOk, psPending, psBadOp, psBadArg, psTooBig, psBusy, psNotBound, psPeerGone, psFull, psNoResource
+    psOk, psPending, psBadOp, psBadArg, psTooBig, psBusy, psNotBound, psPeerGone, psFull, psNoResource,
+    psNoDevice       ## the hardware behind the port is not there
 
   MsgClass* = enum
     mcRequest, mcReply, mcEvent
@@ -68,8 +74,8 @@ proc getPayload*[T](m: PortMsg; v: var T): bool =
 
 const EventLostOp* = 0xFFFF'u16
 
-type LostWire {.packed.} = object
-  count: uint32
+type LostWire* {.packed.} = object
+  count*: uint32
 
 proc lostMsg*(count: uint32): PortMsg =
   result = PortMsg(cls: mcEvent, status: psOk, op: EventLostOp)

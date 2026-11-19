@@ -234,11 +234,11 @@ def test_devices(tmp, iso, bios) -> list:
             g.qmp.button("left", False)
             assert g.wait("devtest input: done", 15, mark), "devtest input did not finish: " + g.text(mark)[-500:]
             out = g.text(mark)
-            for want in ("abs code=0 value=16384", "abs code=1 value=8192", "rel code=0 value=7",
-                         "rel code=1 value=-3", "key code=272 value=1", "key code=272 value=0"):
+            for want in ("motion abs 16384 8192", "motion rel 7 -3",
+                         "button code=272 value=1", "button code=272 value=0"):
                 assert want in out, f"missing '{want}': {out[-400:]}"
             assert "devices=3" in out, "keyboard, mouse and tablet should all be driven: " + out[-200:]
-            return "tablet abs, mouse rel and left button arrive as evdev events (3 devices)"
+            return "tablet abs, mouse rel and left button arrive as typed input-port events (3 devices)"
         step("pointer", None, "", pointer_check)
     finally:
         g.close()                               # flushes the wav + pcap files
@@ -784,7 +784,7 @@ def test_channels(tmp, iso, bios) -> list:
 
 def test_spawn(tmp, iso, bios) -> list:
     """S3: spawn authority. The launcher reads the program's manifest and the system policy and gives
-    it the intersection (spawntest asks for spawn and display; the policy allows spawn): one process
+    it the intersection (spawntest asks for spawn and net; the policy allows spawn): one process
     handle. That program spawns a child with exactly one channel end, and every way of cheating the
     grant list (forged, widened, duplicated, non-transferable, too many, no process handle) is refused.
     The child holds only that end: it cannot spawn and no other handle value works. A program with no
@@ -804,7 +804,7 @@ def test_spawn(tmp, iso, bios) -> list:
             assert not fails, "\n".join(fails)
             assert ok and "spawntest: parent ok" in out, "the parent did not finish: " + out[-700:]
             assert "spawntest: child ok" in out, "the child did not finish: " + out[-700:]
-            assert "launcher: spawntest.elf grants: spawn" in out and "display" not in \
+            assert "launcher: spawntest.elf grants: spawn" in out and "net" not in \
                 out.split("launcher: spawntest.elf grants:")[1].split("\n")[0], \
                 "the policy did not narrow the manifest: " + out[-700:]
             results.append(("spawn-authority", True, "forged/widened/duplicated/non-transferable grants refused; child holds exactly one end and cannot spawn"))
@@ -856,6 +856,101 @@ def test_isolation(tmp, iso, bios) -> list:
         except Exception as e:                 # noqa: BLE001
             results.append(("isolation", False, str(e)))
         assert "NimixOS" in g.run("version"), "shell dead after isotest"
+    finally:
+        g.close()
+    return results
+
+
+def test_keyboard_isolation(tmp, iso, bios) -> list:
+    """K3: who sees the keyboard? A keylogger with no grant tries every way to read keys (an input port among
+    its handles, guessed handle values, the old global `input` topic) while a legitimate client, granted the
+    input port by its manifest, receives every event. A second client that asks for the port while the first
+    holds it is refused, and when the holder exits the console gets the port back."""
+    results = []
+    g = boot(tmp, iso=iso, bios=bios, devices=("blk",))
+    try:
+        try:
+            mark = len(g.out)
+            g.type("keytest")
+            done = g.wait("keytest-kernel: ok", 90, mark) or g.wait("keytest-kernel: FAIL", 1, mark)
+            time.sleep(1.0)
+            out = g.text(mark)
+            assert "KERNEL PANIC" not in out, "the kernel died: " + out[-600:]
+            fails = [l for l in out.splitlines() if "keytest-kernel: FAIL" in l]
+            assert not fails, "\n".join(fails)
+            leaks = [l for l in out.splitlines() if "keylog: LEAK" in l]
+            assert not leaks, "a keylogger saw input:\n" + "\n".join(leaks)
+            assert done, "keytest did not finish: " + out[-700:]
+            assert "keylog: got nothing" in out, "the keylogger did not finish cleanly: " + out[-600:]
+            for want in ("keyclient: key 30 1", "keyclient: key 30 0", "keyclient: motion 5 -2 rel",
+                         "keyclient: wheel 0 1", "keyclient: done"):
+                assert want in out, f"the legitimate client missed '{want}': " + out[-700:]
+            assert out.count("keyclient: no input port") == 1, "the second client should have been refused the port: " + out[-700:]
+            assert "launcher: keyclient.elf grants: input" in out and "input: held by another program" in out
+            assert "keytest-kernel: console took the port back" in out
+            results.append(("keyboard-isolation", True, "keylogger saw nothing; the granted client got key/motion/wheel; a second bind was refused; the console got the port back"))
+        except Exception as e:                 # noqa: BLE001
+            results.append(("keyboard-isolation", False, str(e)))
+        assert "NimixOS" in g.run("version"), "shell dead after keytest"
+    finally:
+        g.close()
+    return results
+
+
+def test_display_isolation(tmp, iso, bios) -> list:
+    """D3 option A: only a program granted the display port can draw. A program with no grant (overlay) tries
+    info, modes, setMode, a present of a buffer it really owns, and raw port calls on guessed handles; every
+    attempt is refused, the console keeps the screen, and the shell is alive afterwards."""
+    results = []
+    g = boot(tmp, iso=iso, bios=bios, devices=("blk", "gpu"))
+    try:
+        try:
+            mark = len(g.out)
+            g.type("overlay")
+            assert g.wait("overlay: refused", 40, mark) or g.wait("overlay: LEAKED", 1, mark), "overlay did not finish: " + g.text(mark)[-500:]
+            out = g.text(mark)
+            assert "overlay: LEAK" not in out, "the overlay program drew or changed the display:\n" + out[-600:]
+            assert "display: owned by pid" not in out, "the display was taken: " + out[-400:]
+            assert "launcher: overlay.elf grants: none" in out, "a program with no manifest was granted something: " + out[-400:]
+            g.wait(PROMPT, 10, mark)
+            assert "NimixOS" in g.run("version"), "the console did not keep working"
+            results.append(("display-isolation", True, "a program with no display grant could not read info/modes, set a mode or present; the console kept the screen"))
+        except Exception as e:                 # noqa: BLE001
+            results.append(("display-isolation", False, str(e)))
+    finally:
+        g.close()
+    return results
+
+
+def test_stack_guard(tmp, iso, bios) -> list:
+    """A program that overflows its own stack hits the guard page and is killed by a page fault (and the
+    kernel survives); a program that uses a lot of stack legitimately (about 400 KB) is not disturbed."""
+    results = []
+    g = boot(tmp, iso=iso, bios=bios, devices=("blk",))
+    try:
+        try:
+            mark = len(g.out)
+            g.type("stackbomb ok")
+            assert g.wait("stackbomb: ok, reached", 40, mark), "the control did not finish: " + g.text(mark)[-500:]
+            assert "reached 100 frames" in g.text(mark)
+            g.wait(PROMPT, 10, mark)
+            results.append(("stack-deep-ok", True, "100 frames of 4 KB (about 400 KB of stack) run normally"))
+        except Exception as e:                 # noqa: BLE001
+            results.append(("stack-deep-ok", False, str(e)))
+        try:
+            mark = len(g.out)
+            g.type("stackbomb bomb")
+            assert g.wait("stackbomb: recursing", 40, mark), g.text(mark)[-300:]
+            assert g.wait("=== killed pid", 40, mark), "the overflowing program was not killed: " + g.text(mark)[-600:]
+            time.sleep(1.0)
+            out = g.text(mark)
+            assert "survived" not in out, "the overflow was not stopped"
+            assert "KERNEL PANIC" not in out, "the kernel died: " + out[-600:]
+            g.wait(PROMPT, 10, mark)
+            assert "NimixOS" in g.run("version"), "the shell is dead after the overflow"
+            results.append(("stack-guard", True, "an endless recursion was killed by a page fault at the guard page; the kernel and shell are fine"))
+        except Exception as e:                 # noqa: BLE001
+            results.append(("stack-guard", False, str(e)))
     finally:
         g.close()
     return results
@@ -916,6 +1011,9 @@ def main():
             results += test_channels(tmp, a.iso, a.bios)
             results += test_isolation(tmp, a.iso, a.bios)
             results += test_spawn(tmp, a.iso, a.bios)
+            results += test_keyboard_isolation(tmp, a.iso, a.bios)
+            results += test_display_isolation(tmp, a.iso, a.bios)
+            results += test_stack_guard(tmp, a.iso, a.bios)
             results += test_crashes(tmp, a.iso, a.bios, a.kernel)
     for name, ok, msg in results:
         print(f"{'PASS' if ok else 'FAIL'}: {name:12} {msg}")

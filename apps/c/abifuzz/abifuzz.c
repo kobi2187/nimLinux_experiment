@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "nimix_abi.h"
+#include "nimix_port.h"
 
 /* the parts of the ABI the header leaves to Nim apps (see kernel/abi/nimix_abi_weak.c) */
 int   nimixChanSend(const char *name, const void *data, int len);
@@ -84,9 +85,8 @@ int main(void) {
         NEG(nimixBufMsgSend("abifuzz", "x", 1, p), "bufMsgSend handles");
         NEG(nimixBufMsgRecv(1, p, 8, NULL), "bufMsgRecv buf");
         NEG(nimixBufMsgRecv(1, buf, 8, p), "bufMsgRecv handles");
-        NEG(nimixDisplayInfo((NimixDisplayInfo *)p), "displayInfo");
-        NEG(nimixDisplayPresent((const NimixPresent *)p), "displayPresent");
-        NEG(nimixDisplayModes((NimixDisplayMode *)p, 4), "displayModes");
+        NEG(nimixPortCall(NIMIX_BOOTSTRAP_HANDLE, p, 12, 256), "portCall buf");
+        NEG(nimixPortEvent(NIMIX_BOOTSTRAP_HANDLE, p, 256), "portEvent buf");
         NEG(nimixChanPair((NimixChanPair *)p), "chanPair request");
         NEG(nimixChanWrite(NIMIX_BOOTSTRAP_HANDLE, p, 8, NULL), "chanWrite data");
         NEG(nimixChanWrite(NIMIX_BOOTSTRAP_HANDLE, "x", 1, (const NimixSendList *)p), "chanWrite handle list");
@@ -114,7 +114,7 @@ int main(void) {
         NEG(nimixSysInfo(buf, n), "sysInfo len");
         NEG(nimixWallClock(buf, n), "wallClock len");
         NEG(nimixSndPlay(buf, n), "sndPlay len");
-        NEG(nimixDisplayModes((NimixDisplayMode *)buf, n), "displayModes max");
+        NEG(nimixPortCall(NIMIX_BOOTSTRAP_HANDLE, buf, n, n), "portCall len");
     }
 
     /* values that are not pointers */
@@ -141,8 +141,9 @@ int main(void) {
     NEG(nimixCapRecv(0, buf, 8), "capRecv(token 0)");
     NEG(nimixCapRecv(0xDEADBEEFDEADBEEFull, buf, 8), "capRecv(forged token)");
     NEG(nimixCapSend("abifuzz", 0xDEADBEEFDEADBEEFull, "x", 1), "capSend(forged token)");
-    NEG(nimixDisplaySetMode(0, 0), "setMode(0,0)");
-    NEG(nimixDisplaySetMode(0xFFFFFFFFu, 0xFFFFFFFFu), "setMode(huge)");
+    NEG(nimixPortEvent(0xFFFFFFFFu, buf, 256), "portEvent(forged handle)");
+    NEG(nimixPortCall(0xFFFFFFFFu, buf, 12, 256), "portCall(forged handle)");
+    NEG(nimixPortCall(NIMIX_BOOTSTRAP_HANDLE, buf, 12, 256), "portCall(no port held)");
     /* handles: this program was started by the shell with none, so every value is foreign */
     NEG(nimixChanWrite(NIMIX_BOOTSTRAP_HANDLE, "x", 1, NULL), "chanWrite with no handle held");
     NEG(nimixChanStatus(0xFFFFFFFFu), "chanStatus(forged)");

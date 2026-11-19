@@ -37,6 +37,8 @@ import ../../kernel/abi/nimix_abi_impl   # user-fault policy
 import ../../kernel/abi/task_cleanup
 import ../../kernel/abi/user_args_gate
 import ../../kernel/handles/khandles
+import ../ports/kports
+import ../display/display
 import ../../kernel/space/kspace
 import ../buffers/kbuffers
 import ../../fs/fatfs
@@ -151,10 +153,9 @@ proc wirePciIrq(line: uint8; handler: proc() {.nimcall.}) =
     picUnmask(line)
 
 proc publishInputEvent(ev: VirtioInputEvent) {.nimcall.} =
-  ## Driver → event bus (topic "input"): an input/app server subscribes; the
-  ## kernel keeps no input policy. Payload = the 8-byte virtio input event.
-  var e = ev
-  eventPublish("input", addr e, sizeof(e))
+  ## Driver -> the input port (ipc/ports): typed events to its single holder. There is no global topic
+  ## to subscribe to: a program sees keys only if it was given the port's handle at spawn.
+  kportFeedEvdev(ev.typ, ev.code, cast[int32](ev.value))
 
 proc initVirtioDevices*() =
   ## PCI scan + virtio device probing; interrupts wired per (shared) line.
@@ -245,6 +246,8 @@ proc initSyscallGate*() =
   ksInit()                                   # per-task address spaces (mm/addr_space) before any ring-3 task
   kbufInit()
   khInit()                                   # handle tables and channels (ipc/handles)
+  kportInit()                                # device ports (ipc/ports): the input port's module and binding
+  displayInit()                              # the display device module behind the display port
   userFaultKill   = abiKillFaultingTask
   userStackBounds = abiCurrentTaskBounds
   klog(llInfo, "[SERVICES] ✓ Syscall gate ready (ring 0<->3)")

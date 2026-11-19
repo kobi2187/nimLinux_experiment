@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0
- * gfxtest — the display ABI from ring 3 (docs/proposals/display_abi.md).
+ * gfxtest — the display port from ring 3 (docs/proposals/device_ports.md; its manifest grants `display`).
  *   gfxtest        refuse every bad request, then present a 640x400 pattern at (100, 50)
  *   gfxtest hold   ... and keep the screen for 8 s (the harness takes a screendump)
  *   gfxtest mode   display ABI v2: list the modes, refuse bad ones, switch to 800x600, then as 'hold'
@@ -10,6 +10,7 @@
 #include <string.h>
 #include <time.h>
 #include "nimix_abi.h"
+#include "nimix_display.h"
 
 #define W 640
 #define H 400
@@ -48,7 +49,6 @@ int main(int argc, char **argv) {
         printf("\n");
         expect(has800 && hasBoot, 1, "800x600 and the boot mode are listed");
         expect(nimixDisplayModes(NULL, 0), n, "count only");
-        expect(nimixDisplayModes((NimixDisplayMode *)0x1000, 2), -1, "mode list written through a kernel pointer");
         expect(nimixDisplaySetMode(801, 600), -1, "not a listed size");
         expect(nimixDisplaySetMode(0, 0), -1, "zero size");
         expect(nimixDisplaySetMode(7680, 4320), -1, "larger than the framebuffer");
@@ -75,8 +75,6 @@ int main(int argc, char **argv) {
     b = q; b.handle = 0xDEAD;              expect(nimixDisplayPresent(&b), -1, "a handle we do not hold");
     b = q; b.size = 4;                     expect(nimixDisplayPresent(&b), -1, "struct size too small");
     expect(nimixDisplayPresent(NULL), -1, "NULL request");
-    expect(nimixDisplayPresent((const NimixPresent *)0x1000), -1, "request pointing into the kernel");
-    expect(nimixDisplayInfo((NimixDisplayInfo *)0x1000), -1, "info written through a kernel pointer");
     if (modes) {                           /* fits the boot mode, not this one */
         b = q; b.dx = 200;                 expect(nimixDisplayPresent(&b), -1, "off the edge of the NEW mode");
     }

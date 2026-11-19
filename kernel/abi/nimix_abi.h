@@ -57,37 +57,10 @@ int   nimixBufClose(unsigned int handle);
 int   nimixBufSeal(unsigned int handle);
 int   nimixBufReturn(unsigned int handle);
 
-/* ── Display ABI v1 (docs/proposals/display_abi.md) ────────────────────────────
- * Show a rectangle of a buffer you own on the screen. The kernel reads your
- * buffer only through the ownership store and checks every rectangle; you do any
- * pixel conversion. The first successful present makes you the display owner (the
- * kernel console stops painting); it returns when you exit.
- * Returns 0; -1 bad request; -2 another task owns the display; -3 no display. */
-#define NIMIX_DISPLAY_FORMAT_B8G8R8X8 1       /* little-endian 32-bit pixels: B, G, R, unused */
-
-typedef struct { unsigned size, width, height, format, stride_bytes; } NimixDisplayInfo;
-typedef struct {
-    unsigned size;          /* sizeof(NimixPresent) */
-    unsigned handle;        /* an owned or sealed buffer you can read */
-    unsigned stride_bytes;  /* bytes per row of that buffer */
-    int sx, sy, w, h;       /* the rectangle in the buffer */
-    int dx, dy;             /* where it lands on the display */
-} NimixPresent;
-
-int nimixDisplayInfo(NimixDisplayInfo* out);          /* the CURRENT mode */
-int nimixDisplayPresent(const NimixPresent* req);
-
-/* ── Display ABI v2: modes ─────────────────────────────────────────────────────
- * The boot console runs in the boot mode; a graphics program picks its own.
- * nimixDisplayModes writes up to `max` entries and returns how many modes exist
- * (ascending by size; call with max = 0 to count). nimixDisplaySetMode switches to one of
- * them: like a present it makes you the display owner, and the screen is cleared.
- * nimixDisplayInfo then reports the new size. When the owner ends, the kernel restores
- * the boot mode and repaints the console. Modes larger than the boot mode are not offered.
- * SetMode returns 0; -1 not a listed mode; -2 another task owns the display; -3 no display. */
-typedef struct { unsigned width, height; } NimixDisplayMode;
-int nimixDisplayModes(NimixDisplayMode* out, int max);
-int nimixDisplaySetMode(unsigned width, unsigned height);
+/* ── The display is a device PORT (docs/proposals/device_ports.md) ──────────────
+ * Syscalls 37-40 (nimixDisplayInfo/Present/Modes/SetMode) are retired. A program draws only if its manifest
+ * says `grant display` and the system policy allows it: the launcher then moves the display port's handle to
+ * it (one holder at a time). libnimix/nimix_display.h provides the same four functions over that handle. */
 
 /* ── Handles and channels (docs/proposals/capabilities.md) ─────────────────────
  * A handle is an entry in YOUR OWN table; its value means nothing to any other task. You hold
@@ -158,6 +131,18 @@ int nimixKernelCalls(void);
  * the i-th arrives in the child as NIMIX_BOOTSTRAP_HANDLE + i. The child has nothing else.
  * Returns the child's pid, or -1 bad handle/argument, -30 no such file, -31 not loadable, -32 out of
  * regions or tasks, -33 busy. */
+/* Device ports (docs/proposals/device_ports.md). A port handle is given at spawn (manifest `grant input`);
+ * it names ONE device module and cannot be duplicated. A message is the port wire form:
+ *   byte 0 class (0 request, 1 reply, 2 event), 1 status, 2-3 op, 4-7 seq, 8-9 payload length, 10-11 zero,
+ *   then the payload. Buffers passed to the two calls must hold a whole message (NIMIX_PORT_MSG bytes).
+ * nimixPortCall sends the request in buf[0..len) and overwrites buf with the reply; it returns the reply
+ * length, or -1 (bad handle or argument) or -(40 + status). nimixPortEvent returns the next event's
+ * length, 0 if none is waiting, or < 0. nimixWait accepts a port handle: ready bit 0 = an event waits. */
+#define NIMIX_PORT_MSG 256
+/* NIMIX_PORT_DESCRIBE_OP (the request every port answers: payload byte = port kind) is in the generated libnimix/nimix_contract.h */
+int nimixPortCall(NimixHandle h, void* buf, int len, int cap);
+int nimixPortEvent(NimixHandle h, void* buf, int cap);
+
 #define NIMIX_SPAWN_MAX 8
 typedef struct { unsigned n; unsigned handle[NIMIX_SPAWN_MAX]; unsigned rights[NIMIX_SPAWN_MAX]; } NimixSpawnReq;
 int nimixSpawn(NimixHandle launcher, const char* path, const char* args, const NimixSpawnReq* req);
