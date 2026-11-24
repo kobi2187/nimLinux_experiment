@@ -2614,3 +2614,25 @@ its Nim type and adding it to the lists at the bottom of `contract.nim`.
 the same lists later; that is not done yet.
 **Unblocks:** K2 (dispatcher stage 2) for what depends on message definitions. **Still open (human):** the control-plane
 wire format (MsgPack vs the packed records).
+
+
+## 2026-11-24 — Control-plane wire format: the human's rule, and what is still open
+
+**Asked (2026-11-18):** MsgPack (VISION) or the packed binary records the ports use. **Answered (human, verbatim):**
+"Msgpack unless current format is faster or vastly simpler".
+**This is a rule, not a per-case answer.** MsgPack is the default; the packed records are allowed only where they are
+measurably faster or vastly simpler. What I can say from the code, without running anything: (1) `pack()` returns a Lua-style
+heap string, so a MsgPack message cannot be built in an interrupt handler, where the input events are made; the packed
+records need no allocation. (2) `servers/dispatch/dispatch_wire.nim` is 47 lines of hand-written strict decoder for ONE
+two-field message, because `unpack` asserts (a fatal defect under `--panics:on`) on malformed input; the packed side has a
+strict, non-raising `fromWire` and generated structs (no hand-written decoder per message). What I wanted to measure and
+could not (see below): speed and size on the same three messages.
+**Not decided:** which messages use which. My reading of the rule, offered for the human to confirm, not assumed: device
+ports (input events, display present: hot, in interrupt context, no allocation allowed) stay packed; service-level control
+messages (dispatcher sessions, file/render/network requests: rare, worth inspecting) are MsgPack.
+
+**Environment note (2026-11-24):** the container was recreated: `/opt/nimtc` (Nim), QEMU, grub-mkrescue, mtools and meson are
+gone (only gcc, python3 and valgrind remain). I reinstalled Nim 2.2.4 from nim-lang.org; the QEMU-based gate cannot run until
+the others are reinstalled (GitHub returns 403 from here; raw.githubusercontent.com works).
+**Blocked:** a command that downloaded the MsgPack library (a single stdlib-only file, v0.4.4, from raw.githubusercontent.com
+into the scratchpad) and compiled and ran a micro-benchmark against it was refused by the auto-mode permission check. Not retried.

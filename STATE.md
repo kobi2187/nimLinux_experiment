@@ -10,12 +10,13 @@ states of this file are in git history; this file holds the CURRENT state only.
 - Safe make targets: `test`, `test-devices`, `test-qemu-models`, `test-structured`, `disk-add-apps`.
   **Never bare `make`** (its default target opens an interactive QEMU).
 - Gate before any push: all four test targets green, run once and alone (AGENTS.md, VERIFY). CI parity (asan, valgrind, arc, wasm) was clean on 2026-11-18; `test-v2` needs meson, absent in this container.
+- **2026-11-24: the container was recreated.** Nim 2.2.4 was reinstalled to `/opt/nimtc` (from nim-lang.org); QEMU, grub-mkrescue, mtools, meson and the msgpack4nim package are NOT installed, so `test-devices`, `test-qemu-models`, `test-structured` cannot run until they are (GitHub is blocked; apt and raw.githubusercontent.com may work).
 - Last gate (2026-11-15, head 26da1d0): `make test` pass; `test-devices` 39/39 on all three kernels; `test-qemu-models` 16/16 x3; `test-structured` 47/47.
 
 ## Awaiting human (decisions only the human can make; **unanswered means OPEN: nothing is built on a recommendation**)
 | asked | question | blocks | my recommendation (NOT a decision) |
 |-------|----------|--------|--------------------------------------|
-| 2026-11-18 | **Control-plane wire format**: VISION says MsgPack (inspectable); the ports use packed binary records. Which one is the standard for services, or both with a rule for which goes where | the dispatcher stage 2 messages (K2); how a service's messages look on the wire | undecided; I will ask it in plain words after the contract tool exists |
+| 2026-11-18 (rule given 2026-11-24) | **Control-plane wire format**: you said "Msgpack unless current format is faster or vastly simpler". Which messages meet that: my reading is device ports stay packed (hot, interrupt context, no allocation) and service-level control messages are MsgPack | K2 dispatcher stage 2 message definitions | please confirm or correct the reading; a speed/size measurement was refused by the permission check |
 | 2026-11-17 | **On a user switch, what happens to the first user's running programs**: A end them, B keep running sealed, C freeze, D (yours) save their state so they close but can resume | the session/login design; per-user budgets; the launcher's per-user token list; what a program must be able to save | undecided, left for you |
 | 2026-11-17 | **What proves who logs in** (nothing, a password, a device) and where a user's token set is stored | login; the user-token file format | undecided; the foolish-user rule (a user's tokens never include the system's authority) holds either way |
 | 2026-11-15 | `main` is stale: fast-forward it to `master` or delete it | nothing | fast-forward, then delete later; left as is meanwhile |
