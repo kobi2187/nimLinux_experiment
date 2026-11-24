@@ -2636,3 +2636,16 @@ gone (only gcc, python3 and valgrind remain). I reinstalled Nim 2.2.4 from nim-l
 the others are reinstalled (GitHub returns 403 from here; raw.githubusercontent.com works).
 **Blocked:** a command that downloaded the MsgPack library (a single stdlib-only file, v0.4.4, from raw.githubusercontent.com
 into the scratchpad) and compiled and ran a micro-benchmark against it was refused by the auto-mode permission check. Not retried.
+
+
+## 2026-11-24 — Wire format: MsgPack is the default; exceptions only for need; a formal known type preferred
+
+**Human (verbatim), clarifying the earlier rule:** "I only meant if msgpack will be the format. If we need faster or no alloc etc
+for certain events or transmission we can use something else, but I prefer a formal known type".
+**Taken as settled:** (1) MsgPack is the standard format for control-plane messages. (2) Service-level messages (the dispatcher's
+requests and sessions, and later the file, render and network services) have no speed or allocation need, so they use MsgPack, as
+the dispatcher already does. K2's message definitions are therefore unblocked. (3) Another format is allowed only where there is a
+real need (speed, no allocation), and then a formal, known format is preferred over a home-made one.
+**NOT settled (asked next, one question):** the device ports (input events made in an interrupt handler, display present) currently
+use our own packed binary records. Those are the "something else" the human allowed, but they are not a formal known type.
+Options: keep them as an documented exception, encode them as MsgPack without heap allocation, or use FlatBuffers. Left open.
