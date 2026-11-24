@@ -2649,3 +2649,14 @@ real need (speed, no allocation), and then a formal, known format is preferred o
 **NOT settled (asked next, one question):** the device ports (input events made in an interrupt handler, display present) currently
 use our own packed binary records. Those are the "something else" the human allowed, but they are not a formal known type.
 Options: keep them as an documented exception, encode them as MsgPack without heap allocation, or use FlatBuffers. Left open.
+
+
+## 2026-11-24 — Device-port encoding answered: keep our fixed record format
+
+**Asked:** keyboard, mouse and screen messages: keep our own fixed byte layout (option 1), MsgPack without allocation (2), or FlatBuffers (3).
+**Answered (human, verbatim): "No need, keep the current home-made format"** (to the offer to switch; pick = option 1).
+**So, the rule for wire formats is now:** services (the dispatcher, file, render, network) use MsgPack; the device ports (input,
+display) keep their fixed packed records, generated for C from the Nim types by the K1 tool. The reason, for the record: those
+messages are made inside interrupt handlers where nothing may allocate memory, and a fixed layout needs no encoding step.
+Nothing to rebuild. A future port that is not hot and not in interrupt context should start from MsgPack, not from a new
+home-made layout (the human's preference for a formal known type stands as the default; this is the named exception).

@@ -123,6 +123,8 @@ without changing it. Details: `docs/proposals/core_design.md`, `capabilities.md`
   policy files), so a careless user can damage only their own things. No account hierarchy, no privilege
   prompts, no per-file permission bits: the constraint is what the user's tokens do not contain.
 
+- **Wire formats (human, 2026-11-24).** Services use MsgPack (a formal, known format). Device ports keep our fixed packed
+  records: interrupt-context messages cannot allocate. A new port that is not hot starts from MsgPack.
 - **Keep the contract machinery simple (human, 2026-11-18).** A service's messages are written once, in Nim types; a
   small tool generates the C mirror and test vectors from them. It must NOT grow into a schema language: no new
   syntax, no separate description files, no versioning framework. (Said when choosing option 1 for K1.)

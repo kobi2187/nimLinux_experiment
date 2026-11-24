@@ -48,3 +48,9 @@ image goes to the app the user chooses as a sealed read-only buffer; an app may 
 that buffer). No manifest name grants whole-screen capture. Today no call can read the screen back (the display
 calls are info/present/modes/set-mode), and other apps' memory is isolated, so nothing needs closing now; the
 overlay hole (first present wins) is closed by the display port, which waits on D3 (who may own the display).
+
+## Wire format (human, 2026-11-24)
+Services use MsgPack. Device ports keep the fixed packed records described here, by decision ("keep the current home-made
+format"): their messages are made in interrupt context where nothing may allocate, and a fixed layout needs no encoding. The C
+side is generated from the Nim types (K1), so the home-made format is written down once, in Nim. A new port that is not hot and
+not in interrupt context should start from MsgPack.

@@ -16,14 +16,13 @@ states of this file are in git history; this file holds the CURRENT state only.
 ## Awaiting human (decisions only the human can make; **unanswered means OPEN: nothing is built on a recommendation**)
 | asked | question | blocks | my recommendation (NOT a decision) |
 |-------|----------|--------|--------------------------------------|
-| 2026-11-24 | **Device-port encoding**: services use MsgPack (settled). The input and display ports use our own packed records, a home-made format. Keep as a documented exception, encode them as MsgPack without allocating, or use FlatBuffers | whether K1's generator emits struct layouts (today) or encoders/decoders; the C port headers | undecided; see the question |
 | 2026-11-17 | **On a user switch, what happens to the first user's running programs**: A end them, B keep running sealed, C freeze, D (yours) save their state so they close but can resume | the session/login design; per-user budgets; the launcher's per-user token list; what a program must be able to save | undecided, left for you |
 | 2026-11-17 | **What proves who logs in** (nothing, a password, a device) and where a user's token set is stored | login; the user-token file format | undecided; the foolish-user rule (a user's tokens never include the system's authority) holds either way |
 | 2026-11-15 | `main` is stale: fast-forward it to `master` or delete it | nothing | fast-forward, then delete later; left as is meanwhile |
 | 2026-11-15 | AGENTS.md revision is an experiment: judge it from the Process log below | nothing | revert from `docs/archive/` if it does not help |
 | 2026-11-14 | S8c: language domains (checked safe Nim subset) for the SASOS model | S8c only | keep PROPOSED |
 
-**Decided 2026-11-17 (see DECISIONS):** screen capture = Option A (held by the compositor, triggered by the user's key chord, built with the render server V6); users are a token set, several per machine, one active at a time; display ownership = handle-only (D3 option A), BUILT.
+**Decided 2026-11-24:** wire formats: services use MsgPack; device ports keep their fixed packed records (documented exception: interrupt context, no allocation). **Decided 2026-11-17 (see DECISIONS):** screen capture = Option A (held by the compositor, triggered by the user's key chord, built with the render server V6); users are a token set, several per machine, one active at a time; display ownership = handle-only (D3 option A), BUILT.
 
 ## Built (the foundation, by layer; details in BACKLOG status table and DECISIONS)
 - **Authority:** per-task handle tables with generations, rights that only narrow, badges, move/duplicate/
